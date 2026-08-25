@@ -1,0 +1,26 @@
+---
+description: MinePulse product thesis — AI/LangGraph is the core, not dashboards
+alwaysApply: true
+---
+
+# MinePulse product thesis
+
+The **real product** is the **AI optimization system** (target: powerful **LangGraph**-style agent graph), not the operational dashboards.
+
+## What is NOT the value prop
+
+- Film / Carte / Performance / Événements views largely **repackage information operators already have** (copied / mocked from existing OCP-style ops tools).
+- Do not present MinePulse as “another supervision UI” or as a data-display project.
+
+## What IS the value prop
+
+- A **connected AI layer** that reads Film, Carte, Exceptions, Performance, and events together.
+- **Anticipates** future problems (congestion, wait inflation, shovel downtime impact, production gap).
+- Produces **ranked decisions / optimisations** to recover tonnage and reduce wait.
+- Surfaces recommendations in Optimisation and contextual AI slots — **human decides**: Préparer / Marquer / Ignorer — **never auto-apply**.
+
+## When communicating (PPT, README, demos, UI copy)
+
+- Lead with AI orchestration, anticipation, and decision quality.
+- Treat screens as **sensors and action surfaces** for the agent, not the product itself.
+- Keep the coherent Merah El Ahrach scenario as the demo world the agent reasons over.

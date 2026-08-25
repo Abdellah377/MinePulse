@@ -1,0 +1,239 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Soft fintech-like surfaces */
+  --color-background: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-surface-2: #f0f1f4;
+  --color-surface-3: #e6e8ed;
+  --color-border: #ebecef;
+  --color-border-strong: #dde0e6;
+
+  /* Text — softer contrast */
+  --color-foreground: #1c1d21;
+  --color-muted: #6b7280;
+  --color-muted-2: #9ca3af;
+
+  /* Brand — quieter OCP green (data first, branding second) */
+  --color-accent: #3d8c14;
+  --color-accent-strong: #327510;
+  --color-accent-foreground: #ffffff;
+  --color-accent-soft: #eef6e8;
+  --color-brand-header: #508000;
+  --color-brand-header-hover: #457000;
+
+  --color-zone-label: #f5d547;
+
+  /* Film — severity-distinct palette */
+  --color-state-mouvement-charge: #78a828;
+  --color-state-mouvement-vide: #e8c800;
+  --color-state-attente: #e08a2e;
+  --color-state-chargement: #3a7bd5;
+  --color-state-arret: #d82010;
+  --color-state-eteint: #5c6670;
+  --color-state-aucune-donnee: #6b7280;
+  --color-state-indetermine: #b0b6bf;
+
+  --color-severity-critical: #d82010;
+  --color-severity-warning: #e08a2e;
+  --color-severity-info: #3a7bd5;
+  --color-severity-resolved: #9ca3af;
+
+  --color-success: #3d8c14;
+  --color-danger: #d82010;
+  --color-warning: #e08a2e;
+
+  /* Operational radii — rectangular chrome, pills only for status */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-feature-settings: "tnum" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-accent) 22%, transparent);
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-border-strong);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
+  }
+
+  .oem-ctl {
+    height: 24px;
+    width: 100%;
+    border: 1px solid #c5cad1;
+    background: #fff;
+    padding: 0 6px;
+    font-size: 11px;
+    line-height: 22px;
+    color: #222;
+    border-radius: 0;
+  }
+  .oem-ctl:disabled {
+    background: #f3f5f7;
+    color: #6b7280;
+  }
+
+  .oem-shell {
+    font-size: 11px;
+    color: #222;
+  }
+  .oem-shell input[type="checkbox"] {
+    accent-color: #508000;
+  }
+  .oem-shell button.oem-btn {
+    height: 24px;
+    border: 1px solid #c5cad1;
+    background: #fff;
+    padding: 0 8px;
+    font-size: 11px;
+    line-height: 22px;
+    color: #222;
+    border-radius: 0;
+  }
+  .oem-shell button.oem-btn-primary {
+    border-color: #508000;
+    background: #508000;
+    color: #fff;
+  }
+  .oem-shell button.oem-btn-primary:hover {
+    background: #457000;
+  }
+}
+
+@layer utilities {
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Soft card elevation (fintech / macOS feel) */
+  .shadow-soft {
+    box-shadow:
+      0 1px 2px rgba(28, 29, 33, 0.04),
+      0 8px 24px rgba(28, 29, 33, 0.06);
+  }
+
+  .shadow-soft-sm {
+    box-shadow:
+      0 1px 2px rgba(28, 29, 33, 0.03),
+      0 4px 12px rgba(28, 29, 33, 0.05);
+  }
+}
+
+/*
+ * MapLibre's own stylesheet hard-codes `cursor: grab` on the canvas container
+ * (see .maplibregl-canvas-container.maplibregl-interactive). Force crosshair
+ * with !important while drawing a zone so it always wins, independent of any
+ * inline style timing/HMR quirks.
+ */
+.mp-map-drawing .maplibregl-canvas-container,
+.mp-map-drawing .maplibregl-canvas {
+  cursor: crosshair !important;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes slide-out-right {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* MapLibre equipment hover popup */
+.mp-eq-popup .maplibregl-popup-content {
+  padding: 8px 10px;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+  border: 1px solid #ebecef;
+}
+.mp-eq-popup .maplibregl-popup-tip {
+  border-top-color: #fff;
+}
+

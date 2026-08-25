@@ -1,0 +1,22 @@
+{
+  "id": "site-khouribga",
+  "name": "Khouribga — Merah El Ahrach",
+  "center": [-6.6735342, 32.6618173],
+  "zoom": 14.2,
+  "minZoom": 12,
+  "maxZoom": 19,
+  "bearing": 0,
+  "pitch": 0,
+  "bounds": {
+    "west": -6.689,
+    "south": 32.649,
+    "east": -6.658,
+    "north": 32.674
+  },
+  "workspace": {
+    "minX": -20,
+    "minY": -20,
+    "maxX": 1020,
+    "maxY": 620
+  }
+}

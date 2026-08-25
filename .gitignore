@@ -1,0 +1,37 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secrets / local env
+.env
+.env.*.local
+backend/.env
+backend/simulator/sim_state.json
+backend/simulator/sim_runtime.json
+backend/simulator/sim_heartbeat.json
+backend/simulator/sim_commands.jsonl
+backend/simulator/sim_event_log.jsonl
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
