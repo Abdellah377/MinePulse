@@ -176,6 +176,7 @@ interface OpsState {
   apiConnectionState: "online" | "degraded" | "offline"
   /** True only after a bootstrap that included production + timeline. */
   fullWorldHydrated: boolean
+  settingsLoaded: boolean
 
   setSelectedSite: (id: string) => void
   setSelectedShift: (id: string) => void
@@ -247,6 +248,12 @@ function apiCtx(state: Pick<OpsState, "selectedSiteId" | "selectedShiftId">): Op
   return { siteCode: state.selectedSiteId, shiftId: state.selectedShiftId }
 }
 
+function emptyScope(): Partial<OpsState> {
+  return { equipment: [], operators: [], alerts: [], timelineSegments: [], cycleTimeSamples: [], downtimeReasons: [],
+    productionByShift: { hourly: [], daily: [], shiftly: [] }, simNowIso: null, fullWorldHydrated: false,
+    lastSuccessfulSyncAt: null, apiConnectionState: "degraded", apiPollError: "Chargement du contexte opérationnel…" }
+}
+
 function settingsFromDto(dto: OperationalSettingsDto) {
   return {
     idleAlertThresholdMin: dto.idle_alert_threshold_min,
@@ -285,9 +292,16 @@ export const useOpsStore = create<OpsState>((set, get) => ({
   apiPollError: null,
   apiConnectionState: useApiMode ? "offline" : "online",
   fullWorldHydrated: !useApiMode,
+  settingsLoaded: !useApiMode,
 
-  setSelectedSite: (id) => set({ selectedSiteId: id }),
-  setSelectedShift: (id) => set({ selectedShiftId: id }),
+  setSelectedSite: (id) => {
+    if (id === get().selectedSiteId) return
+    set({ selectedSiteId: id, ...(useApiMode ? { ...emptyScope(), selectedShiftId: "", shifts: [], zones: [], routes: [] } : {}) })
+  },
+  setSelectedShift: (id) => {
+    if (id === get().selectedShiftId) return
+    set({ selectedShiftId: id, ...(useApiMode ? emptyScope() : {}) })
+  },
   setPeriodRange: (from, to) => {
     const periodFrom = from <= to ? from : to
     const periodTo = from <= to ? to : from
@@ -332,6 +346,7 @@ export const useOpsStore = create<OpsState>((set, get) => ({
   applyOperationalSettings: (dto) =>
     set((s) => ({
       ...settingsFromDto(dto),
+      settingsLoaded: true,
       apiPollError: withoutMatchingError(s.apiPollError, SETTINGS_LOAD_ERROR),
     })),
 
@@ -374,7 +389,7 @@ export const useOpsStore = create<OpsState>((set, get) => ({
         selectedShiftId: s.apiBootstrapped
           ? s.selectedShiftId || payload.activeShiftId || ""
           : payload.activeShiftId || payload.shifts?.[0]?.id || s.selectedShiftId,
-        simNowIso: payload.simNow ?? s.simNowIso,
+        simNowIso: payload.simNow === undefined ? s.simNowIso : payload.simNow,
         apiBootstrapped: true,
         fullWorldHydrated,
         apiPollError,
@@ -405,7 +420,7 @@ export const useOpsStore = create<OpsState>((set, get) => ({
         alerts: payload.alerts ?? s.alerts,
         cycleTimeSamples: payload.cycleTimeSamples ?? s.cycleTimeSamples,
         downtimeReasons: payload.downtimeReasons ?? s.downtimeReasons,
-        simNowIso: payload.simNow ?? s.simNowIso,
+        simNowIso: payload.simNow === undefined ? s.simNowIso : payload.simNow,
         apiPollError,
         apiConnectionState: connectionAfterEquipmentPoll({
           fullWorldHydrated: s.fullWorldHydrated,
@@ -459,7 +474,9 @@ export async function bootstrapOpsFromApi() {
     const ctx = apiCtx(useOpsStore.getState())
     const payload = await fetchBootstrap({ lite: true, ctx })
     if (payload.error) throw new Error(payload.error)
+    if (ctx.siteCode !== useOpsStore.getState().selectedSiteId || ctx.shiftId !== useOpsStore.getState().selectedShiftId) return
     useOpsStore.getState().hydrateWorld(payload)
+    const resolvedCtx = apiCtx(useOpsStore.getState())
     try {
       const settings = await fetchOperationalSettings()
       useOpsStore.getState().applyOperationalSettings(settings)
@@ -468,11 +485,14 @@ export async function bootstrapOpsFromApi() {
         apiPollError: "Impossible de charger les paramètres opérationnels",
       })
     }
-    void fetchBootstrap({ ctx })
+    void fetchBootstrap({ ctx: resolvedCtx })
       .then((full) => {
-        if (!full.error) useOpsStore.getState().hydrateWorld(full)
+        if (resolvedCtx.siteCode !== useOpsStore.getState().selectedSiteId || resolvedCtx.shiftId !== useOpsStore.getState().selectedShiftId) return
+        if (full.error) throw new Error(full.error)
+        useOpsStore.getState().hydrateWorld(full)
       })
       .catch(() => {
+        if (resolvedCtx.siteCode !== useOpsStore.getState().selectedSiteId || resolvedCtx.shiftId !== useOpsStore.getState().selectedShiftId) return
         useOpsStore.setState({
           apiConnectionState: "degraded",
           apiPollError: "Synchronisation complète incomplète",

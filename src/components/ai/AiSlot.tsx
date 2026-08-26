@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils"
+import { useApiMode } from "@/lib/api/client"
 
 export interface AiInsight {
   title: string
@@ -22,6 +23,9 @@ interface AiSlotProps {
  * Never a chatbot. Always labeled as preview until LangGraph is connected.
  */
 export function AiSlot({ insight, variant = "card", label = "Pourquoi", className }: AiSlotProps) {
+  if (useApiMode) return <div className={cn("rounded-xl border border-border p-3 text-xs text-muted", className)}>
+    Analyse IA non évaluée. Ouvrez Alertes IA pour consulter ou démarrer une investigation.
+  </div>
   if (variant === "chip") {
     return (
       <div

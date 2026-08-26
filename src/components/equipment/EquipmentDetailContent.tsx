@@ -45,9 +45,9 @@ import { formatEquipmentContribution } from "@/lib/equipment/contribution"
 function taskDescription(state: EquipmentState, zoneName: string | null, destName: string | null) {
   switch (state) {
     case "mouvement_charge":
-      return `En route vers ${destName ?? "le déchargement"}`
+      return `En route vers ${destName ?? (useApiMode ? "une destination non renseignée" : "le déchargement")}`
     case "mouvement_vide":
-      return `Retour vers ${destName ?? "le banc de chargement"}`
+      return `Retour vers ${destName ?? (useApiMode ? "une destination non renseignée" : "le banc de chargement")}`
     case "chargement":
       return `Chargement à ${zoneName ?? "la zone"}`
     case "dechargement":
@@ -59,7 +59,7 @@ function taskDescription(state: EquipmentState, zoneName: string | null, destNam
     case "eteint":
       return "Éteint — aucune activité"
     default:
-      return "Arrêt — aucune tâche active"
+      return "Activité non déterminée"
   }
 }
 
@@ -174,8 +174,8 @@ export function EquipmentDetailContent({
   const now = rangeEnd
 
   const shiftElapsedMin = Math.max(1, (rangeEnd - rangeStart) / 60_000)
-  const waitingPct = (eq.waitingMinutesThisShift / shiftElapsedMin) * 100
-  const idlePct = (eq.idleMinutesThisShift / shiftElapsedMin) * 100
+  const waitingPct = useApiMode ? NaN : (eq.waitingMinutesThisShift / shiftElapsedMin) * 100
+  const idlePct = useApiMode ? NaN : (eq.idleMinutesThisShift / shiftElapsedMin) * 100
 
   const insight = inspecteurInsight(eq.id, eq.code)
 
@@ -208,7 +208,7 @@ export function EquipmentDetailContent({
         <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted">
           <span className="flex items-center gap-1.5">
             <User className="size-3.5 text-muted-2" />
-            {operator ? operator.name : "Non affecté"}
+            {operator ? operator.name : useApiMode ? "Opérateur non renseigné" : "Non affecté"}
           </span>
           <span className="flex items-center gap-1.5">
             <MapPin className="size-3.5 text-muted-2" />
@@ -247,7 +247,7 @@ export function EquipmentDetailContent({
             <Bell className="size-3.5" />
             Voir les événements
           </Button>
-          {onShowRecentPath && (
+          {onShowRecentPath && !useApiMode && (
             <Button size="sm" variant="outline" onClick={onShowRecentPath}>
               <Route className="size-3.5" />
               Afficher le trajet récent
@@ -256,7 +256,7 @@ export function EquipmentDetailContent({
         </div>
 
         <div className="flex items-center justify-between text-[11px] text-muted">
-          <span>Dernière télémétrie · {timeAgo(eq.lastUpdate ?? now, now)}</span>
+          <span>Dernière position / télémétrie · {eq.lastUpdate == null ? "Indisponible" : timeAgo(eq.lastUpdate, Number.isFinite(now) ? now : Date.now())}</span>
           <DataFreshnessIndicator />
         </div>
       </div>
@@ -281,7 +281,7 @@ export function EquipmentDetailContent({
                 label="Gasoil"
                 value={eq.fuelPct != null ? `${eq.fuelPct.toFixed(0)}%` : "—"}
                 tone={
-                  eq.fuelPct == null
+                  useApiMode || eq.fuelPct == null
                     ? "default"
                     : eq.fuelPct < 25
                       ? "danger"
@@ -354,14 +354,14 @@ export function EquipmentDetailContent({
               />
               <TelemetryStat
                 icon={Gauge}
-                label="Attente %"
-                value={`${waitingPct.toFixed(0)}%`}
+                label={useApiMode ? "Attente cumulée poste" : "Attente %"}
+                value={useApiMode ? `${eq.waitingMinutesThisShift} min` : `${waitingPct.toFixed(0)}%`}
                 tone={waitingPct > 25 ? "danger" : waitingPct > 12 ? "warning" : "default"}
               />
               <TelemetryStat
                 icon={Gauge}
-                label="Idle %"
-                value={`${idlePct.toFixed(0)}%`}
+                label={useApiMode ? "Idle cumulé poste" : "Idle %"}
+                value={useApiMode ? `${eq.idleMinutesThisShift} min` : `${idlePct.toFixed(0)}%`}
                 tone={idlePct > 20 ? "danger" : idlePct > 10 ? "warning" : "default"}
               />
             </div>
@@ -369,14 +369,14 @@ export function EquipmentDetailContent({
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-2">
                 Attente vs Idle vs Actif
               </p>
-              <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-3">
+              {useApiMode ? <p className="text-xs text-muted">Répartition en pourcentage non fournie par le backend.</p> : <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-3">
                 <div className="h-full bg-state-attente" style={{ width: `${Math.min(100, waitingPct)}%` }} />
                 <div className="h-full bg-state-arret" style={{ width: `${Math.min(100 - waitingPct, idlePct)}%` }} />
                 <div
                   className="h-full bg-state-mouvement-charge"
                   style={{ width: `${Math.max(0, 100 - waitingPct - idlePct)}%` }}
                 />
-              </div>
+              </div>}
             </div>
             <Stat label="Contribution production" value={formatEquipmentContribution(eq)} />
           </TabsContent>
@@ -388,7 +388,7 @@ export function EquipmentDetailContent({
                 Prochain entretien
               </div>
               <span className="text-xs text-muted">
-                {eq.engineHours != null
+                {useApiMode ? "Non évalué" : eq.engineHours != null
                   ? `dans ${(250 - (eq.engineHours % 250)).toFixed(0)} heures moteur`
                   : "—"}
               </span>
@@ -406,7 +406,7 @@ export function EquipmentDetailContent({
                 {maintenanceHistory.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={4} className="text-center text-muted-2">
-                      Aucun entretien enregistré pour cet engin.
+                      {detailError ? "Historique indisponible." : useApiMode && maintenanceRows == null ? "Chargement de l’historique…" : "Aucun entretien enregistré pour cet engin."}
                     </TableCell>
                   </TableRow>
                 ) : null}
@@ -414,8 +414,8 @@ export function EquipmentDetailContent({
                   <TableRow key={m.id}>
                     <TableCell className="text-muted-2">{timeAgo(m.date, now)}</TableCell>
                     <TableCell className="text-foreground/90">{m.type}</TableCell>
-                    <TableCell className="text-muted">{m.technician}</TableCell>
-                    <TableCell className="tabular-nums">{m.durationH} h</TableCell>
+                    <TableCell className="text-muted">{m.technician ?? "—"}</TableCell>
+                    <TableCell className="tabular-nums">{m.durationH == null ? "—" : `${m.durationH} h`}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

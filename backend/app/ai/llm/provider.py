@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from time import monotonic
 from typing import Protocol, TypeVar
 
 from pydantic import BaseModel
@@ -21,6 +23,21 @@ class ProviderConfigurationError(LLMProviderError):
 
 class ProviderResponseError(LLMProviderError):
     """The provider did not return a schema-valid structured result."""
+
+
+class ProviderTimeoutError(LLMProviderError):
+    """The provider call or cumulative investigation budget expired."""
+
+
+class ProviderAuthenticationError(LLMProviderError):
+    """The provider rejected server credentials or permissions."""
+
+
+class ProviderModelError(LLMProviderError):
+    """Model not found or request/model schema unsupported."""
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMProvider(Protocol):
@@ -80,7 +97,7 @@ class OpenAILLMProvider:
 
     provider_name = "openai"
 
-    def __init__(self, *, api_key: str, model: str):
+    def __init__(self, *, api_key: str, model: str, timeout_seconds: float = 45, budget_seconds: float = 150):
         if not api_key:
             raise ProviderConfigurationError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
         if not model:
@@ -90,9 +107,14 @@ class OpenAILLMProvider:
         except ImportError as exc:  # pragma: no cover - exercised only in incomplete deployments
             raise ProviderConfigurationError("The openai package is not installed") from exc
         self.model_name = model
-        self._client = OpenAI(api_key=api_key)
+        self._timeout_seconds = timeout_seconds
+        self._remaining_seconds = budget_seconds
+        self._client = OpenAI(api_key=api_key, timeout=timeout_seconds, max_retries=0)
 
     def _structured(self, schema: type[_T], system_prompt: str, payload: dict) -> _T:
+        if self._remaining_seconds <= 0:
+            raise ProviderTimeoutError("Investigation provider budget exceeded")
+        started = monotonic()
         try:
             response = self._client.responses.parse(
                 model=self.model_name,
@@ -102,10 +124,25 @@ class OpenAILLMProvider:
                 ],
                 text_format=schema,
                 store=False,
+                timeout=min(self._timeout_seconds, self._remaining_seconds),
             )
             parsed = response.output_parsed
         except Exception as exc:
-            raise LLMProviderError(f"OpenAI structured response failed: {exc}") from exc
+            from openai import APITimeoutError, AuthenticationError, PermissionDeniedError, BadRequestError, NotFoundError
+
+            # SDK exceptions can contain request bodies: log only safe metadata.
+            logger.error("AI provider failure model=%s schema=%s type=%s status=%s request_id=%s",
+                self.model_name, schema.__name__, type(exc).__name__,
+                getattr(exc, "status_code", None), getattr(exc, "request_id", None))
+            if isinstance(exc, APITimeoutError):
+                raise ProviderTimeoutError("AI provider request timed out") from exc
+            if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
+                raise ProviderAuthenticationError("AI provider access denied") from exc
+            if isinstance(exc, (BadRequestError, NotFoundError)):
+                raise ProviderModelError("AI provider rejected the model or structured request") from exc
+            raise LLMProviderError("AI provider structured response failed") from exc
+        finally:
+            self._remaining_seconds -= monotonic() - started
         if parsed is None:
             raise ProviderResponseError("OpenAI returned no structured output")
         try:
@@ -135,4 +172,6 @@ def create_llm_provider(settings: Settings | None = None) -> LLMProvider:
     return OpenAILLMProvider(
         api_key=configured.openai_api_key or "",
         model=configured.ai_model or "",
+        timeout_seconds=configured.ai_provider_timeout_seconds,
+        budget_seconds=configured.ai_investigation_llm_budget_seconds,
     )

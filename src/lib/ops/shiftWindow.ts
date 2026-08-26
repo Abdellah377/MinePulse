@@ -1,10 +1,16 @@
 import type { Shift } from "@/lib/mock/types"
+import { useApiMode } from "@/lib/api/client"
 
 /** Shift window bounds from simulation clock + shift definition (API mode). */
 export function shiftWindowBounds(
   simNowIso: string | null,
   shift: Shift | undefined
 ): { startMs: number; endMs: number; nowMs: number } {
+  if (useApiMode) return {
+    startMs: shift?.windowStart ? Date.parse(shift.windowStart) : NaN,
+    endMs: shift?.windowEnd ? Date.parse(shift.windowEnd) : NaN,
+    nowMs: simNowIso ? Date.parse(simNowIso) : NaN,
+  }
   const nowMs = simNowIso ? new Date(simNowIso).getTime() : Date.now()
   if (!shift) {
     const d = new Date(nowMs)
@@ -44,6 +50,7 @@ export function shiftRemainingMinutes(
 ): number {
   const { endMs, nowMs } = shiftWindowBounds(simNowIso, shift)
   let remaining = Math.round((endMs - nowMs) / 60_000)
+  if (useApiMode) return Math.max(0, remaining)
   if (remaining < 0) remaining += 24 * 60
   return Math.max(0, remaining)
 }

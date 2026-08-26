@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     ai_model: str | None = None
     openai_api_key: str | None = None
     ai_max_investigation_iterations: int = Field(default=3, ge=1, le=10)
+    ai_provider_timeout_seconds: float = Field(default=45, ge=5, le=60)
+    # Cumulative provider budget per invocation; frontend allows 180s including DB overhead.
+    ai_investigation_llm_budget_seconds: float = Field(default=150, ge=10, le=150)
 
     @property
     def database_url(self) -> str:

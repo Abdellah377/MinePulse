@@ -3,6 +3,7 @@ import { Plus, Save, Trash2, Undo2, X } from "lucide-react"
 import type { Zone, ZoneType } from "@/lib/mock/types"
 import { ZONE_TYPE_LABEL } from "@/lib/mock/types"
 import { cn } from "@/lib/utils"
+import { useApiMode } from "@/lib/api/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -20,7 +21,7 @@ export interface ZoneDraft {
   type: ZoneType
   color: string
   description: string
-  capacity: number
+  capacity: number | null
 }
 
 const ZONE_TYPES = Object.keys(ZONE_TYPE_LABEL) as ZoneType[]
@@ -226,8 +227,9 @@ export function ZonePropertiesPanel({
         <Input
           type="number"
           min={0}
-          value={draft.capacity}
-          onChange={(e) => onChange({ capacity: Number(e.target.value) || 0 })}
+          value={draft.capacity ?? ""}
+          placeholder="Non renseignée"
+          onChange={(e) => onChange({ capacity: e.target.value === "" ? null : Number(e.target.value) })}
         />
       </div>
       <div className="flex flex-col gap-1">
@@ -243,7 +245,7 @@ export function ZonePropertiesPanel({
 
       <div className="mt-auto flex flex-col gap-2 pt-2">
         <p className="text-[10px] text-muted-2">
-          Zones persistées localement — utilisées par l&apos;agent IA pour le contexte opérationnel.
+          {useApiMode ? "Zones enregistrées par l’API opérationnelle." : "Zones de démonstration persistées localement."}
         </p>
         <Button size="sm" onClick={onSave} disabled={isCreating && !canFinishDraft}>
           <Save className="size-3.5" />

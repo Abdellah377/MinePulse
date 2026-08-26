@@ -13,6 +13,7 @@ import { FILM_GROUP_CONFIG } from "@/lib/status"
 import { formatElapsedHms, formatShortTime, formatTimeHms } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { shiftWindowBounds } from "@/lib/ops/shiftWindow"
+import { useApiMode } from "@/lib/api/client"
 import { sortEquipmentByCode } from "@/lib/equipmentOrder"
 import { filmSegmentInsight } from "@/lib/ai/placeholders"
 import { AiSlot } from "@/components/ai/AiSlot"
@@ -44,7 +45,7 @@ const ALL_TYPES = Object.keys(EQUIPMENT_TYPE_LABEL) as EquipmentType[]
 
 type Selection = { type: "segment"; equipmentId: string; segment: TimelineSegment } | { type: "row"; equipmentId: string } | null
 
-export default function Film() {
+export default function Film({ tab }: Partial<import("@/components/workspace/WorkspaceHost").WorkspacePanelProps> = {}) {
   const equipment = useSiteScopedEquipment()
   const timelineSegments = useOpsStore((s) => s.timelineSegments)
   const shifts = useOpsStore((s) => s.shifts)
@@ -52,7 +53,7 @@ export default function Film() {
   const simNowIso = useOpsStore((s) => s.simNowIso)
   const openEquipmentDrawer = useUiStore((s) => s.openEquipmentDrawer)
 
-  const shift = shifts.find((s) => s.id === selectedShiftId) ?? shifts[0]
+  const shift = shifts.find((s) => s.id === selectedShiftId) ?? (useApiMode ? undefined : shifts[0])
   const { startMs: shiftStartRef, nowMs: now } = shiftWindowBounds(simNowIso, shift)
 
   const [typeFilter, setTypeFilter] = useState<"all" | EquipmentType>("all")
@@ -62,6 +63,9 @@ export default function Film() {
   const [emphasize, setEmphasize] = useState(false)
   const [arretsSansCause, setArretsSansCause] = useState(false)
   const [selection, setSelection] = useState<Selection>(null)
+  useEffect(() => {
+    if (tab?.context.equipmentId) setSelection({ type: "row", equipmentId: tab.context.equipmentId })
+  }, [tab?.context.equipmentId])
   const [timelineWidthPx, setTimelineWidthPx] = useState(MIN_TIMELINE_WIDTH_PX)
 
   const searchRef = useRef<HTMLInputElement>(null)
@@ -70,7 +74,7 @@ export default function Film() {
   const syncing = useRef(false)
 
   const windowMs = WINDOW_MIN * 60_000
-  const rangeEnd = now
+  const rangeEnd = useApiMode && shift?.windowEnd ? Math.min(now, Date.parse(shift.windowEnd)) : now
   const rangeStart = Math.max(shiftStartRef, rangeEnd - windowMs)
   const totalWidthPx = timelineWidthPx
 
@@ -239,6 +243,10 @@ export default function Film() {
   const showNowLine = now >= rangeStart && now <= rangeEnd
 
   const totalAuxWaiting = auxiliaires.reduce((sum, e) => sum + e.waitingMinutesThisShift, 0)
+
+  if (useApiMode && (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd <= rangeStart)) {
+    return <div className="p-4 text-sm text-muted"><PeriodFilters />Fenêtre opérationnelle indisponible ou poste non commencé.</div>
+  }
 
   return (
     <div className="flex h-full gap-3 overflow-hidden p-3 pt-1">
@@ -669,7 +677,7 @@ function TimelineRow({
         const clippedStart = Math.max(seg.start, rangeStart)
         let clippedEnd = Math.min(seg.end, rangeEnd)
         const isLast = index === sortedSegments.length - 1
-        if (isLast && clippedEnd < rangeEnd) clippedEnd = rangeEnd
+        if (!useApiMode && isLast && clippedEnd < rangeEnd) clippedEnd = rangeEnd
         const left = ((clippedStart - rangeStart) / windowMs) * totalWidthPx
         const width = Math.max(1.5, ((clippedEnd - clippedStart) / windowMs) * totalWidthPx)
         const dimmed = !stateFilter.has(group)
@@ -764,7 +772,7 @@ function DetailPanel({
                 Arrêt sans cause déclarée — à classer (exploitation / matériel / extérieur).
               </p>
             ) : (
-              <p>Cause opérationnelle probable liée à l&apos;état « {cfg.label} » sur ce créneau.</p>
+              <p>{useApiMode ? "Cause non renseignée. Un état équipement ne détermine pas une cause." : `Cause opérationnelle probable liée à l’état « ${cfg.label} » sur ce créneau.`}</p>
             )}
           </TabsContent>
           <TabsContent value="ia" className="mt-2">

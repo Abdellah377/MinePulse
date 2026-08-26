@@ -14,7 +14,7 @@ from app.ai.contracts import (
 from app.ai.graph import build_investigation_graph, initial_state
 from app.ai.llm.provider import LLMProvider, create_llm_provider
 from app.ai.nodes import InvestigationRuntime
-from app.ai.persistence import state_to_result
+from app.ai.persistence import state_to_result, verify_investigation_storage
 from app.ai.state import InvestigationState
 from app.ai.tools import EvidenceToolRegistry
 from app.config import get_settings
@@ -26,6 +26,10 @@ def validate_trigger_scope(session: Session, trigger: InvestigationTrigger) -> S
     site = session.get(Site, trigger.site_id)
     if site is None or not site.active:
         raise HTTPException(status_code=404, detail=f"Active site not found: {trigger.site_id}")
+    if trigger.shift_id is not None:
+        shift = session.get(Shift, trigger.shift_id)
+        if shift is None or shift.site_id != trigger.site_id:
+            raise HTTPException(status_code=404, detail="Shift not found at trigger site")
     if trigger.equipment_id is not None:
         equipment = session.scalar(
             select(Equipment.equipment_id).where(
@@ -86,6 +90,7 @@ def run_investigation(
     max_iterations: int | None = None,
 ) -> InvestigationResult:
     settings = get_settings()
+    verify_investigation_storage(session)
     llm = provider or create_llm_provider(settings)
     rounds = max_iterations or settings.ai_max_investigation_iterations
     if rounds < 1:

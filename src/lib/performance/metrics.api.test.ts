@@ -97,7 +97,7 @@ describe("buildVoyages API mode", () => {
 })
 
 describe("buildWaiting API mode", () => {
-  it("uses measured occupancy as queue, not waitMinutes/10", () => {
+  it("does not turn current occupancy into historical queue metrics", () => {
     const analysis = buildPerformanceAnalysis({
       metric: "waiting",
       equipment: [truck({ zoneId: "Z1", waitingMinutesThisShift: 40 })],
@@ -117,8 +117,10 @@ describe("buildWaiting API mode", () => {
       downtimeReasons: [],
       siteId: "SITE-1",
     })
-    expect(analysis.rows[0]?.avgQueue).toBe(1)
-    expect(analysis.rows[0]?.avgQueue).not.toBe(4)
+    expect(analysis.rows[0]?.trucks).toBe(1)
+    expect(analysis.rows[0]?.avgQueue).toBeNull()
+    expect(analysis.rows[0]?.maxQueue).toBeNull()
+    expect(analysis.rows[0]?.waitMin).toBeNull()
   })
 })
 

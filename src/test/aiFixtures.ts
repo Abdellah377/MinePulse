@@ -1,0 +1,17 @@
+import type { InvestigationResult, InvestigationTriggerInput } from "@/lib/api/types/ai"
+import type { Alert, Equipment } from "@/lib/mock/types"
+
+export const trigger: InvestigationTriggerInput = { trigger_type: "PRODUCTION_DEVIATION", trigger_source: "USER_INVESTIGATE", site_id: 17, shift_id: 29, source_record_id: "alert-42", payload: { deviation: null } }
+export const result: InvestigationResult = {
+  investigation_id: "3fc18d28-06de-4a75-9044-adad97ddcc80",
+  trigger: { ...trigger, subject: "PRODUCTION", source: "test", shift_id: 29, equipment_id: null, zone_id: null, severity: "WARNING", occurred_at: "2026-08-26T10:00:00Z", source_record_id: "alert-42", payload: { deviation: null } },
+  operational_context: { site_id: 17, site_code: "SITE-17", site_name: "Site opérationnel", shift_id: 29, shift_name: "Poste 29", operational_now: "2026-08-26T10:00:00Z", window_start: "2026-08-26T06:00:00Z", window_end: "2026-08-26T14:00:00Z" },
+  evidence: [{ evidence_id: "ev-production", kind: "DERIVED_METRIC", source_tool: "shift_production", source_service: "app.services.operational.production.production_summary", metric: "production", value: null, available: false, status: "UNAVAILABLE", unit: "t", site_id: 17, shift_id: 29, equipment_id: null, zone_id: null, observed_at: null, source_record_ids: [], metadata: {}, notes: "Mesure manquante" }],
+  hypotheses: [], requested_information: [], evidence_request_history: [], contradictions: [],
+  conclusion: { summary: "Conclusion enregistrée du backend : preuve insuffisante.", root_cause: null, reliable_root_cause: false, observed_fact_evidence_ids: [], derived_metric_evidence_ids: [], supported_hypothesis_ids: [], unresolved_uncertainties: ["Objectif de poste indisponible."], confidence: "LOW" },
+  recommendation: { action_type: "VERIFY_OPERATIONAL_CONDITION", description: "Vérifier la mesure de production avec le responsable de poste.", rationale: "La mesure est indisponible.", evidence_ids: [], target_equipment_id: null, target_zone_id: null, operational_constraints: ["Validation terrain requise"], human_validation_required: true },
+  iteration_count: 1, max_iterations: 3, iteration_limit_reached: false, evidence_expansion_exhausted: true,
+  status: "COMPLETED_WITH_UNCERTAINTY", error: null, started_at: "2026-08-26T10:00:00Z", completed_at: "2026-08-26T10:00:10Z", graph_version: "test-v1", provider: "mock", model: "mock",
+}
+export const alert: Alert = { id: "alert-42", severity: "warning", status: "new", title: "Écart de production", description: "Signal du backend", equipmentId: null, zoneId: null, location: "Site opérationnel", category: "PRODUCTION", createdAt: Date.parse("2026-08-26T10:00:00Z"), updatedAt: Date.parse("2026-08-26T10:00:00Z"), assignedTo: null, resolution: null }
+export const unknownEquipment: Equipment = { id: "UNIT-77", databaseId: 77, code: "UNIT-77", type: "haul_truck", model: "Test", state: "aucune_donnee", position: null, heading: null, speedKmh: null, fuelPct: null, gasoilLph: null, tdPct: null, tuPct: null, engineOn: null, operatorId: null, zoneId: null, destinationZoneId: null, payloadTons: null, capacityTons: null, odometerKm: null, engineHours: null, tripsThisShift: 0, waitingMinutesThisShift: 0, idleMinutesThisShift: 0, lastUpdate: null, siteId: "SITE-17", healthScore: null, cycleActuel: [], cycleDureeMoyenneMin: null }

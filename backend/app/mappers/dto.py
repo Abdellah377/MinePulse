@@ -32,7 +32,7 @@ from app.mappers.enums import (
     ZONE_TYPE_TO_UI,
 )
 from app.mappers.geo import lng_lat_to_workspace
-from app.services.operational.context import OperationalContext
+from app.services.operational.context import OperationalContext, shift_window
 from app.services.operational.clock import get_operational_now
 from app.services.operational.cycles import avg_cycle_minutes_for_equipment
 from app.services.operational.equipment import (
@@ -56,15 +56,20 @@ CYCLE_UI_KEYS = [
 def site_to_dto(site: Site) -> dict:
     return {
         "id": site.code,
+        "databaseId": site.site_id,
         "name": site.name,
-        "region": site.region or "Simulation",
-        "pits": [{"id": f"pit-{site.code.lower()}", "name": "Panneau 1"}],
+        "region": site.region,
+        "pits": [],  # No persisted pit catalog exists yet.
     }
 
 
-def shift_to_dto(shift: Shift) -> dict:
+def shift_to_dto(shift: Shift, operational_now: datetime | None = None) -> dict:
+    start, end = shift_window(shift, operational_now or get_operational_now())
     return {
         "id": f"shift-{shift.shift_id}",
+        "databaseId": shift.shift_id,
+        "windowStart": start.isoformat(),
+        "windowEnd": end.isoformat(),
         "name": shift.name,
         "startHour": shift.start_time.hour,
         "endHour": shift.end_time.hour,
@@ -84,13 +89,14 @@ def zone_to_dto(zone: Zone, site_code: str) -> dict:
     points = [lng_lat_to_workspace(lng, lat) for lng, lat in ring] if ring else []
     return {
         "id": zone.code,
+        "databaseId": zone.zone_id,
         "name": zone.name,
         "type": ZONE_TYPE_TO_UI.get(zone.type, "restreinte"),
         "points": points,
         "ringLngLat": [[lng, lat] for lng, lat in ring] if ring else None,
         "color": color,
         "description": zone.description or "",
-        "capacity": zone.capacity or 0,
+        "capacity": zone.capacity,
         "siteId": site_code,
     }
 
@@ -107,7 +113,7 @@ def road_to_dto(road: HaulRoad, zone_codes: dict[int, str], site_code: str) -> d
         "fromZoneId": zone_codes.get(road.from_zone_id, ""),
         "toZoneId": zone_codes.get(road.to_zone_id, ""),
         "points": points,
-        "distanceKm": float(road.distance_km or 0),
+        "distanceKm": float(road.distance_km) if road.distance_km is not None else None,
         "siteId": site_code,
     }
 
@@ -249,6 +255,7 @@ def equipment_to_dto(
 
     return {
         "id": eq.code,
+        "databaseId": eq.equipment_id,
         "code": eq.code,
         "type": EQUIPMENT_TYPE_TO_UI.get(eq.type, "other"),
         "model": eq.model or "Unknown",
@@ -414,16 +421,15 @@ def maintenance_history_for_equipment(session: Session, equipment_id: int, limit
     ).all()
     out: list[dict] = []
     for m in rows:
-        end = m.actual_end_time or m.expected_end_time or m.start_time
-        dur_h = max(0.1, (end - m.start_time).total_seconds() / 3600)
+        dur_h = (m.actual_end_time - m.start_time).total_seconds() / 3600 if m.actual_end_time else None
         meta = m.metadata_ or {}
         out.append(
             {
                 "id": f"mnt-{m.maintenance_id}",
                 "date": int(m.start_time.timestamp() * 1000),
                 "type": m.type + (f" — {m.component}" if m.component else ""),
-                "durationH": round(dur_h, 1),
-                "technician": meta.get("technician") or "Maintenance",
+                "durationH": round(dur_h, 1) if dur_h is not None else None,
+                "technician": meta.get("technician"),
             }
         )
     return out

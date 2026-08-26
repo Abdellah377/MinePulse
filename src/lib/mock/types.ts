@@ -137,6 +137,8 @@ export interface CycleStage {
 }
 
 export interface Equipment {
+  /** Stable database identity in API mode; display codes are not database IDs. */
+  databaseId?: number
   id: string
   code: string
   type: EquipmentType
@@ -184,6 +186,9 @@ export interface Operator {
 }
 
 export interface Shift {
+  databaseId?: number
+  windowStart?: string
+  windowEnd?: string
   id: string
   name: string
   startHour: number
@@ -198,9 +203,10 @@ export interface Pit {
 }
 
 export interface Site {
+  databaseId?: number
   id: string
   name: string
-  region: string
+  region: string | null
   pits: Pit[]
 }
 
@@ -234,6 +240,7 @@ export const ZONE_TYPE_COLOR: Record<ZoneType, string> = {
 }
 
 export interface Zone {
+  databaseId?: number
   id: string
   name: string
   type: ZoneType
@@ -243,7 +250,7 @@ export interface Zone {
   ringLngLat?: [number, number][]
   color: string
   description: string
-  capacity: number
+  capacity: number | null
   siteId: string
 }
 
@@ -252,7 +259,7 @@ export interface RoutePath {
   fromZoneId: string
   toZoneId: string
   points: Vec2[]
-  distanceKm: number
+  distanceKm: number | null
   siteId: string
 }
 

@@ -77,7 +77,7 @@ function confidenceFrom(seed: string, min = 70, max = 94) {
 
 export function computeZonePressures(equipment: Equipment[], zones: Zone[]): ZonePressure[] {
   return zones
-    .filter((z) => z.capacity > 0)
+    .filter((z) => z.capacity != null && z.capacity > 0)
     .map((z) => {
       const occ = getZoneOccupancy(equipment, z)!
       return {

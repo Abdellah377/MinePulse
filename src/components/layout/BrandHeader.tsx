@@ -2,6 +2,7 @@ import { useNavigate, useLocation } from "react-router-dom"
 import { Search, Bell, ChevronDown } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { useApiMode } from "@/lib/api/client"
 import { timeAgo } from "@/lib/format"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 import { useUiStore } from "@/lib/store/useUiStore"
@@ -75,6 +76,7 @@ export function BrandHeader() {
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
   const setSelectedSite = useOpsStore((s) => s.setSelectedSite)
   const alerts = useOpsStore((s) => s.alerts)
+  const apiPollError = useOpsStore((s) => s.apiPollError)
   const setCommandOpen = useUiStore((s) => s.setCommandOpen)
   const openModuleHome = useWorkspaceStore((s) => s.openModuleHome)
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace)
@@ -209,7 +211,7 @@ export function BrandHeader() {
             <DropdownMenuLabel>Alertes récentes</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {recentAlerts.length === 0 && (
-              <div className="px-2 py-4 text-center text-xs text-muted">Aucune alerte active</div>
+              <div className="px-2 py-4 text-center text-xs text-muted">{useApiMode && apiPollError ? "Alertes indisponibles ou non actualisées" : "Aucune alerte active"}</div>
             )}
             {recentAlerts.map((alert) => {
               const cfg = SEVERITY_CONFIG[alert.severity]
@@ -255,22 +257,22 @@ export function BrandHeader() {
               className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-1 text-[11px] font-medium text-white hover:bg-white/15 sm:pr-2"
             >
               <span className="flex size-6 items-center justify-center rounded-lg bg-white text-[10px] font-bold text-brand-header">
-                CP
+                {useApiMode ? "—" : "CP"}
               </span>
-              <span className="hidden sm:inline">Chef de poste</span>
+              <span className="hidden sm:inline">{useApiMode ? "Session locale" : "Chef de poste"}</span>
               <ChevronDown className="hidden size-3 opacity-70 sm:inline" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>Compte poste</DropdownMenuLabel>
             <DropdownMenuLabel className="-mt-2 normal-case tracking-normal text-muted">
-              Session active
+              {useApiMode ? "Authentification non configurée" : "Session de démonstration"}
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => goModule("parametres", "/parametres")}>
               Paramètres
             </DropdownMenuItem>
-            <DropdownMenuItem>Déconnexion</DropdownMenuItem>
+            <DropdownMenuItem disabled={useApiMode}>Déconnexion</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

@@ -70,7 +70,7 @@ export default function OemPage({ tab }: Partial<WorkspacePanelProps> = {}) {
   const [draft, setDraft] = useState<OemDraft>(() => asDraft(saved, initialCode))
   const [applied, setApplied] = useState<OemDraft>(() => asDraft(saved, initialCode))
   const [refreshKey, setRefreshKey] = useState(0)
-  const [exportPayload, setExportPayload] = useState<OemExportPayload | null>(null)
+  const [exportState, setExportState] = useState<{ key: string; payload: OemExportPayload | null } | null>(null)
   const [diagnosticTab, setDiagnosticTab] = useState<OemDiagnosticTab>(
     () => (saved.diagnosticTab as OemDiagnosticTab) ?? defaultDiagnosticTab(tab?.context.oemView as string)
   )
@@ -83,7 +83,7 @@ export default function OemPage({ tab }: Partial<WorkspacePanelProps> = {}) {
     const next = asDraft(stored, String(tab?.context.equipmentCode ?? ""))
     setDraft(next)
     setApplied(next)
-    setExportPayload(null)
+    setExportState(null)
     setDiagnosticTab((stored.diagnosticTab as OemDiagnosticTab) ?? defaultDiagnosticTab(tab?.context.oemView as string))
     setMaintenanceTab(
       (stored.maintenanceTab as OemMaintenanceTab) ?? defaultMaintenanceTab(tab?.context.oemView as string)
@@ -133,10 +133,12 @@ export default function OemPage({ tab }: Partial<WorkspacePanelProps> = {}) {
   const siteName = sites.find((s) => s.id === selectedSiteId)?.name ?? selectedSiteId
   const shiftLabel = shifts.find((s) => s.id === selectedShiftId)?.name ?? selectedShiftId
   const internalTab = view === "diagnostic" ? diagnosticTab : view === "maintenance" ? maintenanceTab : undefined
+  const reportKey = JSON.stringify([selectedSiteId, selectedShiftId, view, internalTab, applied])
+  const exportPayload = exportState?.key === reportKey ? exportState.payload : null
 
   const onExport = useCallback((payload: OemExportPayload | null) => {
-    setExportPayload(payload)
-  }, [])
+    setExportState({ key: reportKey, payload })
+  }, [reportKey])
 
   const viewProps = useMemo(
     () => ({
@@ -163,6 +165,7 @@ export default function OemPage({ tab }: Partial<WorkspacePanelProps> = {}) {
 
   return (
     <OemReportLayout
+      key={reportKey}
       panel={
         <OemFilterPanel
           view={view}

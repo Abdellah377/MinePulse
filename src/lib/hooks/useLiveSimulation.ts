@@ -20,18 +20,26 @@ export function useLiveSimulation(intervalMs = 2200) {
       let cancelled = false
       let n = 0
       const ctx = { siteCode: selectedSiteId, shiftId: selectedShiftId }
+      const isCurrentContext = () => {
+        const current = useOpsStore.getState()
+        return !cancelled && current.selectedSiteId === ctx.siteCode && current.selectedShiftId === ctx.shiftId
+      }
       const poll = async () => {
         while (!cancelled) {
           try {
             if (n % 5 === 0) {
               const payload = await fetchBootstrap({ ctx })
-              if (!payload.error) hydrateWorld(payload)
+              if (!isCurrentContext()) return
+              if (payload.error) throw new Error(payload.error)
+              hydrateWorld(payload)
             } else {
               const equipment = await fetchEquipmentLive(ctx)
+              if (!isCurrentContext()) return
               hydrateFromApi({ equipment })
             }
             n += 1
           } catch {
+            if (!isCurrentContext()) return
             const current = useOpsStore.getState().apiPollError
             useOpsStore.setState({
               apiPollError: pollCatchError(current),

@@ -55,11 +55,10 @@ export function AppShell() {
     return (
       <div className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-background px-6 text-foreground">
         <Loader2 className="size-5 animate-spin text-accent" />
-        <p className="text-sm text-muted">Connexion au simulateur FMS…</p>
+        <p className="text-sm text-muted">Connexion au backend opérationnel…</p>
         <p className="max-w-md text-center text-[11px] text-muted-2">
           API http://127.0.0.1:8000 · assurez-vous que{" "}
-          <code className="rounded bg-surface-2 px-1">uvicorn app.main:app --port 8000</code> et{" "}
-          <code className="rounded bg-surface-2 px-1">python -m simulator run</code> tournent.
+          <code className="rounded bg-surface-2 px-1">uvicorn app.main:app --port 8000</code> est accessible et la base PostgreSQL est configurée.
         </p>
       </div>
     )

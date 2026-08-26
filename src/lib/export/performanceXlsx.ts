@@ -28,7 +28,7 @@ export function exportPerformanceWorkbook(
       { Champ: "Poste", Valeur: shift },
       { Champ: "Métrique", Valeur: analysis.title },
       { Champ: "Export", Valeur: new Date().toLocaleString("fr-FR") },
-      { Champ: "Confiance IA", Valeur: `${analysis.interpretation.confidence} %` },
+      { Champ: "Confiance IA", Valeur: analysis.interpretation.confidence == null ? "Non évalué" : `${analysis.interpretation.confidence} %` },
     ]
 
     const syntheseRows = [

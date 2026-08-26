@@ -87,7 +87,8 @@ function PerformanceAnalyse({ tab }: { tab?: WorkspacePanelProps["tab"] }) {
     sites.find((s) => s.id === selectedSiteId)?.name ?? (useApiMode ? selectedSiteId : MERAH_SHIFT_SCENARIO.siteName)
   const shiftLabel =
     shifts.find((s) => s.id === selectedShiftId)?.name ?? (useApiMode ? selectedShiftId : MERAH_SHIFT_SCENARIO.shiftLabel)
-  const periodLabel = formatPeriodLabel(periodFrom, periodTo)
+  const selectedShift = shifts.find((s) => s.id === selectedShiftId)
+  const periodLabel = useApiMode ? (selectedShift?.windowStart && selectedShift.windowEnd ? `${new Date(selectedShift.windowStart).toLocaleString("fr-FR")} – ${new Date(selectedShift.windowEnd).toLocaleString("fr-FR")}` : "Fenêtre indisponible") : formatPeriodLabel(periodFrom, periodTo)
   const freshnessValue = useApiMode
     ? apiPollError || lastSuccessfulSyncAt == null
       ? "—"
@@ -234,7 +235,7 @@ function PerformanceAnalyse({ tab }: { tab?: WorkspacePanelProps["tab"] }) {
         </div>
       )}
 
-      {metric === "downtime" && (
+      {metric === "downtime" && !useApiMode && (
         <label className="mb-3 flex w-fit items-center gap-1.5 text-[11px] text-muted">
           <input
             type="checkbox"
@@ -262,7 +263,7 @@ function PerformanceAnalyse({ tab }: { tab?: WorkspacePanelProps["tab"] }) {
               <span className="text-muted">{analysis.interpretation.inference}</span>
             </p>
             <Block title="Données manquantes" items={analysis.interpretation.missing} />
-            <p className="text-muted-2">Confiance {analysis.interpretation.confidence} %</p>
+            <p className="text-muted-2">Confiance : {analysis.interpretation.confidence == null ? "Non évalué" : `${analysis.interpretation.confidence} %`}</p>
           </div>
         </section>
       </div>
@@ -298,6 +299,7 @@ function Block({ title, items }: { title: string; items: string[] }) {
 }
 
 function DocumentsLite() {
+  if (useApiMode) return <p className="text-sm text-muted">Bibliothèque de documents non connectée. Les exports des données affichées restent disponibles dans Analyse.</p>
   const docs = [
     { icon: ClipboardList, title: "Rapport de poste", meta: "Brouillon · ce matin" },
     { icon: FileSpreadsheet, title: "Export production", meta: "Excel · hier" },

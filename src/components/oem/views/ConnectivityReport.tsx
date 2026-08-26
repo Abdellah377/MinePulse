@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react"
 
-import { oemApi } from "@/lib/api/oem"
+import { useOemApi } from "@/components/oem/oemViewUtils"
 import type { OemCol } from "@/lib/oem/types"
 import { OemGrid } from "@/components/oem/OemDataTable"
 import { OemEmptyState } from "@/components/oem/OemEmptyState"
@@ -38,6 +38,7 @@ type ConnBundle = {
 }
 
 export function ConnectivityReport({ filters, refreshKey, onOpenEquipment, onExport }: OemViewProps) {
+  const oemApi = useOemApi()
   const shifts = useOpsStore((s) => s.shifts)
   const siteCode = useOpsStore((s) => s.selectedSiteId)
   const codes = filters.equipmentCodes
@@ -58,9 +59,9 @@ export function ConnectivityReport({ filters, refreshKey, onOpenEquipment, onExp
     return ((data?.ping.rows ?? []) as PingRow[]).map((row) => ({
       ...row,
       segments: (row.segments ?? []) as PingRow["segments"],
-      connectedSec: Number(row.connectedSec ?? 0),
-      disconnectedSec: Number(row.disconnectedSec ?? 0),
-      unknownSec: Number(row.unknownSec ?? 0),
+      connectedSec: row.connectedSec ?? null,
+      disconnectedSec: row.disconnectedSec ?? null,
+      unknownSec: row.unknownSec ?? null,
     }))
   }, [data])
 
@@ -88,8 +89,8 @@ export function ConnectivityReport({ filters, refreshKey, onOpenEquipment, onExp
         commQuality: c.commQuality,
         incidentCount: d.incidentCount,
       } as Record<string, unknown>
-    })
-  }, [data, codes, pingRows])
+    }).filter((row) => filters.minDelaySec <= 0 || (typeof row.currentDelaySec === "number" && row.currentDelaySec > filters.minDelaySec))
+  }, [data, codes, pingRows, filters.minDelaySec])
 
   useEffect(() => {
     onExport?.({
@@ -113,7 +114,7 @@ export function ConnectivityReport({ filters, refreshKey, onOpenEquipment, onExp
         )}
       </div>
       <p className="shrink-0 border-b border-[#d0d5dc] bg-[#f3f5f7] px-2 py-0.5 text-[11px] font-semibold text-[#222]">
-        Communication / retard
+        Communication / retard {filters.minDelaySec > 0 ? `> ${filters.minDelaySec} s (valeurs connues)` : "— tous les engins sélectionnés"}
       </p>
       <OemGrid columns={COLS} rows={tableRows} onRowClick={(row) => onOpenEquipment?.(String(row.code))} />
     </div>

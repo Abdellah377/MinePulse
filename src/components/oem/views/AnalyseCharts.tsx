@@ -1,4 +1,4 @@
-import { oemApi } from "@/lib/api/oem"
+import { useOemApi } from "@/components/oem/oemViewUtils"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 import { OemEmptyState } from "@/components/oem/OemEmptyState"
 import { OemSynchronizedCharts } from "@/components/oem/OemSyncedCharts"
@@ -45,6 +45,7 @@ function SignalWorkspace({
   defaultKeys,
   maxSignals,
 }: Pick<OemViewProps, "filters" | "refreshKey"> & { defaultKeys: string[]; maxSignals?: number }) {
+  const oemApi = useOemApi()
   const shifts = useOpsStore((s) => s.shifts)
   const code = filters.equipmentCodes[0]
   const selected = filters.parameterKeys.length ? filters.parameterKeys : defaultKeys

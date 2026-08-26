@@ -48,6 +48,34 @@ function start(name, colorCode, command, args, cwd) {
   return child
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForApiReady(url, timeoutMs = 45_000) {
+  const started = Date.now()
+  let announced = false
+
+  while (!shuttingDown) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(1_500) })
+      if (res.ok) return true
+    } catch {
+      /* FastAPI is still starting. */
+    }
+
+    if (!announced) {
+      console.log(`${prefix("api", "36")} waiting for FastAPI readiness…`)
+      announced = true
+    }
+
+    if (Date.now() - started > timeoutMs) return false
+    await wait(500)
+  }
+
+  return false
+}
+
 function shutdown(code = 0) {
   if (shuttingDown) return
   shuttingDown = true
@@ -106,4 +134,11 @@ start(
   backend
 )
 
-start("web", "35", isWin ? "npm.cmd" : "npm", ["run", "dev", "--", "--host", "127.0.0.1"], root)
+const ready = await waitForApiReady("http://127.0.0.1:8000/health")
+if (!ready && !shuttingDown) {
+  console.log(`${prefix("api", "36")} readiness timed out; starting UI so the app can show degraded API state.`)
+}
+
+if (!shuttingDown) {
+  start("web", "35", isWin ? "npm.cmd" : "npm", ["run", "dev", "--", "--host", "127.0.0.1"], root)
+}

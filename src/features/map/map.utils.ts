@@ -1,6 +1,7 @@
 import type { Feature, FeatureCollection, LineString, Point, Polygon, Position } from "geojson"
 
 import type { Equipment, RoutePath, Vec2, Zone } from "@/lib/mock/types"
+import { useApiMode } from "@/lib/api/client"
 import { EQUIPMENT_STATE_LABEL, EQUIPMENT_TYPE_LABEL } from "@/lib/mock/types"
 import { SITE_GEO, STATE_HEX } from "@/features/map/map.constants"
 import type {
@@ -64,7 +65,7 @@ export function equipmentToGeoJSON(
       .filter((eq) => eq.position != null)
       .map((eq) => {
       const zone = eq.zoneId ? zoneById.get(eq.zoneId) : undefined
-      const timeInStateMin = Math.max(1, Math.round((now - (eq.lastUpdate ?? now)) / 60_000))
+      const timeInStateMin = useApiMode ? null : Math.max(1, Math.round((now - (eq.lastUpdate ?? now)) / 60_000))
       return {
         type: "Feature",
         id: eq.id,
@@ -105,7 +106,7 @@ export function zonesToGeoJSON(
       })
       .map((z) => {
         const count = equipment.filter((e) => e.zoneId === z.id).length
-        const congested = z.capacity > 0 && count > z.capacity
+        const congested = !useApiMode && z.capacity != null && z.capacity > 0 && count > z.capacity
         const ring =
           z.ringLngLat && z.ringLngLat.length >= 3
             ? closeRing(z.ringLngLat.map(([lng, lat]) => [lng, lat]))
@@ -135,6 +136,8 @@ export function zonesToGeoJSON(
 }
 
 function classifyRoad(route: RoutePath, zones: Zone[]): RoadClass {
+  // Neutral cartographic style, not a claim that a road is open/restricted.
+  if (useApiMode) return "secondary"
   const from = zones.find((z) => z.id === route.fromZoneId)
   const to = zones.find((z) => z.id === route.toZoneId)
   if (from?.type === "restreinte" || to?.type === "restreinte") return "restricted"
@@ -276,7 +279,7 @@ export function fitBoundsFromZone(zone: Zone): [[number, number], [number, numbe
 }
 
 export function fitBoundsFromEquipment(equipment: Equipment[]): [[number, number], [number, number]] | null {
-  if (equipment.length === 0) return null
+  if (!equipment.some((e) => e.position != null)) return null
   let minLng = Infinity
   let minLat = Infinity
   let maxLng = -Infinity
@@ -302,7 +305,7 @@ export function equipmentPopupHtml(props: EquipmentFeatureProps): string {
       <div style="font-weight:700;font-family:ui-monospace,monospace">${escapeHtml(props.code)}</div>
       <div style="color:#6b7280;margin-top:2px">${escapeHtml(EQUIPMENT_TYPE_LABEL[props.type])}</div>
       <div style="margin-top:6px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${props.stateColor};margin-right:6px"></span>${escapeHtml(EQUIPMENT_STATE_LABEL[props.state])}</div>
-      <div style="color:#6b7280;margin-top:4px">${escapeHtml(props.zoneName)} · ${props.timeInStateMin} min</div>
+      <div style="color:#6b7280;margin-top:4px">${escapeHtml(props.zoneName)} · ${props.timeInStateMin == null ? "Durée dans l’état indisponible" : `${props.timeInStateMin} min`}</div>
     </div>
   `
 }

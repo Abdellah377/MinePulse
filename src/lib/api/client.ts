@@ -18,6 +18,25 @@ import type { ProductionByShift } from "@/lib/production/mergeProduction"
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api"
 const DEFAULT_TIMEOUT_MS = 15_000
 
+export class ApiError extends Error {
+  readonly status: number
+  readonly code?: string
+  constructor(status: number, message: string, code?: string) {
+    super(message)
+    this.status = status
+    this.code = code
+    this.name = "ApiError"
+  }
+}
+
+export class ApiTimeoutError extends Error {
+  constructor() { super("API request timed out"); this.name = "ApiTimeoutError" }
+}
+
+export class ApiNetworkError extends Error {
+  constructor() { super("API unreachable"); this.name = "ApiNetworkError" }
+}
+
 export type OpsContext = { siteCode?: string; shiftId?: string }
 
 export type OperationalSettingsDto = {
@@ -48,7 +67,7 @@ export async function fetchJson<T>(path: string, init?: RequestInit & { timeoutM
   const timeoutMs = init?.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const { timeoutMs: _ignored, ...rest } = init ?? {}
   const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       ...rest,
@@ -60,16 +79,19 @@ export async function fetchJson<T>(path: string, init?: RequestInit & { timeoutM
       signal: controller.signal,
     })
     if (!res.ok) {
-      throw new Error(`API ${path}: ${res.status} ${res.statusText}`)
+      // Never surface arbitrary backend response bodies or stack traces.
+      const body: unknown = await res.json().catch(() => null)
+      const detail = body && typeof body === "object" && "detail" in body ? body.detail : null
+      const code = detail && typeof detail === "object" && "code" in detail && typeof detail.code === "string" ? detail.code : undefined
+      throw new ApiError(res.status, `API ${res.status}`, code)
     }
-    return res.json() as Promise<T>
+    return await res.json() as T
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      throw new Error(`API ${path}: timeout after ${timeoutMs}ms`)
-    }
+    if (controller.signal.aborted) throw new ApiTimeoutError()
+    if (err instanceof TypeError) throw new ApiNetworkError()
     throw err
   } finally {
-    window.clearTimeout(timer)
+    globalThis.clearTimeout(timer)
   }
 }
 
@@ -171,8 +193,8 @@ export type EquipmentMaintenanceRow = {
   id: string
   date: number
   type: string
-  durationH: number
-  technician: string
+  durationH: number | null
+  technician: string | null
 }
 
 export type EquipmentDetailPayload = {
@@ -185,10 +207,6 @@ export function fetchEquipmentDetail(
   ctx?: OpsContext
 ): Promise<EquipmentDetailPayload> {
   return fetchJson(`/equipment/${encodeURIComponent(code)}/detail${opsQueryString(ctx)}`)
-}
-
-export function fetchSimulationStatus(): Promise<Record<string, unknown>> {
-  return fetchJson("/simulation/status")
 }
 
 export const useApiMode = import.meta.env.VITE_USE_API === "true"

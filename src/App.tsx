@@ -8,7 +8,8 @@ const AppShell = lazy(() =>
   import("@/components/layout/AppShell").then((m) => ({ default: m.AppShell }))
 )
 const EquipmentPage = lazy(() => import("@/pages/EquipmentPage"))
-const SimulationCentre = lazy(() => import("@/pages/dev/SimulationCentre"))
+// The temporary data-source controls are never part of a production build.
+const SimulationCentre = import.meta.env.DEV ? lazy(() => import("@/pages/dev/SimulationCentre")) : null
 
 function RouteFallback() {
   return (
@@ -36,7 +37,7 @@ function App() {
               <Route path="/evenements" element={<Navigate to="/alertes" replace />} />
               <Route path="/optimisation" element={<Navigate to="/actions" replace />} />
               <Route path="/equipement/:id" element={<EquipmentPage />} />
-              <Route path="/dev/simulation" element={<SimulationCentre />} />
+              {SimulationCentre && <Route path="/dev/simulation" element={<SimulationCentre />} />}
               <Route path="*" element={<Navigate to="/alertes" replace />} />
             </Route>
           </Routes>

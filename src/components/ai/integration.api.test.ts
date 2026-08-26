@@ -1,0 +1,89 @@
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import { beforeEach, expect, it, vi } from "vitest"
+import { result, alert } from "@/test/aiFixtures"
+import type { InvestigationEntry } from "@/lib/store/useInvestigationStore"
+import type { WorkspaceTab } from "@/lib/workspace/types"
+import AlertesIA from "@/pages/AlertesIA"
+import ActionsIA from "@/pages/ActionsIA"
+import { InvestigationResultView } from "./InvestigationResultView"
+import { investigationStatus } from "@/lib/ai/investigationPresentation"
+
+const mocks = vi.hoisted(() => ({ entry: undefined as InvestigationEntry | undefined, lookup: vi.fn(), start: vi.fn(), retrieve: vi.fn(), demo: vi.fn(() => { throw new Error("Mock intelligence leaked") }) }))
+vi.mock("@/lib/api/client", () => ({ useApiMode: true }))
+vi.mock("@/lib/ai/alertIntelligence", () => ({ buildCurrentIntelligence: mocks.demo, buildPredictionIntelligence: mocks.demo, getIntelligenceItem: mocks.demo, actionsContextFromItem: mocks.demo }))
+vi.mock("@/lib/ai/dispatch", () => ({ dispatchOptimizationBundle: mocks.demo, projectSnapshot: mocks.demo, DISPATCH_KIND_LABEL: {} }))
+vi.mock("@/lib/store/useOpsStore", async () => {
+  const { alert } = await import("@/test/aiFixtures")
+  const ops = { alerts: [alert], sites: [{ id: "SITE-17", databaseId: 17, name: "Site opérationnel" }], shifts: [{ id: "shift-29", databaseId: 29 }], selectedSiteId: "SITE-17", selectedShiftId: "shift-29", equipment: [], zones: [], apiPollError: null, apiBootstrapped: true }
+  return { useOpsStore: (selector?: (s: typeof ops) => unknown) => selector ? selector(ops) : ops, useSiteScopedEquipment: () => [], useSiteScopedZones: () => [] }
+})
+vi.mock("@/lib/store/useWorkspaceStore", () => ({ useWorkspaceStore: (selector: (s: unknown) => unknown) => selector({ openWorkspace: vi.fn(), patchTabContext: vi.fn(), tabState: {}, setTabState: vi.fn() }) }))
+vi.mock("@/lib/store/useInvestigationStore", () => {
+  const state = () => ({ entries: { "17:29:alert-42": mocks.entry, "3fc18d28-06de-4a75-9044-adad97ddcc80": mocks.entry }, lookup: mocks.lookup, start: mocks.start, retrieve: mocks.retrieve })
+  return { investigationKey: () => "17:29:alert-42", useInvestigationStore: Object.assign((selector: (s: ReturnType<typeof state>) => unknown) => selector(state()), { getState: state }) }
+})
+beforeEach(() => { vi.clearAllMocks(); mocks.entry = undefined })
+
+it("API Alertes IA renders backend LangGraph output and qualitative confidence", () => {
+  mocks.entry = { phase: "ready", result }
+  const html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain(result.conclusion!.summary)
+  expect(html).toContain(result.recommendation!.description)
+  expect(html).toContain("Faible")
+  expect(html).toContain("Impact non quantifié")
+  expect(html).toContain(alert.title)
+  expect(html).not.toContain("0%")
+  expect(mocks.demo).not.toHaveBeenCalled()
+  for (const section of ["Résumé", "Pourquoi", "Preuves / signaux", "Impact", "Liens utiles", "Panel IA", "Cause probable", "Action immédiate suggérée", "Ouvrir l’équipement"]) expect(html).toContain(section)
+  expect(html).toContain("max-w-[360px]")
+  expect(html).toContain("max-w-[340px]")
+})
+it("render and rerender cannot create investigations; pending is not confidence zero", () => {
+  const html = renderToStaticMarkup(createElement(AlertesIA))
+  renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Analyse IA non lancée")
+  expect(html).not.toMatch(/Confiance.*0\s*%/)
+  expect(mocks.start).not.toHaveBeenCalled()
+})
+it("API Actions IA uses only the persisted UUID result, without dispatch scenarios", () => {
+  mocks.entry = { phase: "ready", result }
+  const tab: WorkspaceTab = { id: "tab-actions", type: "actions", title: "Actions IA", module: "actions", context: { investigationId: result.investigation_id, alertId: alert.id }, isPinned: false, isDirty: false, createdAt: 1, lastActivatedAt: 1 }
+  const html = renderToStaticMarkup(createElement<Partial<{ tab: WorkspaceTab }>>(ActionsIA, { tab }))
+  expect(html).toContain(result.recommendation!.description)
+  expect(html).toContain("non évalués")
+  expect(html).toContain("Simulation d’impact non disponible en V1")
+  expect(html).toMatch(/<button[^>]*disabled[^>]*>Simuler<\/button>/)
+  expect(html).toContain("lg:col-span-7")
+  expect(html).toContain("lg:col-span-5")
+  expect(html).toContain("Préparer")
+  expect(html).toContain("Marquer")
+  expect(mocks.demo).not.toHaveBeenCalled()
+})
+
+it("running state disables manual creation and persisted provider errors do not expose raw messages", () => {
+  mocks.entry = { phase: "running" }
+  let html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Analyse IA en cours")
+  expect(html).not.toContain(result.recommendation!.description)
+  mocks.entry = { phase: "ready", result: { ...result, status: "FAILED", conclusion: null, recommendation: null, error: { stage: "analyze", error_type: "ProviderTimeoutError", message: "secret SDK response" } } }
+  html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Délai de l’analyse IA dépassé")
+  expect(html).not.toContain("secret SDK response")
+})
+it("failure leaves the live panel unavailable, not populated with pseudo-AI", () => {
+  mocks.entry = { phase: "error", error: "Fournisseur IA indisponible" }
+  const html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Analyse indisponible")
+  expect(html).not.toContain(result.conclusion!.summary)
+  expect(mocks.demo).not.toHaveBeenCalled()
+})
+it("renders all lifecycle states distinctly and null evidence as unavailable", () => {
+  expect(investigationStatus({ phase: "running" })).toBe("Analyse IA en cours")
+  expect(investigationStatus({ phase: "ready", result })).toContain("incertaine")
+  expect(investigationStatus({ phase: "ready", result: { ...result, status: "FAILED" } })).toContain("échouée")
+  expect(investigationStatus({ phase: "ready", result: { ...result, status: "PENDING" } })).toContain("en attente")
+  const html = renderToStaticMarkup(createElement(InvestigationResultView, { result }))
+  expect(html).toContain("Indisponible (UNAVAILABLE)")
+  expect(html).not.toContain("0 t")
+})

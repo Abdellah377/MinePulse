@@ -146,4 +146,4 @@ export const OEM_TYPE_GROUP: Record<string, string> = {
   other: "Autres",
 }
 
-export const UNAVAILABLE_SIM = "Indisponible en simulation"
+export const UNAVAILABLE_SIM = "Non fourni par le backend opérationnel"

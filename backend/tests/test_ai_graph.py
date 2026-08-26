@@ -263,13 +263,16 @@ def test_iteration_limit_forces_explicit_uncertainty_and_no_root_cause():
     assert result["conclusion"].summary.startswith("Available evidence is insufficient")
 
 
-def test_provider_failure_is_persisted_as_failed_investigation():
-    result, _, persisted = _run(ScriptedProvider([RuntimeError("provider unavailable")]))
+def test_provider_failure_is_persisted_as_failed_investigation(caplog):
+    result, _, persisted = _run(ScriptedProvider([RuntimeError("private provider response")]))
 
     assert result["status"] == InvestigationStatus.FAILED
     assert result["error"].stage == "analyze"
     assert result["completed_at"] is not None
     assert len(persisted) == 1
+    assert "private provider response" not in result["error"].message
+    assert result["investigation_id"] in caplog.text
+    assert "stage=analyze" in caplog.text
 
 
 def test_fabricated_only_hypothesis_cannot_support_reliable_root_cause():

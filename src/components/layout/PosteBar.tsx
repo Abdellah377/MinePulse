@@ -28,7 +28,7 @@ export function PosteBar() {
     return getShiftAttainment(undefined, productionByShift?.hourly).attainmentPct
   }, [productionByShift, rollup])
 
-  const shift = shifts.find((s) => s.id === selectedShiftId) ?? shifts[0]
+  const shift = shifts.find((s) => s.id === selectedShiftId) ?? (useApiMode ? undefined : shifts[0])
   if (!shift) {
     return (
       <div className="mx-4 mb-1 flex h-9 shrink-0 items-center gap-4 rounded-md border border-border/80 bg-surface px-4 text-[11px] text-muted">
@@ -46,12 +46,12 @@ export function PosteBar() {
     <div className="mx-4 mb-1 flex h-9 shrink-0 items-center gap-4 rounded-md border border-border/80 bg-surface px-4 text-[11px]">
       <span className="font-semibold text-foreground/90">{shift.name}</span>
       <span className="text-muted">
-        {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")} restant
+        {Number.isFinite(remainingMin) ? `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} restant` : "Temps restant indisponible"}
       </span>
       <span
         className={cn(
           "rounded-full px-2 py-0.5 font-medium",
-          attainmentPct == null
+          useApiMode || attainmentPct == null
             ? "text-muted"
             : attainmentPct >= 100
               ? "bg-success/10 text-success"

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   Map as MapIcon,
   Film as FilmIcon,
@@ -25,10 +25,17 @@ import type { WorkspacePanelProps } from "@/components/workspace/WorkspaceHost"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { MiniTimelineStrip } from "@/components/equipment/MiniTimelineStrip"
+import { InvestigationAlerts } from "@/components/ai/InvestigationAlerts"
+import { Section, Fact, AiBlock } from "@/components/ai/InvestigationLayout"
 
 type SeverityFilter = "all" | AlertSeverity
 
-export default function AlertesIA({ tab }: Partial<WorkspacePanelProps> = {}) {
+export default function AlertesIA(props: Partial<WorkspacePanelProps> = {}) {
+  return useApiMode ? <InvestigationAlerts {...props} /> : <DemoAlertesIA {...props} />
+}
+
+/** Scenario intelligence is intentionally confined to demo mode. */
+function DemoAlertesIA({ tab }: Partial<WorkspacePanelProps> = {}) {
   const alerts = useOpsStore((s) => s.alerts)
   const equipment = useSiteScopedEquipment()
   const zones = useSiteScopedZones()
@@ -367,35 +374,6 @@ export default function AlertesIA({ tab }: Partial<WorkspacePanelProps> = {}) {
           <p className="text-xs text-muted">Sélectionnez une alerte pour l’analyse IA.</p>
         )}
       </aside>
-    </div>
-  )
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section>
-      <h4 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-2">
-        {title}
-      </h4>
-      <div className="rounded-md border border-border bg-surface p-3">{children}</div>
-    </section>
-  )
-}
-
-function Fact({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div>
-      <dt className="text-muted-2">{label}</dt>
-      <dd className={cn("text-foreground/90", mono && "font-mono font-medium")}>{value}</dd>
-    </div>
-  )
-}
-
-function AiBlock({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-border bg-background px-3 py-2">
-      <p className="text-[10px] font-semibold uppercase text-muted-2">{label}</p>
-      <p className="mt-0.5 text-[12px] text-foreground/90">{value}</p>
     </div>
   )
 }

@@ -18,9 +18,9 @@ export function OemReportContextBar({
   const engins = filters.equipmentCodes.length ? filters.equipmentCodes.join(", ") : "—"
   const interval =
     filters.periodMode === "shift"
-      ? "poste actuel"
+      ? "poste sélectionné"
       : filters.periodMode === "posts"
-        ? `${filters.fromDate || "…"} – ${filters.toDate || "…"}`
+        ? `${filters.fromShift || "non renseigné"} – ${filters.toShift || "non renseigné"} (fenêtres serveur)`
         : `${filters.from || "…"} – ${filters.to || "…"}`
   const parts = [
     `Entreprise: ${siteName}`,

@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
+import pytest
+from fastapi import HTTPException
 
-from app.ai.contracts import ResolvedOperationalContext
-from app.ai.service import reconstruct_operational_context
+from app.ai.contracts import InvestigationTrigger, ResolvedOperationalContext
+from app.ai.service import reconstruct_operational_context, validate_trigger_scope
 from app.db.models import Shift, Site
 
 
@@ -39,3 +41,12 @@ def test_context_reconstructs_from_serializable_ids_and_recorded_window():
     assert reconstructed.sim_now == serialized.operational_now
     assert reconstructed.shift_window_start == serialized.window_start
     assert reconstructed.shift_window_end == serialized.window_end
+
+
+@pytest.mark.parametrize("shift", [None, Shift(shift_id=2, site_id=99, name="Other site")])
+def test_invalid_shift_is_rejected_before_creating_unpersistable_investigation(shift):
+    site = Site(site_id=1, code="SITE-A", name="Site A", active=True)
+    trigger = InvestigationTrigger(site_id=1, shift_id=2, trigger_type="PRODUCTION_DEVIATION", trigger_source="USER_INVESTIGATE")
+    with pytest.raises(HTTPException) as caught:
+        validate_trigger_scope(FakeSession(site, shift), trigger)
+    assert caught.value.status_code == 404

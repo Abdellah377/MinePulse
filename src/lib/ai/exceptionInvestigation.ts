@@ -18,20 +18,7 @@ export interface ExceptionInvestigation {
 }
 
 export function investigateException(alert: Alert, equipmentCode?: string | null): ExceptionInvestigation {
-  if (useApiMode) {
-    return {
-      facts: [alert.description || alert.title, alert.location ? `Zone: ${alert.location}` : ""].filter(Boolean),
-      probableCause: alert.description || "Contexte opérationnel à confirmer",
-      causeKind: "insufficient",
-      supporting: [alert.category],
-      contradictory: [],
-      missing: ["Analyse IA non activée — vérification terrain requise"],
-      confidence: 0,
-      verification: "Confirmer sur le terrain et classer l'alerte.",
-      ifIgnored: "Impact opérationnel non quantifié sans moteur IA.",
-      impact: alert.description || "Impact à évaluer",
-    }
-  }
+  if (useApiMode) throw new Error("Demo-only helper: use the investigation API")
   const code = equipmentCode ?? ""
   const S = MERAH_SHIFT_SCENARIO
   if (code === S.spotlight.noCommTruck || alert.category === "Communication") {

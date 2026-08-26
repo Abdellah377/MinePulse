@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/table"
 
 export default function Parametres() {
+  const settingsLoaded = useOpsStore((s) => s.settingsLoaded)
   const sites = useOpsStore((s) => s.sites)
   const shifts = useOpsStore((s) => s.shifts)
   const idleAlertThresholdMin = useOpsStore((s) => s.idleAlertThresholdMin)
@@ -91,6 +92,8 @@ export default function Parametres() {
             <AlertTriangle className="size-4 text-muted-2" />
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
+            {!settingsLoaded && <p className="text-xs text-muted">Paramètres serveur indisponibles ou en cours de chargement.</p>}
+            <fieldset disabled={!settingsLoaded} hidden={!settingsLoaded} className="space-y-3">
             <ThresholdRow
               id="idle-threshold"
               label="Seuil d'attente prolongée"
@@ -109,6 +112,7 @@ export default function Parametres() {
               value={cycleDurationThresholdMin}
               onChange={(v) => handleNumber(v, setCycleDurationThreshold, "cycle_duration_threshold_min")}
             />
+            </fieldset>
             {savedFlash && (
               <span className="flex items-center gap-1 text-[11px] text-success">
                 <Check className="size-3.5" />
@@ -127,7 +131,7 @@ export default function Parametres() {
               <CardTitle>Objectifs de poste</CardTitle>
               <CardDescription>
                 {useApiMode
-                  ? "Objectifs et réalisé issus de la base simulation."
+                  ? "Objectifs et réalisé issus des services opérationnels."
                   : "Référence scénario Merah El Ahrach — matin 06:00–14:00."}
               </CardDescription>
             </div>
@@ -202,8 +206,8 @@ export default function Parametres() {
               </div>
               <div className="flex items-center gap-2">
                 <span className={cn("text-[11px]", unit === "metric" ? "text-foreground" : "text-muted-2")}>Métrique</span>
-                <Switch checked={unit === "imperial"} onCheckedChange={(c) => setUnit(c ? "imperial" : "metric")} />
-                <span className={cn("text-[11px]", unit === "imperial" ? "text-foreground" : "text-muted-2")}>Impérial</span>
+                <Switch disabled={useApiMode} checked={unit === "imperial"} onCheckedChange={(c) => setUnit(c ? "imperial" : "metric")} />
+                <span className={cn("text-[11px]", unit === "imperial" ? "text-foreground" : "text-muted-2")}>{useApiMode ? "Conversion impériale non disponible" : "Impérial"}</span>
               </div>
             </div>
           </CardContent>
@@ -230,8 +234,8 @@ export default function Parametres() {
                 {sites.map((site) => (
                   <TableRow key={site.id}>
                     <TableCell className="text-foreground/90">{site.name}</TableCell>
-                    <TableCell className="text-muted">{site.region}</TableCell>
-                    <TableCell className="text-muted">{site.pits.map((p) => p.name).join(", ")}</TableCell>
+                    <TableCell className="text-muted">{site.region ?? "—"}</TableCell>
+                    <TableCell className="text-muted">{site.pits.map((p) => p.name).join(", ") || "Non renseignés"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -278,12 +282,12 @@ export default function Parametres() {
               ? "Les seuils sont enregistrés via PATCH /api/settings/operational."
               : "Les paramètres sont stockés uniquement en état local — aucun backend n'est connecté."}
           </div>
-          <Link
+          {import.meta.env.DEV && <Link
             to="/dev/simulation"
             className="text-accent underline-offset-2 hover:underline"
           >
             DEV — Centre de simulation (digital twin)
-          </Link>
+          </Link>}
         </div>
       </div>
     </div>

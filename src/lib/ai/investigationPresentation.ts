@@ -1,0 +1,31 @@
+import type { ConfidenceLevel, InvestigationError } from "@/lib/api/types/ai"
+import type { InvestigationEntry } from "@/lib/store/useInvestigationStore"
+
+export const CONFIDENCE_LABEL: Record<ConfidenceLevel, string> = { LOW: "Faible", MEDIUM: "Moyenne", HIGH: "Élevée" }
+
+export function investigationStatus(entry?: InvestigationEntry): string {
+  if (!entry || entry.phase === "absent") return "Analyse IA non lancée"
+  if (entry.phase === "loading") return "Recherche d’une investigation existante…"
+  if (entry.phase === "running") return "Analyse IA en cours"
+  if (entry.phase === "error") return "Analyse indisponible"
+  switch (entry.result?.status) {
+    case "FAILED": return "Investigation échouée"
+    case "COMPLETED_WITH_UNCERTAINTY": return "Données insuffisantes / conclusion incertaine"
+    case "COMPLETED": return "Analyse terminée"
+    case "PENDING": return "Investigation en attente"
+    default: return "Analyse IA en cours"
+  }
+}
+
+/** Never display arbitrary persisted exception messages (including older records). */
+export function investigationFailure(error?: InvestigationError | null): string | undefined {
+  if (!error) return undefined
+  if (error.error_type === "ProviderTimeoutError") return "Délai de l’analyse IA dépassé. Investigation enregistrée en échec."
+  if (error.error_type === "ProviderConfigurationError") return "Fournisseur IA non configuré."
+  if (error.error_type === "ProviderAuthenticationError") return "Accès au fournisseur IA refusé. Vérifiez la configuration serveur."
+  if (error.error_type === "ProviderModelError") return "Modèle IA indisponible ou incompatible. Vérifiez AI_MODEL."
+  if (error.stage === "analyze" || error.stage === "build_conclusion" || error.stage === "build_recommendation") return "Analyse IA échouée auprès du fournisseur. Consultez les journaux serveur."
+  if (error.stage === "resolve_context") return "Contexte opérationnel indisponible."
+  if (error.stage.includes("evidence")) return "Collecte des données opérationnelles échouée."
+  return "Investigation échouée. Consultez les journaux serveur."
+}

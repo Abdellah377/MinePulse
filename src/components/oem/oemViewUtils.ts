@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { scopedOemApi } from "@/lib/api/oem"
+import { useOpsStore } from "@/lib/store/useOpsStore"
 
 import type { OemCol, OemDraft } from "@/lib/oem/types"
-import { isoFromLocal, shiftBoundsIso } from "@/lib/oem/format"
+import { isoFromLocal } from "@/lib/oem/format"
 import type { Shift } from "@/lib/mock/types"
+
+export const EMPTY_OEM_ROWS: Record<string, unknown>[] = []
 
 export type OemExportPayload = {
   rows: Record<string, unknown>[]
@@ -26,30 +30,17 @@ export function rangeParams(
 ): { from?: string; to?: string } {
   if (filters.periodMode === "shift") return {}
   if (filters.periodMode === "custom") {
-    return { from: isoFromLocal(filters.from), to: isoFromLocal(filters.to) }
+    return { from: isoFromLocal(filters.from) ?? "unavailable", to: isoFromLocal(filters.to) ?? "unavailable" }
   }
-  const fromShift = shifts.find((s) => s.id === filters.fromShift) ?? shifts[0]
-  const toShift = shifts.find((s) => s.id === filters.toShift) ?? fromShift
-  if (!fromShift || !toShift) return {}
-  const start = shiftBoundsIso(
-    filters.fromDate,
-    fromShift.startHour,
-    fromShift.endHour,
-    fromShift.startMinute,
-    fromShift.endMinute
-  )
-  const end = shiftBoundsIso(
-    filters.toDate || filters.fromDate,
-    toShift.startHour,
-    toShift.endHour,
-    toShift.startMinute,
-    toShift.endMinute
-  )
-  if (!start || !end) return {}
-  return { from: start.from, to: end.to }
+  const fromShift = shifts.find((s) => s.id === filters.fromShift)
+  const toShift = shifts.find((s) => s.id === filters.toShift)
+  // Invalid values produce a controlled 422, never a silent different time window.
+  return { from: fromShift?.windowStart ?? "unavailable", to: toShift?.windowEnd ?? "unavailable" }
 }
 
 export function useOemLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
+  const siteCode = useOpsStore((s) => s.selectedSiteId)
+  const shiftId = useOpsStore((s) => s.selectedShiftId)
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -78,7 +69,7 @@ export function useOemLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
           }
         })
         .catch((e: Error) => {
-          if (!cancelled && first) setError(e.message || "Erreur API")
+          if (!cancelled) { setError(e.message || "Erreur API"); setData(null) }
         })
         .finally(() => {
           inFlight = false
@@ -96,7 +87,7 @@ export function useOemLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
       window.clearInterval(id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps)
+  }, [...deps, siteCode, shiftId])
   return { data, error, loading }
 }
 
@@ -104,9 +95,9 @@ export function oemContext(filters: OemDraft, siteName: string, shiftLabel: stri
   const engins = filters.equipmentCodes.length ? filters.equipmentCodes.join(", ") : "Tous"
   const period =
     filters.periodMode === "shift"
-      ? "Poste actuel"
+      ? "Poste sélectionné"
       : filters.periodMode === "posts"
-        ? `${filters.fromDate} → ${filters.toDate}`
+        ? `${filters.fromShift} → ${filters.toShift} (fenêtres serveur)`
         : `${filters.from} → ${filters.to}`
   return {
     Site: siteName,
@@ -114,7 +105,7 @@ export function oemContext(filters: OemDraft, siteName: string, shiftLabel: stri
     Engin: engins,
     Période: period,
     "Source données": "postgresql",
-    Simulation: "true",
+    "Mode données": "API opérationnelle",
     Export: new Date().toLocaleString("fr-FR"),
     ...extra,
   }
@@ -122,4 +113,10 @@ export function oemContext(filters: OemDraft, siteName: string, shiftLabel: stri
 
 export function codesQuery(codes: string[]): string | undefined {
   return codes.length ? codes.join(",") : undefined
+}
+
+export function useOemApi() {
+  const siteCode = useOpsStore((s) => s.selectedSiteId)
+  const shiftId = useOpsStore((s) => s.selectedShiftId)
+  return useMemo(() => scopedOemApi({ siteCode, shiftId }), [siteCode, shiftId])
 }

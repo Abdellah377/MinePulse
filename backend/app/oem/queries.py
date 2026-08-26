@@ -168,8 +168,8 @@ def get_tyre_history(
     for r in rows:
         key = r.bucket.isoformat() if r.bucket else ""
         item = by_ts.setdefault(key, {"ts": key})
-        item[f"{r.position}_pressure"] = round(float(r.pressure or 0), 1)
-        item[f"{r.position}_temp"] = round(float(r.temp or 0), 1)
+        item[f"{r.position}_pressure"] = round(float(r.pressure), 1) if r.pressure is not None else None
+        item[f"{r.position}_temp"] = round(float(r.temp), 1) if r.temp is not None else None
     return {
         "code": eq.code,
         "from": since.isoformat(),
@@ -262,8 +262,9 @@ def diagnostic_parameters(
                     "avg": round(float(avg), s.precision) if avg is not None else None,
                     "max": round(float(mx), s.precision) if mx is not None else None,
                     "unit": s.unit,
-                    "sensorStatus": status or "ok",
-                    "sensorWorking": "Oui" if status in (None, "ok") else "Alarme",
+                    "sensorStatus": (status or "ok") if last_v is not None and k in SIM_THRESHOLDS else None,
+                    "sensorWorking": None if last_v is None or k not in SIM_THRESHOLDS else "Oui" if status is None else "Alarme",
+                    "thresholdSource": SIM_THRESHOLDS[k].source if k in SIM_THRESHOLDS else None,
                     "category": s.category,
                     "categoryLabel": CATEGORY_LABELS.get(s.category, s.category),
                 }
@@ -339,6 +340,7 @@ def error_codes(
                 "ts": r.ts.isoformat(),
                 "code": eq_code,
                 "errorCode": mapped,
+                "catalogSource": "simulation/test" if mapped in SIM_ERROR_CODES else None,
                 "category": cat,
                 "description": meta["label"],
                 "severity": sev,
@@ -529,6 +531,8 @@ def sensor_anomalies(
                 "parameterKey": param,
                 "value": raw.get("value"),
                 "expectedRange": rng,
+                "thresholdSource": "source event" if raw.get("expectedLow") is not None or raw.get("expectedHigh") is not None else SIM_THRESHOLDS[param].source if param in SIM_THRESHOLDS else None,
+                "catalogSource": "simulation/test" if mapped in SIM_ERROR_CODES else None,
                 "anomalyType": meta.get("label", mapped),
                 "severity": raw.get("severity") or meta.get("severity", "WARNING"),
                 "durationSec": raw.get("durationSec"),

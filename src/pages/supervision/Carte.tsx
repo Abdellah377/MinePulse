@@ -167,7 +167,7 @@ function MapInteractionLock({ mode }: { mode: "draw" | "none" }) {
   return null
 }
 
-export default function Carte() {
+export default function Carte({ tab }: Partial<import("@/components/workspace/WorkspaceHost").WorkspacePanelProps> = {}) {
   const equipment = useSiteScopedEquipment()
   const zones = useSiteScopedZones()
   const routes = useSiteScopedRoutes()
@@ -188,8 +188,12 @@ export default function Carte() {
   const [onlyActiveEvents, setOnlyActiveEvents] = useState(false)
   const [showRecentPath, setShowRecentPath] = useState(false)
 
-  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string | null>(null)
-  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null)
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string | null>(tab?.context.equipmentId ?? null)
+  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(tab?.context.zoneId ?? null)
+  useEffect(() => {
+    setSelectedEquipmentId(tab?.context.equipmentId ?? null)
+    setSelectedZoneId(tab?.context.zoneId ?? null)
+  }, [tab?.context.equipmentId, tab?.context.zoneId])
 
   const [editMode, setEditMode] = useState(false)
   const [activeTool, setActiveTool] = useState<MapTool>("select")
@@ -304,14 +308,14 @@ export default function Carte() {
   const roadsGeo = useMemo(() => routesToGeoJSON(routes, zones), [routes, zones])
   const draftGeo = useMemo(() => draftLngLatToGeoJSON(draftLngLat), [draftLngLat])
   const recentGeo = useMemo(() => {
-    if (!showRecentPath || !selectedEquipment) {
+    if (useApiMode || !showRecentPath || !selectedEquipment) {
       return { type: "FeatureCollection" as const, features: [] }
     }
     return recentPathToGeoJSON(buildRecentTrail(selectedEquipment, routes))
   }, [showRecentPath, selectedEquipment, routes])
 
   const pipContext = useMemo(() => {
-    if (!selectedEquipment) return null
+    if (useApiMode || !selectedEquipment) return null
     return inferEquipmentContext(selectedEquipment, zones)
   }, [selectedEquipment, zones])
 
@@ -472,7 +476,7 @@ export default function Carte() {
               points,
               color: draft.color,
               description: draft.description,
-              capacity: draft.capacity,
+              capacity: draft.capacity ?? undefined,
             },
             zoneApiCtx
           )
@@ -534,7 +538,7 @@ export default function Carte() {
               type: draft.type,
               color: draft.color,
               description: draft.description,
-              capacity: draft.capacity,
+              capacity: draft.capacity ?? undefined,
               ...(pts ? { points: pts } : {}),
             },
             zoneApiCtx
@@ -810,7 +814,7 @@ export default function Carte() {
           </MineMap>
 
           <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-md border border-warning/30 bg-warning/15 px-2.5 py-1 text-[11px] font-medium text-foreground">
-            Données simulées · Mode prototype
+            {useApiMode ? "Données opérationnelles · API" : "Données simulées · Mode prototype"}
           </div>
 
           {editMode && isCreating && (
@@ -870,7 +874,7 @@ export default function Carte() {
                     zone={selectedZone}
                     occupancy={equipment.filter((e) => e.zoneId === selectedZone.id).length}
                     equipmentInside={equipment.filter((e) => e.zoneId === selectedZone.id)}
-                    avgWait={avgWaitInZone(equipment, selectedZone.id)}
+                    avgWait={useApiMode ? null : avgWaitInZone(equipment, selectedZone.id)}
                     onEdit={() => {
                       enterEditMode()
                       selectZoneForEdit(selectedZone.id)
@@ -933,7 +937,7 @@ function EquipmentQuickInfo({
       </div>
       <div className="flex items-center gap-1.5 text-[11px] text-muted">
         <User className="size-3.5 text-muted-2" />
-        {operator ? operator.name : "Non affecté"}
+        {operator ? operator.name : useApiMode ? "Opérateur non renseigné" : "Non affecté"}
       </div>
       <div className="flex items-center gap-1.5 text-[11px] text-muted">
         <MapPin className="size-3.5 text-muted-2" />
@@ -947,8 +951,8 @@ function EquipmentQuickInfo({
       <Button size="sm" onClick={onOpenDetail}>
         Ouvrir l&apos;inspecteur
       </Button>
-      <Button size="sm" variant={showRecentPath ? "default" : "outline"} onClick={onToggleRecentPath}>
-        {showRecentPath ? "Masquer le trajet récent" : "Afficher le trajet récent"}
+      <Button size="sm" disabled={useApiMode} variant={showRecentPath ? "default" : "outline"} onClick={onToggleRecentPath}>
+        {useApiMode ? "Historique GPS non disponible" : showRecentPath ? "Masquer le trajet récent" : "Afficher le trajet récent"}
       </Button>
       <AiSlot insight={inspecteurInsight(eq.id, eq.code)} label="Pourquoi" />
     </div>
@@ -965,11 +969,11 @@ function ZoneQuickInfo({
   zone: Zone
   occupancy: number
   equipmentInside: { id: string; code: string }[]
-  avgWait: number
+  avgWait: number | null
   onEdit: () => void
 }) {
-  const ratio = zone.capacity > 0 ? occupancy / zone.capacity : 0
-  const condition = zoneConditionLabel(occupancy, zone.capacity)
+  const ratio = zone.capacity != null && zone.capacity > 0 ? occupancy / zone.capacity : 0
+  const condition = useApiMode || zone.capacity == null ? "Non évalué" : zoneConditionLabel(occupancy, zone.capacity)
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -982,8 +986,8 @@ function ZoneQuickInfo({
       <p className="text-xs leading-relaxed text-muted">{zone.description}</p>
       <div className="grid grid-cols-2 gap-2">
         <QuickStat label="Présents" value={`${occupancy}`} />
-        <QuickStat label="Capacité" value={zone.capacity > 0 ? `${zone.capacity}` : "—"} />
-        <QuickStat label="Attente moy." value={`${avgWait.toFixed(0)} min`} />
+        <QuickStat label="Capacité" value={zone.capacity != null ? `${zone.capacity}` : "—"} />
+        <QuickStat label="Attente moy." value={avgWait == null ? "Indisponible" : `${avgWait.toFixed(0)} min`} />
         <QuickStat label="État" value={condition} />
       </div>
       {condition === "congestion" && (
@@ -1004,7 +1008,7 @@ function ZoneQuickInfo({
           </div>
         </div>
       )}
-      {zone.capacity > 0 && (
+      {zone.capacity != null && zone.capacity > 0 && (
         <div className="flex flex-col gap-1">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-muted">Occupation</span>
@@ -1016,7 +1020,7 @@ function ZoneQuickInfo({
             <div
               className={cn(
                 "h-full rounded-md",
-                ratio >= 1 ? "bg-danger" : ratio >= 0.7 ? "bg-warning" : "bg-accent"
+                useApiMode ? "bg-accent" : ratio >= 1 ? "bg-danger" : ratio >= 0.7 ? "bg-warning" : "bg-accent"
               )}
               style={{ width: `${Math.min(100, ratio * 100)}%` }}
             />

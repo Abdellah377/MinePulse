@@ -43,3 +43,10 @@ def test_ai_adapters_import_operational_and_oem_service_boundaries():
     assert any(module.startswith("app.services.operational") for module in operational_imports)
     assert any(module.startswith("app.oem") for module in oem_imports)
     assert not any(module.startswith("simulator") for module in operational_imports | oem_imports)
+
+
+def test_developer_smoke_uses_operational_context_not_simulator_runtime():
+    imports = _imports(AI_ROOT.parents[1] / "scripts" / "smoke_ai.py")
+    assert "app.services.operational.context" in imports
+    assert "app.ai.service" in imports
+    assert not any(module.startswith("simulator") for module in imports)

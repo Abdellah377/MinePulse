@@ -24,15 +24,6 @@ import {
 const PANEL_WIDTH = 240
 const CTL = "h-7 w-full rounded-xl text-xs"
 
-const TYRE_POS = [
-  { code: "FL", label: "Avant gauche" },
-  { code: "FR", label: "Avant droite" },
-  { code: "R1L", label: "Arrière 1 gauche" },
-  { code: "R1R", label: "Arrière 1 droite" },
-  { code: "R2L", label: "Arrière 2 gauche" },
-  { code: "R2R", label: "Arrière 2 droite" },
-]
-
 export function OemFilterPanel({
   view,
   internalTab,
@@ -56,6 +47,7 @@ export function OemFilterPanel({
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const [catalog, setCatalog] = useState<OemCatalog | null>(null)
+  const tyrePositions = catalog?.tyrePositions ?? []
   const equipment = useSiteScopedEquipment()
   const sites = useOpsStore((s) => s.sites)
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
@@ -180,7 +172,7 @@ export function OemFilterPanel({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="shift">Poste actuel</SelectItem>
+              <SelectItem value="shift">Poste sélectionné</SelectItem>
               <SelectItem value="posts">Sur plusieurs postes</SelectItem>
               <SelectItem value="custom">Personnalisée</SelectItem>
             </SelectContent>
@@ -192,8 +184,9 @@ export function OemFilterPanel({
             <div className="grid grid-cols-[1fr_88px] gap-1.5">
               <Input
                 type="date"
+                disabled
                 className="h-7 rounded-xl px-2 text-xs"
-                value={draft.fromDate}
+                value={shifts.find((s) => s.id === draft.fromShift)?.windowStart?.slice(0, 10) ?? ""}
                 onChange={(e) => onChange({ ...draft, fromDate: e.target.value })}
               />
               <Select
@@ -215,8 +208,9 @@ export function OemFilterPanel({
             <div className="grid grid-cols-[1fr_88px] gap-1.5">
               <Input
                 type="date"
+                disabled
                 className="h-7 rounded-xl px-2 text-xs"
-                value={draft.toDate}
+                value={shifts.find((s) => s.id === draft.toShift)?.windowEnd?.slice(0, 10) ?? ""}
                 onChange={(e) => onChange({ ...draft, toDate: e.target.value })}
               />
               <Select value={draft.toShift || undefined} onValueChange={(toShift) => onChange({ ...draft, toShift })}>
@@ -281,13 +275,14 @@ export function OemFilterPanel({
           <div>
             <span className="mb-1 block text-[10px] font-semibold uppercase text-muted-2">Positions pneus</span>
             <div className="overflow-hidden rounded-xl border border-border bg-background text-[11px]">
-              {TYRE_POS.map((p, i) => {
+              {!catalog && <p className="p-2 text-muted">Catalogue indisponible ou en cours de chargement.</p>}
+              {tyrePositions.map((p, i) => {
                 const on = draft.tyrePositions.includes(p.code)
                 return (
                   <label
                     key={p.code}
                     className={`flex cursor-pointer items-center gap-2 px-3 py-2 ${
-                      i < TYRE_POS.length - 1 ? "border-b border-border" : ""
+                      i < tyrePositions.length - 1 ? "border-b border-border" : ""
                     } ${on ? "bg-accent-soft" : ""}`}
                   >
                     <input
@@ -303,7 +298,7 @@ export function OemFilterPanel({
                         })
                       }
                     />
-                    {p.label}
+                    {p.labelFr}
                   </label>
                 )
               })}

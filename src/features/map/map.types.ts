@@ -29,7 +29,7 @@ export interface EquipmentFeatureProps {
   zoneName: string
   heading: number | null
   speedKmh: number | null
-  timeInStateMin: number
+  timeInStateMin: number | null
   selected: boolean
 }
 
@@ -39,7 +39,7 @@ export interface ZoneFeatureProps {
   type: ZoneType
   color: string
   description: string
-  capacity: number
+  capacity: number | null
   count: number
   active: boolean
   /** 1 = selected, 0 = not (MapLibre-friendly) */
@@ -53,7 +53,7 @@ export interface RoadFeatureProps {
   roadClass: RoadClass
   fromZoneId: string
   toZoneId: string
-  distanceKm: number
+  distanceKm: number | null
 }
 
 export const MAP_SOURCE = {

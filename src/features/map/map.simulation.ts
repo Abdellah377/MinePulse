@@ -7,6 +7,7 @@ import {
 import { SPOTLIGHT, SPOTLIGHT_CODES } from "@/lib/mock/scenario"
 import type { Equipment, RoutePath, Vec2 } from "@/lib/mock/types"
 import { useOpsStore } from "@/lib/store/useOpsStore"
+import { useApiMode } from "@/lib/api/client"
 
 function lerp(a: Vec2, b: Vec2, t: number): Vec2 {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
@@ -29,7 +30,7 @@ export function advanceSimulatedPositions(
   bancBId: string | null,
   tick: number
 ): Equipment[] {
-  if (!SIMULATE_LIVE_MOVEMENT) return equipment
+  if (useApiMode || !SIMULATE_LIVE_MOVEMENT) return equipment
 
   return equipment.map((eq) => {
     if (SPOTLIGHT_CODES.has(eq.code)) return eq
@@ -67,6 +68,7 @@ export function buildRecentTrail(
   routes: RoutePath[],
   samples = 12
 ): Vec2[] {
+  if (useApiMode) return []
   const route =
     routes.find(
       (r) =>
@@ -97,7 +99,7 @@ export function useMapLiveSimulation(enabled: boolean) {
   const tickRef = useRef(0)
 
   useEffect(() => {
-    if (!enabled || !SIMULATE_LIVE_MOVEMENT) return
+    if (useApiMode || !enabled || !SIMULATE_LIVE_MOVEMENT) return
     const id = window.setInterval(() => {
       tickRef.current += 1
       const bancB = zones.find(

@@ -18,8 +18,7 @@ function confidenceFrom(seed: string, min = 70, max = 96) {
 
 const DISABLED_AI: AiInsight = {
   title: "Analyse IA non activée",
-  body: "Les insights narratifs Merah sont désactivés en mode API — données opérationnelles uniquement.",
-  confidence: 0,
+  body: "Ouvrez Alertes IA pour démarrer ou consulter une investigation enregistrée.",
   evidence: [],
   next: "Activer le moteur IA pour des hypothèses.",
   action: "Consulter Film / Carte / Alertes",
@@ -32,7 +31,6 @@ export function filmSegmentInsight(seed: string, stateLabel: string): AiInsight 
     return {
       title: `État — ${stateLabel}`,
       body: "Analyse IA non activée — contexte factuel uniquement.",
-      confidence: 0,
       evidence: [],
       next: "Activer le moteur IA pour des hypothèses.",
       action: "Vérifier sur Film / Carte",

@@ -18,6 +18,7 @@ import { getFleetWaitAvg, getShiftProduction } from "@/lib/mock/scenarioMetrics"
 import { shiftProductionRollup } from "@/lib/production/mergeProduction"
 import type { PerformanceMetric } from "@/lib/workspace/types"
 import { performanceMetricLabel } from "@/lib/workspace/titles"
+import { buildApiPerformance } from "@/lib/performance/apiMetrics"
 
 export interface PerfKpi {
   id: string
@@ -31,7 +32,7 @@ export interface PerfInterpretation {
   facts: string[]
   inference: string
   missing: string[]
-  confidence: number
+  confidence: number | null
 }
 
 export interface PerfColumn {
@@ -67,6 +68,7 @@ export function buildPerformanceAnalysis(input: {
 }): PerfAnalysis {
   const { metric, equipment, zones, productionHourly, productionShiftly, downtimeReasons, siteId } = input
   const fuelMode = input.fuelMode ?? "lph"
+  if (useApiMode && metric !== "production") return buildApiPerformance(input)
   const cycleTargetMin = productionShiftly?.[0]?.targetCycleMin ?? null
   let analysis: PerfAnalysis
   switch (metric) {
@@ -138,7 +140,7 @@ function buildProduction(
     target: useApiMode ? (r.target ?? "—") : (r.target ?? 0),
     ecart: r.target != null ? r.tonnage - r.target : useApiMode ? "—" : r.tonnage,
     trips: useApiMode ? (r.trips != null ? r.trips : "—") : Math.round(trips / Math.max(1, shift.hourly.length)),
-    trucks: trucks.length,
+    trucks: useApiMode ? null : trucks.length,
     delayMin: useApiMode
       ? r.delayMin != null
         ? r.delayMin
@@ -154,7 +156,7 @@ function buildProduction(
         id: "actual",
         label: "Réel",
         value: shift.actual != null ? `${shift.actual.toLocaleString("fr-FR")} t` : "—",
-        tone: "warn",
+        tone: useApiMode ? "neutral" : "warn",
       },
       {
         id: "target",
@@ -166,7 +168,7 @@ function buildProduction(
         label: "Atteinte",
         value: shift.attainmentPct != null ? `${shift.attainmentPct.toFixed(1)} %` : "—",
         tone:
-          shift.attainmentPct != null && shift.attainmentPct >= 95
+          useApiMode ? "neutral" : shift.attainmentPct != null && shift.attainmentPct >= 95
             ? "good"
             : shift.attainmentPct != null
               ? "warn"
@@ -208,12 +210,12 @@ function buildProduction(
           ]
         : merahProductionFacts(shift.actual ?? 0, shift.target, shift.attainmentPct),
       inference: useApiMode
-        ? "Interprétation IA non activée — chiffres issus de la production simulée."
+        ? "Interprétation non évaluée — chiffres issus des services opérationnels."
         : "La file Banc B et EXC-027 en maintenance expliquent la majorité de l'écart de poste.",
       missing: useApiMode
         ? ["Moteur d'analyse Performance non activé"]
         : ["Répartition tonnage par banc (A vs B)", "Retard imputable uniquement à l'attente"],
-      confidence: useApiMode ? 0 : 88,
+      confidence: useApiMode ? null : 88,
     },
   }
 }
@@ -348,7 +350,7 @@ function buildFuel(equipment: Equipment[], mode: "lph" | "lpt" | "idle"): PerfAn
       missing: useApiMode
         ? ["Moteur d'analyse Performance non activé"]
         : ["Mesure débitmètre réelle", "Calibration L/t par modèle"],
-      confidence: useApiMode ? 0 : 74,
+      confidence: useApiMode ? null : 74,
     },
   }
 }
@@ -458,7 +460,7 @@ function buildCycle(equipment: Equipment[], zones: Zone[], cycleTargetMin: numbe
       missing: useApiMode
         ? ["Moteur d'analyse Performance non activé"]
         : ["Ventilation minute par minute des étapes pour tous les camions"],
-      confidence: useApiMode ? 0 : 82,
+      confidence: useApiMode ? null : 82,
     },
   }
 }
@@ -478,7 +480,7 @@ function buildWaiting(equipment: Equipment[], zones: Zone[], siteId?: string): P
           (trucks.reduce((s, t) => s + t.waitingMinutesThisShift, 0) / trucks.length).toFixed(1)
         )
     : getFleetWaitAvg(equipment, siteId)
-  const scopedZones = zones.filter((z) => z.capacity > 0 && (!siteId || z.siteId === siteId))
+  const scopedZones = zones.filter((z) => z.capacity != null && z.capacity > 0 && (!siteId || z.siteId === siteId))
 
   const rows = scopedZones
     .map((z) => {
@@ -488,10 +490,10 @@ function buildWaiting(equipment: Equipment[], zones: Zone[], siteId?: string): P
         ? inZone.reduce((s, e) => s + e.waitingMinutesThisShift, 0) / inZone.length
         : useApiMode
           ? 0
-          : count / z.capacity >= 1
+          : count / z.capacity! >= 1
             ? 35
             : 12
-      const maxQ = Math.max(count, z.capacity)
+      const maxQ = Math.max(count, z.capacity!)
       const lost = useApiMode
         ? Math.round(avg * count)
         : Math.round(avg * Math.max(1, inZone.length))
@@ -544,7 +546,7 @@ function buildWaiting(equipment: Equipment[], zones: Zone[], siteId?: string): P
       missing: useApiMode
         ? ["Moteur d'analyse Performance non activé"]
         : ["Temps d'attente GPS précis par zone", "Capacité réelle Banc A à absorber"],
-      confidence: useApiMode ? 0 : 90,
+      confidence: useApiMode ? null : 90,
     },
   }
 }
@@ -593,7 +595,7 @@ function buildTd(equipment: Equipment[]): PerfAnalysis {
         ? "Interprétation IA non activée — TD calculé depuis les états équipement du poste."
         : "TD reflète la disponibilité déclarée — à croiser avec arrêts sans cause.",
       missing: useApiMode ? ["Moteur d'analyse Performance non activé"] : ["Définition métier exacte de TD (à confirmer)"],
-      confidence: useApiMode ? 0 : 65,
+      confidence: useApiMode ? null : 65,
     },
   }
 }
@@ -644,7 +646,7 @@ function buildTu(equipment: Equipment[]): PerfAnalysis {
         ? "Interprétation IA non activée — TU calculé depuis les états productifs du poste."
         : "Utilisation limitée par le goulot Banc B — camions en file sans produire.",
       missing: useApiMode ? ["Moteur d'analyse Performance non activé"] : ["Définition métier exacte de TU (à confirmer)"],
-      confidence: useApiMode ? 0 : 65,
+      confidence: useApiMode ? null : 65,
     },
   }
 }
@@ -697,7 +699,7 @@ function buildVoyages(equipment: Equipment[]): PerfAnalysis {
         ? "Interprétation IA non activée — voyages issus des cycles complétés du poste."
         : "Les camions bloqués en file Banc B réalisent moins de rotations.",
       missing: useApiMode ? ["Moteur d'analyse Performance non activé"] : ["Répartition OD exacte par voyage"],
-      confidence: useApiMode ? 0 : 82,
+      confidence: useApiMode ? null : 82,
     },
   }
 }
@@ -758,7 +760,7 @@ function buildDowntime(equipment: Equipment[], downtimeReasons: DowntimeReason[]
       missing: useApiMode
         ? ["Moteur d'analyse Performance non activé"]
         : ["Taxonomie cause OPM complète", equipment.length ? "Lien Film ↔ motif" : "Motifs terrain"],
-      confidence: useApiMode ? 0 : 85,
+      confidence: useApiMode ? null : 85,
     },
   }
 }

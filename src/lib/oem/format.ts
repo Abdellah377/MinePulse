@@ -1,5 +1,5 @@
 export function fmtDurationHms(sec: number | null | undefined): string {
-  if (sec == null || !Number.isFinite(Number(sec))) return ""
+  if (sec == null || !Number.isFinite(Number(sec))) return "—"
   const s = Math.max(0, Math.round(Number(sec)))
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)

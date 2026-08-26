@@ -28,8 +28,8 @@ const CHART_H = 280
 
 export function PerformanceChart({ analysis }: { analysis: PerfAnalysis }) {
   const { chartKind, chartData, chartSeries } = analysis
-  if (chartData.length === 0) {
-    return <p className="py-12 text-center text-xs text-muted">Pas de données.</p>
+  if (!chartData.some((row) => chartSeries.some((series) => typeof row[series.key] === "number"))) {
+    return <p className="py-12 text-center text-xs text-muted">Mesures indisponibles pour ce graphique.</p>
   }
 
   return (

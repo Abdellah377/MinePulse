@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import logging
+import traceback
 
 from sqlalchemy.orm import Session
 
@@ -29,7 +31,7 @@ from app.ai.contracts import (
     ResolvedOperationalContext,
 )
 from app.ai.llm.provider import LLMProvider
-from app.ai.persistence import persist_investigation
+from app.ai.persistence import InvestigationPersistenceError, persist_investigation
 from app.ai.state import InvestigationState
 from app.ai.tools import EvidenceToolRegistry
 from app.services.operational.context import OperationalContext
@@ -45,13 +47,19 @@ class InvestigationRuntime:
     persister: Callable[[Session, InvestigationState], object] = persist_investigation
 
 
-def _error(stage: str, exc: Exception) -> dict:
+logger = logging.getLogger(__name__)
+
+
+def _error(stage: str, exc: Exception, investigation_id: str) -> dict:
+    # Stack locations aid debugging; arbitrary exception bodies never enter durable results.
+    logger.error("Investigation %s failed stage=%s type=%s\n%s", investigation_id,
+        stage, type(exc).__name__, "".join(traceback.format_tb(exc.__traceback__)))
     return {
         "status": InvestigationStatus.FAILED,
         "error": InvestigationError(
             stage=stage,
             error_type=type(exc).__name__,
-            message=str(exc),
+            message=f"Investigation failed at {stage}. Consult server logs.",
         ),
     }
 
@@ -86,14 +94,14 @@ class InvestigationNodes:
                 "status": InvestigationStatus.GATHERING_EVIDENCE,
             }
         except Exception as exc:
-            return _error("resolve_context", exc)
+            return _error("resolve_context", exc, state["investigation_id"])
 
     def gather_initial_evidence(self, state: InvestigationState) -> dict:
         try:
             ctx = self._reconstruct_context(state)
             evidence = self.runtime.tools.gather_initial(ctx, state["trigger"])
         except Exception as exc:
-            return _error("gather_initial_evidence", exc)
+            return _error("gather_initial_evidence", exc, state["investigation_id"])
         return {
             "evidence": evidence,
             "status": InvestigationStatus.ANALYZING,
@@ -113,7 +121,7 @@ class InvestigationNodes:
             diagnosis = self.runtime.provider.diagnose(payload)
             diagnosis = self._sanitize_diagnosis(diagnosis, state)
         except Exception as exc:
-            return {"iteration_count": next_iteration, **_error("analyze", exc)}
+            return {"iteration_count": next_iteration, **_error("analyze", exc, state["investigation_id"])}
         useful_requests, skipped_attempts = self._new_requests(
             diagnosis.requested_information,
             state,
@@ -159,7 +167,7 @@ class InvestigationNodes:
             ctx = self._reconstruct_context(state)
             additional = self.runtime.tools.gather_requested(ctx, state["requested_information"])
         except Exception as exc:
-            return _error("gather_requested_evidence", exc)
+            return _error("gather_requested_evidence", exc, state["investigation_id"])
         attempts = []
         for request, evidence in zip(state["requested_information"], additional, strict=False):
             outcome = {
@@ -189,7 +197,7 @@ class InvestigationNodes:
             conclusion = self.runtime.provider.build_conclusion(payload)
             conclusion = self._sanitize_conclusion(conclusion, state)
         except Exception as exc:
-            return _error("build_conclusion", exc)
+            return _error("build_conclusion", exc, state["investigation_id"])
         return {
             "conclusion": conclusion,
             "status": InvestigationStatus.BUILDING_RECOMMENDATION,
@@ -235,7 +243,7 @@ class InvestigationNodes:
                 }
             )
         except Exception as exc:
-            return _error("build_recommendation", exc)
+            return _error("build_recommendation", exc, state["investigation_id"])
         conclusion = state["conclusion"]
         uncertain = bool(
             state["iteration_limit_reached"]
@@ -256,7 +264,12 @@ class InvestigationNodes:
     def persist(self, state: InvestigationState) -> dict:
         completed_at = state["completed_at"] or datetime.now(timezone.utc)
         final_state = {**state, "completed_at": completed_at}
-        self.runtime.persister(self.runtime.session, final_state)
+        try:
+            self.runtime.persister(self.runtime.session, final_state)
+        except Exception as exc:
+            _error("persist", exc, state["investigation_id"])
+            self.runtime.session.rollback()
+            raise InvestigationPersistenceError("Investigation result could not be saved") from exc
         return {"completed_at": completed_at}
 
     def _reconstruct_context(self, state: InvestigationState) -> OperationalContext:

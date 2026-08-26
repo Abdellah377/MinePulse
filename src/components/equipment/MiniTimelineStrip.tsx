@@ -13,7 +13,7 @@ export function MiniTimelineStrip({
 }) {
   const total = Math.max(1, rangeEnd - rangeStart)
   return (
-    <div className="flex h-6 w-full overflow-hidden rounded-none bg-surface-3">
+    <div className="relative h-6 w-full overflow-hidden rounded-none bg-surface-3" title="Les espaces sans segment sont non renseignés">
       {segments.map((seg) => {
         const clippedStart = Math.max(seg.start, rangeStart)
         const clippedEnd = Math.min(seg.end, rangeEnd)
@@ -22,8 +22,8 @@ export function MiniTimelineStrip({
         return (
           <div
             key={seg.id}
-            className={cn(STATE_CONFIG[seg.state].dot, "h-full rounded-none")}
-            style={{ width: `${widthPct}%` }}
+            className={cn(STATE_CONFIG[seg.state].dot, "absolute h-full rounded-none")}
+            style={{ left: `${((clippedStart - rangeStart) / total) * 100}%`, width: `${widthPct}%` }}
             title={`${STATE_CONFIG[seg.state].label}`}
           />
         )

@@ -27,7 +27,7 @@ export function DataFreshnessIndicator({
     return () => clearInterval(id)
   }, [])
 
-  const syncAt = lastSuccessfulSyncAt ?? 0
+  const syncAt = lastSuccessfulSyncAt
   const live =
     useApiMode &&
     fullWorldHydrated &&
@@ -37,11 +37,11 @@ export function DataFreshnessIndicator({
     now - lastSuccessfulSyncAt < LIVE_THRESHOLD_MS
 
   const label =
-    apiPollError != null
+    !useApiMode ? "DÉMO" : apiPollError != null
       ? "HORS LIGNE"
       : live
-        ? "EN DIRECT"
-        : syncAt > 0
+        ? "API SYNCHRONISÉE"
+        : syncAt != null
           ? timeAgo(syncAt, now)
           : "—"
 
@@ -52,7 +52,7 @@ export function DataFreshnessIndicator({
         muted ? "text-white/90" : "text-muted",
         className
       )}
-      title={apiPollError ?? (syncAt > 0 ? `Dernière synchro ${timeAgo(syncAt, now)}` : "Aucune synchro")}
+      title={apiPollError ?? (syncAt != null ? `Dernière synchro API ${timeAgo(syncAt, now)} — ne garantit pas la fraîcheur des capteurs` : "Aucune synchro")}
     >
       <Circle
         className={cn(

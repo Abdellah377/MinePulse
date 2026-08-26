@@ -28,6 +28,10 @@ import { cn } from "@/lib/utils"
 
 type AssetTab = "equipment" | "zones" | "roads"
 
+function measured(value: unknown, unit: string): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)} ${unit}` : "—"
+}
+
 function formatSimClock(iso?: string) {
   if (!iso) return "—"
   try {
@@ -201,7 +205,7 @@ export default function SimulationCentre() {
               engineOnline ? "border-emerald-500/40 text-emerald-800" : "border-red-400/50 text-red-700"
             )}
           >
-            Moteur {engineOnline ? "en ligne" : "hors ligne"}
+            Moteur {status?.engine_alive == null ? "indisponible" : engineOnline ? "en ligne" : "hors ligne"}
           </Badge>
           {busy ? <Loader2 className="size-3.5 animate-spin text-muted" /> : null}
         </div>
@@ -224,11 +228,11 @@ export default function SimulationCentre() {
 
           <span className="text-[11px] text-muted">Vitesse</span>
           <Select
-            value={String(status?.speed ?? 30)}
+            value={status?.speed == null ? "" : String(status.speed)}
             onValueChange={(v) => run(() => simApi.setSpeed(Number(v)))}
           >
             <SelectTrigger className="h-8 w-[5.5rem]">
-              <SelectValue />
+              <SelectValue placeholder="—" />
             </SelectTrigger>
             <SelectContent>
               {SPEED_OPTIONS.map((s) => (
@@ -241,7 +245,7 @@ export default function SimulationCentre() {
 
           <span className="text-[11px] text-muted">Mode</span>
           <Select
-            value={status?.mode ?? "MANUAL"}
+            value={status?.mode ?? ""}
             onValueChange={(v) => run(() => simApi.setMode(v))}
           >
             <SelectTrigger className="h-8 w-[8rem]">
@@ -346,7 +350,7 @@ export default function SimulationCentre() {
                 >
                   <div className="font-semibold">{String(z.name)}</div>
                   <div className="text-muted">
-                    cap {String(z.capacity)}/{String(z.base_capacity)} · file {(z.queue as string[])?.length ?? 0}
+                    cap {String(z.capacity ?? "—")}/{String(z.base_capacity ?? "—")} · file {Array.isArray(z.queue) ? z.queue.length : "—"}
                   </div>
                 </button>
               ))}
@@ -390,19 +394,19 @@ export default function SimulationCentre() {
                 </div>
                 <div>
                   <dt className="text-muted">Vitesse</dt>
-                  <dd className="font-medium">{Number(detail?.speed_kmh ?? selectedEq.speed_kmh ?? 0).toFixed(1)} km/h</dd>
+                  <dd className="font-medium">{measured(detail && "speed_kmh" in detail ? detail.speed_kmh : selectedEq.speed_kmh, "km/h")}</dd>
                 </div>
                 <div>
                   <dt className="text-muted">Payload</dt>
-                  <dd className="font-medium">{Number(detail?.payload_t ?? selectedEq.payload_t ?? 0).toFixed(1)} t</dd>
+                  <dd className="font-medium">{measured(detail && "payload_t" in detail ? detail.payload_t : selectedEq.payload_t, "t")}</dd>
                 </div>
                 <div>
                   <dt className="text-muted">Fuel</dt>
-                  <dd className="font-medium">{Number(detail?.fuel_pct ?? selectedEq.fuel_pct ?? 0).toFixed(1)} %</dd>
+                  <dd className="font-medium">{measured(detail && "fuel_pct" in detail ? detail.fuel_pct : selectedEq.fuel_pct, "%")}</dd>
                 </div>
                 <div>
                   <dt className="text-muted">Comm</dt>
-                  <dd className="font-medium">{detail?.comm_lost || selectedEq.comm_lost ? "PERDUE" : "OK"}</dd>
+                  <dd className="font-medium">{(detail && "comm_lost" in detail ? detail.comm_lost : selectedEq.comm_lost) == null ? "—" : (detail && "comm_lost" in detail ? detail.comm_lost : selectedEq.comm_lost) ? "PERDUE" : "OK"}</dd>
                 </div>
                 <div>
                   <dt className="text-muted">Route</dt>

@@ -121,7 +121,7 @@ export function getZoneOccupancy(
   equipment: Equipment[],
   zone: Zone | undefined
 ): ZoneOccupancy | null {
-  if (!zone || zone.capacity <= 0) return null
+  if (!zone || zone.capacity == null || zone.capacity <= 0) return null
   const count = equipment.filter((e) => e.zoneId === zone.id).length
   const ratio = count / zone.capacity
   const pct = Math.round(ratio * 100)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.contracts import (
@@ -23,6 +24,15 @@ from app.ai.contracts import (
 )
 from app.ai.state import InvestigationState
 from app.db.models import AiInvestigation
+
+
+class InvestigationPersistenceError(RuntimeError):
+    """The final investigation could not be durably stored."""
+
+
+def verify_investigation_storage(session: Session) -> None:
+    """Detect missing migrations/columns before spending a provider call."""
+    session.execute(select(AiInvestigation).limit(0))
 
 
 def _dump(value):
@@ -89,6 +99,21 @@ def persist_investigation(session: Session, state: InvestigationState) -> AiInve
 
 def get_investigation(session: Session, investigation_id: UUID) -> AiInvestigation | None:
     return session.get(AiInvestigation, investigation_id)
+
+
+def find_investigations(
+    session: Session, *, site_id: int, source_record_id: str, shift_id: int | None = None
+) -> list[AiInvestigation]:
+    """Latest durable audit for an operational source, not a new investigation."""
+    query = select(AiInvestigation).where(
+        AiInvestigation.site_id == site_id,
+        AiInvestigation.trigger_data["source_record_id"].as_string() == source_record_id,
+    )
+    if shift_id is not None:
+        query = query.where(AiInvestigation.shift_id == shift_id)
+    return list(session.scalars(query.order_by(
+        AiInvestigation.created_at.desc(), AiInvestigation.investigation_id.desc()
+    ).limit(1)).all())
 
 
 def state_to_result(state: InvestigationState) -> InvestigationResult:

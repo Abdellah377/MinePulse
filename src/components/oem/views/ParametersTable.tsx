@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 
-import { oemApi } from "@/lib/api/oem"
+import { useOemApi, EMPTY_OEM_ROWS } from "@/components/oem/oemViewUtils"
 import type { OemCol } from "@/lib/oem/types"
 import { OemGrid } from "@/components/oem/OemDataTable"
 import { OemEmptyState } from "@/components/oem/OemEmptyState"
@@ -8,6 +8,7 @@ import { codesQuery, rangeParams, useOemLoad, type OemViewProps } from "@/compon
 import { useOpsStore } from "@/lib/store/useOpsStore"
 
 const COLS: OemCol[] = [
+  { id: "thresholdSource", header: "Source seuils (non constructeur)" },
   { id: "code", header: "Engin" },
   { id: "parameter", header: "Paramètres Diagnostic" },
   { id: "parameterKey", header: "Code" },
@@ -20,6 +21,7 @@ const COLS: OemCol[] = [
 ]
 
 export function ParametersTable({ filters, refreshKey, onExport }: OemViewProps) {
+  const oemApi = useOemApi()
   const shifts = useOpsStore((s) => s.shifts)
   const r = rangeParams(filters, shifts)
   const { data, error, loading } = useOemLoad(
@@ -32,7 +34,7 @@ export function ParametersTable({ filters, refreshKey, onExport }: OemViewProps)
       }),
     [refreshKey, filters.equipmentCodes.join(","), filters.parameterKeys.join(","), r.from, r.to]
   )
-  const rows = data?.rows ?? []
+  const rows = data?.rows ?? EMPTY_OEM_ROWS
 
   useEffect(() => {
     onExport?.({

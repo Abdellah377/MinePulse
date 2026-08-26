@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Sparkles, Flag, Bookmark, AlertTriangle } from "lucide-react"
 
 import {
@@ -20,10 +20,17 @@ import type { WorkspacePanelProps } from "@/components/workspace/WorkspaceHost"
 import { ScenarioComparison } from "@/components/shared/ScenarioComparison"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { InvestigationActions } from "@/components/ai/InvestigationActions"
+import { Chip } from "@/components/ai/InvestigationLayout"
 
 type ActionStatus = "pending" | "prepared" | "marked" | "dismissed"
 
-export default function ActionsIA({ tab }: Partial<WorkspacePanelProps> = {}) {
+export default function ActionsIA(props: Partial<WorkspacePanelProps> = {}) {
+  return useApiMode ? <InvestigationActions {...props} /> : <DemoActionsIA {...props} />
+}
+
+/** Dispatch scenarios are demonstrations, not backend recommendations. */
+function DemoActionsIA({ tab }: Partial<WorkspacePanelProps> = {}) {
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
   const productionByShift = useOpsStore((s) => s.productionByShift)
   const idleThresholdMin = useOpsStore((s) => s.idleAlertThresholdMin)
@@ -290,13 +297,5 @@ export default function ActionsIA({ tab }: Partial<WorkspacePanelProps> = {}) {
         </aside>
       </div>
     </div>
-  )
-}
-
-function Chip({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex max-w-full truncate rounded-md bg-surface-2 px-2 py-1 text-[10px] text-muted">
-      {children}
-    </span>
   )
 }

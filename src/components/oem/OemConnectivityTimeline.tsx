@@ -1,5 +1,4 @@
 import { fmtDurationHms, fmtTsShort } from "@/lib/oem/format"
-import { useOpsStore } from "@/lib/store/useOpsStore"
 import { cn } from "@/lib/utils"
 
 const COLORS: Record<string, string> = {
@@ -19,18 +18,17 @@ export type PingRow = {
   from?: string
   to?: string
   segments: Array<{ id: string; status: string; start: number; end: number }>
-  connectedSec: number
-  disconnectedSec: number
-  unknownSec: number
+  connectedSec: number | null
+  disconnectedSec: number | null
+  unknownSec: number | null
   connectedPct?: number
 }
 
 export function OemConnectivityTimeline({ rows, showStats = true }: { rows: PingRow[]; showStats?: boolean }) {
-  const simNowIso = useOpsStore((s) => s.simNowIso)
-  const wallNow = simNowIso ? new Date(simNowIso).getTime() : Date.now()
   const allSegs = rows.flatMap((r) => r.segments)
-  const t0 = allSegs.length ? Math.min(...allSegs.map((s) => s.start)) : wallNow - 3_600_000
-  const t1 = allSegs.length ? Math.max(...allSegs.map((s) => s.end)) : wallNow
+  if (!allSegs.length) return <p className="p-3 text-xs text-muted">Historique de connectivité indisponible.</p>
+  const t0 = Math.min(...allSegs.map((s) => s.start))
+  const t1 = Math.max(...allSegs.map((s) => s.end))
   const span = Math.max(1, t1 - t0)
   const ticks = 8
 

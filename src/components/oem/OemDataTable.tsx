@@ -143,11 +143,10 @@ function Cell({ col, value }: { col: OemCol; value: unknown }) {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) text = fmtTs(value)
   if (col.tone === "delay" && typeof value === "number") {
     text = fmtDurationHms(value)
-    const warn = value > 30
-    return <span className={warn ? "font-medium text-[#d82010]" : undefined}>{text || "—"}</span>
+    return <span>{text || "—"}</span>
   }
   if ((col.tone === "alarm-red" || col.tone === "alarm-yellow") && (value === 0 || value === "0")) {
-    return <span className="text-[#9ca3af]" />
+    return <span className="text-[#9ca3af]">0</span>
   }
   if (col.tone === "alarm-red" && Number(value) > 0) {
     return <span className="font-medium text-[#d82010]">{text}</span>

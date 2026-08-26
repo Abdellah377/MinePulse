@@ -79,7 +79,7 @@ def bootstrap(
 
     payload: dict = {
         "sites": [site_to_dto(site)],
-        "shifts": [shift_to_dto(s) for s in shifts],
+        "shifts": [shift_to_dto(s, ctx.sim_now) for s in shifts],
         "zones": [zone_to_dto(z, site.code) for z in zones],
         "routes": [road_to_dto(r, zone_codes, site.code) for r in roads],
         "equipment": [

@@ -1,4 +1,5 @@
 import { useOpsStore } from "@/lib/store/useOpsStore"
+import { useApiMode } from "@/lib/api/client"
 import {
   Select,
   SelectContent,
@@ -37,7 +38,7 @@ export function PeriodFilters({ className }: { className?: string }) {
         </Select>
       </div>
 
-      <div className="mb-3">
+      {useApiMode ? <p className="text-[11px] text-muted">Données du poste sélectionné uniquement. Période multi-jour non disponible ici.</p> : <div className="mb-3">
         <label className="mb-1 block text-[10px] font-semibold uppercase text-muted-2">
           Période
         </label>
@@ -63,7 +64,7 @@ export function PeriodFilters({ className }: { className?: string }) {
             />
           </label>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }

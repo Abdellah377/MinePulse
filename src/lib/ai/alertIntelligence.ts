@@ -44,6 +44,7 @@ export function buildCurrentIntelligence(
   equipment: Equipment[],
   zones: Zone[]
 ): IntelligenceItem[] {
+  if (useApiMode) return [] // Demo-only intelligence; live investigations use /ai/investigations.
   const eqById = new Map(equipment.map((e) => [e.id, e]))
   const zoneById = new Map(zones.map((z) => [z.id, z]))
 

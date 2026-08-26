@@ -2,6 +2,7 @@ import type { CycleStage } from "@/lib/mock/types"
 import { CYCLE_STAGE_LABEL, cycleTotalMinutes } from "@/lib/mock/types"
 import { formatHm } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { useApiMode } from "@/lib/api/client"
 
 /** "Cycle actuel" cells — green OK, amber/red outlier, dash when empty. */
 export function CycleStepper({
@@ -13,10 +14,10 @@ export function CycleStepper({
   dureeMoyenneMin: number | null
   className?: string
 }) {
-  const total = cycleTotalMinutes(stages)
+  const total = useApiMode && (!stages.length || stages.some((s) => s.minutes == null)) ? null : cycleTotalMinutes(stages)
   const avg = dureeMoyenneMin ?? 0
-  const aboveAverage = avg > 0 && total > avg * 1.1
-  const avgPerStage = avg > 0 ? avg / Math.max(1, stages.length) : 0
+  const aboveAverage = !useApiMode && avg > 0 && total != null && total > avg * 1.1
+  const avgPerStage = !useApiMode && avg > 0 ? avg / Math.max(1, stages.length) : 0
 
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
@@ -59,7 +60,7 @@ export function CycleStepper({
       <div className="flex items-center justify-between text-[11px] text-muted">
         <span>
           Total cycle :{" "}
-          <strong className="font-mono tabular-nums text-foreground">{formatHm(total)}</strong>
+          <strong className="font-mono tabular-nums text-foreground">{total == null ? "Incomplet / non mesuré" : formatHm(total)}</strong>
           {" · "}
           moy. <span className="font-mono tabular-nums">{dureeMoyenneMin != null ? formatHm(dureeMoyenneMin) : "—"}</span>
         </span>
