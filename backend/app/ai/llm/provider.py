@@ -52,16 +52,18 @@ _DIAGNOSIS_PROMPT = _COMMON_POLICY + """
 Diagnose the trigger. If the available evidence cannot support a conclusion,
 request only evidence types present in the supplied approved request catalog.
 Set can_conclude false when material uncertainty remains. Requests must be
-specific and justified. Do not treat hypotheses as evidence.
+specific and justified. If no useful approved request exists, return an empty
+request list and keep can_conclude false. Do not treat hypotheses as evidence.
 """
 
 _CONCLUSION_PROMPT = _COMMON_POLICY + """
 
 Build a conclusion that explicitly separates observed facts, derived metrics,
 supported hypotheses, and unresolved uncertainty. Set reliable_root_cause false
-and root_cause null unless the cited evidence is sufficient. If the iteration
-limit was reached with missing information, say that the available evidence is
-insufficient to determine a reliable root cause.
+and root_cause null unless a cited, evidence-backed hypothesis supports it. If
+diagnosis can_conclude is false, evidence expansion is exhausted, or the
+iteration limit was reached, say that the available evidence is insufficient
+to determine a reliable root cause.
 """
 
 _RECOMMENDATION_PROMPT = _COMMON_POLICY + """

@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
 
-from app.ai.contracts import EvidenceRequest, EvidenceRequestType
+from app.ai.contracts import EvidenceRequest, EvidenceRequestType, EvidenceStatus
 from app.ai.tools import operational
 from app.ai.tools.registry import EvidenceToolRegistry
 from app.db.models import Shift, Site
@@ -80,6 +80,7 @@ def test_unsupported_request_is_unavailable_and_never_executed():
 
     assert evidence.available is False
     assert evidence.value is None
+    assert evidence.status == EvidenceStatus.UNSUPPORTED
     assert evidence.source_tool == "unsupported_evidence_request"
 
 
@@ -90,3 +91,28 @@ def test_request_contract_rejects_unknown_catalog_type():
         assert "request_type" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("unknown request type should not validate")
+
+
+def test_unexpected_service_exception_is_logged_and_safely_classified(monkeypatch, caplog):
+    def fail_downtime(session, ctx):
+        raise RuntimeError("internal database detail that must not reach evidence")
+
+    monkeypatch.setattr(operational.downtime_service, "downtime_reasons", fail_downtime)
+    registry = EvidenceToolRegistry(SimpleNamespace())
+    request = EvidenceRequest(
+        request_type=EvidenceRequestType.DOWNTIME,
+        reason="Check downtime context",
+    )
+
+    with caplog.at_level("ERROR", logger="app.ai.tools.registry"):
+        evidence = registry.dispatch(_context(), request)
+
+    assert evidence.status == EvidenceStatus.ERROR
+    assert evidence.available is False
+    assert evidence.value is None
+    assert "internal database detail" not in (evidence.notes or "")
+    assert evidence.metadata["failureCategory"] == "SERVICE_ERROR"
+    assert evidence.metadata["errorReference"].startswith("ai-tool-")
+    record = next(record for record in caplog.records if record.message == "AI evidence service failed")
+    assert record.tool_name == "downtime"
+    assert record.request_id == request.request_id

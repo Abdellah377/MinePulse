@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.ai.contracts import EvidenceItem, EvidenceKind, EvidenceRequest, EvidenceRequestType, InvestigationTrigger
+from app.ai.contracts import (
+    EvidenceItem,
+    EvidenceKind,
+    EvidenceRequest,
+    EvidenceRequestType,
+    EvidenceStatus,
+    InvestigationTrigger,
+    TriggerType,
+)
 from app.ai.tools import oem, operational
 from app.services.operational.context import OperationalContext
+
+logger = logging.getLogger(__name__)
 
 
 class EvidenceToolRegistry:
@@ -28,7 +40,12 @@ class EvidenceToolRegistry:
                 lambda: operational.fleet_snapshot(
                     self.session,
                     ctx,
-                    equipment_id=(trigger.equipment_id if trigger.subject.value == "EQUIPMENT" else None),
+                    equipment_id=(
+                        trigger.equipment_id
+                        if trigger.trigger_type
+                        in {TriggerType.EQUIPMENT_ANOMALY, TriggerType.MAINTENANCE_RISK}
+                        else None
+                    ),
                 ),
             ),
             ("cycle_performance", lambda: operational.cycle_performance(self.session, ctx)),
@@ -83,25 +100,44 @@ class EvidenceToolRegistry:
                 metric=request_type,
                 value=None,
                 available=False,
+                status=EvidenceStatus.UNSUPPORTED,
                 site_id=ctx.site_id,
                 shift_id=ctx.shift_id,
                 observed_at=ctx.sim_now,
                 metadata={"requestId": request.request_id},
                 notes="The request type is not in the approved MinePulse evidence catalog.",
             )
-        item = self._safe_call(ctx, request_type.lower(), handler)
+        item = self._safe_call(
+            ctx,
+            request_type.lower(),
+            handler,
+            request_id=request.request_id,
+        )
         item.metadata = {**item.metadata, "requestId": request.request_id, "requestReason": request.reason}
         return item
 
-    @staticmethod
     def _safe_call(
+        self,
         ctx: OperationalContext,
         tool_name: str,
         call: Callable[[], EvidenceItem],
+        *,
+        request_id: str | None = None,
     ) -> EvidenceItem:
         try:
             return call()
         except Exception as exc:
+            error_reference = f"ai-tool-{uuid4()}"
+            logger.exception(
+                "AI evidence service failed",
+                extra={
+                    "error_reference": error_reference,
+                    "tool_name": tool_name,
+                    "request_id": request_id,
+                    "site_id": ctx.site_id,
+                    "shift_id": ctx.shift_id,
+                },
+            )
             return EvidenceItem(
                 kind=EvidenceKind.FACT,
                 source_tool=tool_name,
@@ -109,8 +145,14 @@ class EvidenceToolRegistry:
                 metric=tool_name,
                 value=None,
                 available=False,
+                status=EvidenceStatus.ERROR,
                 site_id=ctx.site_id,
                 shift_id=ctx.shift_id,
                 observed_at=ctx.sim_now,
-                notes=f"Approved evidence lookup failed ({type(exc).__name__}); value is unavailable.",
+                metadata={
+                    "errorReference": error_reference,
+                    "failureCategory": "SERVICE_ERROR",
+                    **({"requestId": request_id} if request_id else {}),
+                },
+                notes="Approved evidence lookup failed; value is unavailable.",
             )

@@ -8,13 +8,15 @@ from app.ai.contracts import (
     EvidenceKind,
     InvestigationSubject,
     InvestigationTrigger,
+    TriggerSource,
     TriggerType,
 )
 
 
 def test_trigger_contract_supports_production_and_future_sources():
     trigger = InvestigationTrigger(
-        trigger_type=TriggerType.USER_INVESTIGATE,
+        trigger_type=TriggerType.PRODUCTION_DEVIATION,
+        trigger_source=TriggerSource.USER_INVESTIGATE,
         subject=InvestigationSubject.PRODUCTION,
         source="performance-page",
         site_id=7,
@@ -24,7 +26,27 @@ def test_trigger_contract_supports_production_and_future_sources():
     )
 
     assert trigger.occurred_at.tzinfo == timezone.utc
-    assert trigger.model_dump(mode="json")["subject"] == "PRODUCTION"
+    payload = trigger.model_dump(mode="json")
+    assert payload["trigger_type"] == "PRODUCTION_DEVIATION"
+    assert payload["trigger_source"] == "USER_INVESTIGATE"
+    assert payload["subject"] == "PRODUCTION"
+
+
+def test_legacy_trigger_is_normalized_without_losing_source_detail():
+    trigger = InvestigationTrigger(
+        trigger_type="EXISTING_ALERT",
+        subject=InvestigationSubject.EQUIPMENT,
+        source="alerts-page",
+        source_record_id="alert-42",
+        site_id=7,
+        payload={"legacy": True},
+    )
+
+    assert trigger.trigger_type == TriggerType.EQUIPMENT_ANOMALY
+    assert trigger.trigger_source == TriggerSource.EXISTING_ALERT
+    assert trigger.source == "alerts-page"
+    assert trigger.source_record_id == "alert-42"
+    assert trigger.payload == {"legacy": True}
 
 
 def test_evidence_provenance_serializes_zero_as_observed_value():

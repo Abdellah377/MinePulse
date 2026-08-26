@@ -93,6 +93,23 @@ PostgreSQL → app/services/operational/ → DTO mappers → FastAPI → Zustand
 - Static audit: `python backend/scripts/audit_static_data.py`
 - Readiness: [docs/PRE_AI_READINESS_REPORT.md](docs/PRE_AI_READINESS_REPORT.md)
 
+### AI investigation configuration
+
+The investigation API is disabled until its reasoning provider is configured.
+V1 has one runtime provider implementation (`openai`) behind the internal
+provider interface:
+
+```env
+AI_PROVIDER=openai
+AI_MODEL=<model available to the OpenAI project>
+OPENAI_API_KEY=<server-side secret>
+AI_MAX_INVESTIGATION_ITERATIONS=3
+```
+
+The iteration setting accepts 1–10 and bounds diagnosis/evidence-expansion
+rounds. API keys belong in local environment files or secret management, never
+in source control or `VITE_*` frontend variables.
+
 ## Getting started (UI-only mock)
 
 ```bash

@@ -15,6 +15,19 @@ class ContractModel(BaseModel):
 
 
 class TriggerType(str, Enum):
+    """Operational condition that caused an investigation."""
+
+    PRODUCTION_DEVIATION = "PRODUCTION_DEVIATION"
+    EQUIPMENT_ANOMALY = "EQUIPMENT_ANOMALY"
+    CONGESTION_RISK = "CONGESTION_RISK"
+    MAINTENANCE_RISK = "MAINTENANCE_RISK"
+    CONNECTIVITY_ISSUE = "CONNECTIVITY_ISSUE"
+    OPERATIONAL_EVENT = "OPERATIONAL_EVENT"
+
+
+class TriggerSource(str, Enum):
+    """Mechanism that started an investigation."""
+
     AUTOMATIC_MONITORING = "AUTOMATIC_MONITORING"
     EXISTING_ALERT = "EXISTING_ALERT"
     USER_INVESTIGATE = "USER_INVESTIGATE"
@@ -40,6 +53,22 @@ class EvidenceKind(str, Enum):
     FACT = "FACT"
     DERIVED_METRIC = "DERIVED_METRIC"
     MODEL_PREDICTION = "MODEL_PREDICTION"
+
+
+class EvidenceStatus(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+    UNSUPPORTED = "UNSUPPORTED"
+    ERROR = "ERROR"
+
+
+class EvidenceRequestOutcome(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+    UNSUPPORTED = "UNSUPPORTED"
+    ERROR = "ERROR"
+    DUPLICATE_SKIPPED = "DUPLICATE_SKIPPED"
+    ITERATION_LIMIT_REACHED = "ITERATION_LIMIT_REACHED"
 
 
 class ConfidenceLevel(str, Enum):
@@ -87,8 +116,11 @@ class RecommendationAction(str, Enum):
 
 class InvestigationTrigger(ContractModel):
     trigger_type: TriggerType
-    subject: InvestigationSubject = InvestigationSubject.PRODUCTION
-    source: Annotated[str, Field(min_length=1, max_length=120)]
+    trigger_source: TriggerSource
+    # Retained as a compatibility/display classification. trigger_type is the
+    # authoritative operational condition for new callers.
+    subject: InvestigationSubject | None = None
+    source: Annotated[str, Field(min_length=1, max_length=120)] | None = None
     site_id: Annotated[int, Field(gt=0)]
     shift_id: Annotated[int, Field(gt=0)] | None = None
     equipment_id: Annotated[int, Field(gt=0)] | None = None
@@ -98,10 +130,39 @@ class InvestigationTrigger(ContractModel):
     source_record_id: str | None = Field(default=None, max_length=160)
     payload: dict[str, JsonValue] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_trigger(cls, value):
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        raw_type = data.get("trigger_type")
+        raw_type = raw_type.value if isinstance(raw_type, Enum) else raw_type
+        legacy_sources = {source.value for source in TriggerSource}
+        if raw_type in legacy_sources:
+            data.setdefault("trigger_source", raw_type)
+            subject = data.get("subject", InvestigationSubject.PRODUCTION)
+            subject = subject.value if isinstance(subject, Enum) else subject
+            data["trigger_type"] = {
+                InvestigationSubject.PRODUCTION.value: TriggerType.PRODUCTION_DEVIATION.value,
+                InvestigationSubject.EQUIPMENT.value: TriggerType.EQUIPMENT_ANOMALY.value,
+                InvestigationSubject.CONNECTIVITY.value: TriggerType.CONNECTIVITY_ISSUE.value,
+                InvestigationSubject.MAINTENANCE.value: TriggerType.MAINTENANCE_RISK.value,
+            }.get(subject, TriggerType.OPERATIONAL_EVENT.value)
+        return data
+
     @model_validator(mode="after")
     def ensure_aware_timestamp(self) -> "InvestigationTrigger":
         if self.occurred_at.tzinfo is None:
             self.occurred_at = self.occurred_at.replace(tzinfo=timezone.utc)
+        if self.subject is None:
+            self.subject = {
+                TriggerType.PRODUCTION_DEVIATION: InvestigationSubject.PRODUCTION,
+                TriggerType.EQUIPMENT_ANOMALY: InvestigationSubject.EQUIPMENT,
+                TriggerType.CONGESTION_RISK: InvestigationSubject.ZONE,
+                TriggerType.MAINTENANCE_RISK: InvestigationSubject.MAINTENANCE,
+                TriggerType.CONNECTIVITY_ISSUE: InvestigationSubject.CONNECTIVITY,
+            }.get(self.trigger_type, InvestigationSubject.OTHER)
         return self
 
 
@@ -124,6 +185,7 @@ class EvidenceItem(ContractModel):
     metric: str
     value: JsonValue = None
     available: bool = True
+    status: EvidenceStatus | None = None
     unit: str | None = None
     site_id: int | None = None
     shift_id: int | None = None
@@ -136,6 +198,12 @@ class EvidenceItem(ContractModel):
 
     @model_validator(mode="after")
     def unavailable_values_are_null(self) -> "EvidenceItem":
+        if self.status is None:
+            self.status = EvidenceStatus.AVAILABLE if self.available else EvidenceStatus.UNAVAILABLE
+        if self.status == EvidenceStatus.AVAILABLE and not self.available:
+            raise ValueError("available evidence status requires available=true")
+        if self.status != EvidenceStatus.AVAILABLE:
+            self.available = False
         if not self.available and self.value is not None:
             raise ValueError("unavailable evidence must have a null value")
         return self
@@ -158,6 +226,14 @@ class EvidenceRequest(ContractModel):
         return self
 
 
+class EvidenceRequestAttempt(ContractModel):
+    signature: str
+    request: EvidenceRequest
+    outcome: EvidenceRequestOutcome
+    evidence_ids: list[str] = Field(default_factory=list)
+    attempted_at: datetime
+
+
 class Hypothesis(ContractModel):
     hypothesis_id: str = Field(default_factory=lambda: f"hyp-{uuid4()}")
     statement: str = Field(min_length=1, max_length=1200)
@@ -169,7 +245,7 @@ class Hypothesis(ContractModel):
 
 class Contradiction(ContractModel):
     description: str = Field(min_length=1, max_length=1000)
-    evidence_ids: list[str] = Field(min_length=2)
+    evidence_ids: list[str] = Field(min_length=1)
 
 
 class DiagnosisResult(ContractModel):
@@ -217,12 +293,14 @@ class InvestigationResult(ContractModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     requested_information: list[EvidenceRequest] = Field(default_factory=list)
+    evidence_request_history: list[EvidenceRequestAttempt] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
     conclusion: InvestigationConclusion | None = None
     recommendation: InvestigationRecommendation | None = None
     iteration_count: int = 0
     max_iterations: int
     iteration_limit_reached: bool = False
+    evidence_expansion_exhausted: bool = False
     status: InvestigationStatus
     error: InvestigationError | None = None
     started_at: datetime

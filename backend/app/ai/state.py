@@ -10,6 +10,7 @@ from app.ai.contracts import (
     DiagnosisResult,
     EvidenceItem,
     EvidenceRequest,
+    EvidenceRequestAttempt,
     Hypothesis,
     InvestigationConclusion,
     InvestigationError,
@@ -28,12 +29,14 @@ class InvestigationState(TypedDict):
     diagnosis: DiagnosisResult | None
     hypotheses: list[Hypothesis]
     requested_information: list[EvidenceRequest]
+    evidence_request_history: list[EvidenceRequestAttempt]
     contradictions: list[Contradiction]
     conclusion: InvestigationConclusion | None
     recommendation: InvestigationRecommendation | None
     iteration_count: int
     max_iterations: int
     iteration_limit_reached: bool
+    evidence_expansion_exhausted: bool
     status: InvestigationStatus
     error: InvestigationError | None
     started_at: datetime

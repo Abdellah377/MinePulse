@@ -9,10 +9,15 @@ from langgraph.graph import END, START, StateGraph
 
 from app.ai.contracts import InvestigationStatus, InvestigationTrigger
 from app.ai.nodes import InvestigationNodes, InvestigationRuntime
-from app.ai.routers import route_after_analysis, route_after_conclusion, route_after_context
+from app.ai.routers import (
+    route_after_analysis,
+    route_after_conclusion,
+    route_after_context,
+    route_after_evidence,
+)
 from app.ai.state import InvestigationState
 
-GRAPH_VERSION = "1.0.0"
+GRAPH_VERSION = "1.1.0"
 
 
 def build_investigation_graph(runtime: InvestigationRuntime):
@@ -35,7 +40,14 @@ def build_investigation_graph(runtime: InvestigationRuntime):
             "persist": "persist",
         },
     )
-    graph.add_edge("gather_initial_evidence", "analyze")
+    graph.add_conditional_edges(
+        "gather_initial_evidence",
+        route_after_evidence,
+        {
+            "analyze": "analyze",
+            "persist": "persist",
+        },
+    )
     graph.add_conditional_edges(
         "analyze",
         route_after_analysis,
@@ -45,7 +57,14 @@ def build_investigation_graph(runtime: InvestigationRuntime):
             "persist": "persist",
         },
     )
-    graph.add_edge("gather_requested_evidence", "analyze")
+    graph.add_conditional_edges(
+        "gather_requested_evidence",
+        route_after_evidence,
+        {
+            "analyze": "analyze",
+            "persist": "persist",
+        },
+    )
     graph.add_conditional_edges(
         "build_conclusion",
         route_after_conclusion,
@@ -74,12 +93,14 @@ def initial_state(
         diagnosis=None,
         hypotheses=[],
         requested_information=[],
+        evidence_request_history=[],
         contradictions=[],
         conclusion=None,
         recommendation=None,
         iteration_count=0,
         max_iterations=max_iterations,
         iteration_limit_reached=False,
+        evidence_expansion_exhausted=False,
         status=InvestigationStatus.PENDING,
         error=None,
         started_at=datetime.now(timezone.utc),

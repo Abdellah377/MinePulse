@@ -3,7 +3,8 @@
 MinePulse **does not** create its operational schema via Alembic.
 
 The Alembic revisions in this repo only add incremental MinePulse tables
-(`operational_settings` and `ai_investigations`). Running `alembic upgrade
+(`operational_settings`, `ai_investigations`, and investigation trigger-data
+normalization). Running `alembic upgrade
 head` on an empty database does not create sites, equipment, cycles,
 production, or PostGIS geometry. That is not a MinePulse install.
 
@@ -34,8 +35,9 @@ alembic stamp head
 
 For an existing operational database, migrations create missing incremental
 tables (`operational_settings`, then `ai_investigations`). Revisions are no-ops
-when their target table already exists. They never create the full MinePulse
-schema.
+when their target table already exists; the following data migration separates
+the operational trigger type from the mechanism that started older
+investigations. They never create the full MinePulse schema.
 
 ## Tests
 

@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -27,10 +28,12 @@ class Settings(BaseSettings):
     oem_online_sec: float = 30.0
     oem_disconnected_sec: float = 120.0
     operational_clock: str = "simulation"
+    # AI investigations are disabled until a provider, model and key are set.
+    # V1 implements only the OpenAI provider behind the LLMProvider interface.
     ai_provider: str | None = None
     ai_model: str | None = None
     openai_api_key: str | None = None
-    ai_max_investigation_iterations: int = 3
+    ai_max_investigation_iterations: int = Field(default=3, ge=1, le=10)
 
     @property
     def database_url(self) -> str:

@@ -11,6 +11,7 @@ from app.ai.contracts import (
     Contradiction,
     EvidenceItem,
     EvidenceRequest,
+    EvidenceRequestAttempt,
     Hypothesis,
     InvestigationConclusion,
     InvestigationError,
@@ -43,7 +44,7 @@ def persist_investigation(session: Session, state: InvestigationState) -> AiInve
             updated_at=now,
             status=state["status"].value,
             trigger_type=state["trigger"].trigger_type.value,
-            trigger_source=state["trigger"].source,
+            trigger_source=state["trigger"].trigger_source.value,
             site_id=state["trigger"].site_id,
             max_iterations=state["max_iterations"],
             graph_version=state["graph_version"],
@@ -56,6 +57,8 @@ def persist_investigation(session: Session, state: InvestigationState) -> AiInve
     row.updated_at = now
     row.completed_at = state["completed_at"]
     row.status = state["status"].value
+    row.trigger_type = trigger.trigger_type.value
+    row.trigger_source = trigger.trigger_source.value
     resolved = state["operational_context"]
     row.shift_id = resolved.shift_id if resolved is not None else trigger.shift_id
     row.equipment_id = trigger.equipment_id
@@ -74,7 +77,11 @@ def persist_investigation(session: Session, state: InvestigationState) -> AiInve
     row.conclusion = _dump(state["conclusion"])
     row.recommendation = _dump(state["recommendation"])
     row.error = _dump(state["error"])
-    row.metadata_ = {"iterationLimitReached": state["iteration_limit_reached"]}
+    row.metadata_ = {
+        "iterationLimitReached": state["iteration_limit_reached"],
+        "evidenceExpansionExhausted": state["evidence_expansion_exhausted"],
+        "evidenceRequestHistory": _dump(state["evidence_request_history"]),
+    }
     session.commit()
     session.refresh(row)
     return row
@@ -92,12 +99,14 @@ def state_to_result(state: InvestigationState) -> InvestigationResult:
         evidence=state["evidence"],
         hypotheses=state["hypotheses"],
         requested_information=state["requested_information"],
+        evidence_request_history=state["evidence_request_history"],
         contradictions=state["contradictions"],
         conclusion=state["conclusion"],
         recommendation=state["recommendation"],
         iteration_count=state["iteration_count"],
         max_iterations=state["max_iterations"],
         iteration_limit_reached=state["iteration_limit_reached"],
+        evidence_expansion_exhausted=state["evidence_expansion_exhausted"],
         status=state["status"],
         error=state["error"],
         started_at=state["started_at"],
@@ -123,6 +132,10 @@ def record_to_result(row: AiInvestigation) -> InvestigationResult:
         requested_information=[
             EvidenceRequest.model_validate(item) for item in row.requested_information or []
         ],
+        evidence_request_history=[
+            EvidenceRequestAttempt.model_validate(item)
+            for item in meta.get("evidenceRequestHistory", [])
+        ],
         contradictions=[Contradiction.model_validate(item) for item in row.contradictions or []],
         conclusion=(
             InvestigationConclusion.model_validate(row.conclusion) if row.conclusion else None
@@ -135,6 +148,7 @@ def record_to_result(row: AiInvestigation) -> InvestigationResult:
         iteration_count=row.iteration_count,
         max_iterations=row.max_iterations,
         iteration_limit_reached=bool(meta.get("iterationLimitReached", False)),
+        evidence_expansion_exhausted=bool(meta.get("evidenceExpansionExhausted", False)),
         status=InvestigationStatus(row.status),
         error=InvestigationError.model_validate(row.error) if row.error else None,
         started_at=row.created_at,
