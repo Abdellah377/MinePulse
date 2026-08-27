@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -87,7 +87,12 @@ class Alert(Base):
     site_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("sites.site_id", ondelete="CASCADE"), nullable=True, index=True
     )
-    created_at: Mapped[datetime] = mapped_column(nullable=False)
+    # Persistence/audit time. Operational ordering and display use
+    # ``occurred_at``; legacy rows fall back to this field.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     predicted_for: Mapped[datetime | None] = mapped_column()
     source: Mapped[AlertSource] = mapped_column(nullable=False)
     severity: Mapped[AlertSeverity] = mapped_column(nullable=False)

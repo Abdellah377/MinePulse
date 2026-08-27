@@ -14,7 +14,7 @@ import { AiBlock, Fact, Section } from "./InvestigationLayout"
 import { CONFIDENCE_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
 import { SEVERITY_CONFIG } from "@/lib/status"
 import { cn } from "@/lib/utils"
-import { newestAlertsFirst } from "@/lib/alerts/order"
+import { newestAlertsFirst, operationalAlertTime } from "@/lib/alerts/order"
 
 /** Original three-column workspace; live data never passes through demo intelligence. */
 export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
@@ -76,7 +76,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
     const trigger: InvestigationTriggerInput = {
       ...scope, trigger_type: "OPERATIONAL_EVENT", trigger_source: "USER_INVESTIGATE", source: "alertes-ui",
       equipment_id: equipment?.databaseId, zone_id: selectedZone?.databaseId,
-      occurred_at: new Date(selected.createdAt).toISOString(),
+      occurred_at: new Date(operationalAlertTime(selected)).toISOString(),
       severity: selected.severity === "critical" ? "CRITICAL" : selected.severity === "warning" ? "WARNING" : "INFO",
       payload: { category: selected.category, title: selected.title, description: selected.description },
     }
@@ -101,7 +101,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!alerts.length && <div className="flex flex-col items-center gap-2 py-16 text-center"><Inbox className="size-5 text-muted-2" /><p className="text-xs text-muted">{ops.apiPollError ? "Alertes indisponibles." : !ops.apiBootstrapped ? "Chargement des alertes…" : "Aucune alerte."}</p></div>}
         {alerts.map((a) => <button key={a.id} onClick={() => setSelectedId(a.id)} className={cn("flex w-full flex-col gap-0.5 border-b border-border px-3 py-2.5 text-left", selected?.id === a.id ? "bg-accent-soft/50" : "hover:bg-surface-2/70")}>
-          <div className="flex items-center gap-1.5 text-[10px]"><span className={cn("size-1.5 rounded-full", SEVERITY_CONFIG[a.severity].dot)} /><span className={cn("font-semibold", SEVERITY_CONFIG[a.severity].color)}>{SEVERITY_CONFIG[a.severity].label}</span><span className="text-muted-2">{a.category}</span><span className="ml-auto tabular-nums text-muted-2">{new Date(a.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span></div>
+          <div className="flex items-center gap-1.5 text-[10px]"><span className={cn("size-1.5 rounded-full", SEVERITY_CONFIG[a.severity].dot)} /><span className={cn("font-semibold", SEVERITY_CONFIG[a.severity].color)}>{SEVERITY_CONFIG[a.severity].label}</span><span className="text-muted-2">{a.category}</span><span className="ml-auto tabular-nums text-muted-2">{new Date(operationalAlertTime(a)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span></div>
           <p className="text-[12px] font-medium text-foreground">{a.title}</p><p className="line-clamp-1 text-[11px] text-muted">{a.description}</p><p className="mt-0.5 text-[10px] text-muted-2">{a.location ?? "Localisation indisponible"}</p>
         </button>)}
       </div>
@@ -110,7 +110,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
       {ops.apiPollError && <p role="alert" className="mb-3 text-xs text-danger">Données opérationnelles non actualisées.</p>}
       {selected ? <div className="mx-auto max-w-2xl space-y-4">
         <header><div className="mb-1 flex flex-wrap gap-1.5"><Badge className={cn(SEVERITY_CONFIG[selected.severity].bg, SEVERITY_CONFIG[selected.severity].color, "border-transparent")}>{SEVERITY_CONFIG[selected.severity].label}</Badge><Badge variant="outline">{selected.category}</Badge><Badge variant="outline">En cours</Badge>{result && <Badge variant="outline">{automaticInvestigation ? "Monitoring automatique" : "Investigation manuelle"}</Badge>}</div><h2 className="text-[16px] font-semibold text-foreground">{selected.title}</h2></header>
-        <Section title="Résumé"><p className="text-[12px] leading-relaxed text-muted">{selected.description}</p><dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]"><Fact label="Où" value={selectedZone?.name ?? selected.location ?? "—"} /><Fact label="Depuis" value={new Date(selected.createdAt).toLocaleString("fr-FR")} /><Fact label="Équipement" value={equipment?.code ?? "—"} mono /><Fact label="Confiance" value={confidence} /></dl></Section>
+        <Section title="Résumé"><p className="text-[12px] leading-relaxed text-muted">{selected.description}</p><dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]"><Fact label="Où" value={selectedZone?.name ?? selected.location ?? "—"} /><Fact label="Détecté à" value={new Date(operationalAlertTime(selected)).toLocaleString("fr-FR")} /><Fact label="Équipement" value={equipment?.code ?? "—"} mono /><Fact label="Confiance" value={confidence} /></dl></Section>
         <Section title="Pourquoi"><p className="text-[12px] font-medium text-foreground">{conclusion?.summary ?? `${investigationStatus(entry)} — cause non évaluée.`}</p>
           {conclusion && !conclusion.reliable_root_cause && <p className="mt-2 text-[11px] text-muted">Conclusion non fiable : aucune cause racine établie.</p>}
           {result?.hypotheses.map((h) => <div key={h.hypothesis_id} className="mt-2 text-[11px]"><p>Hypothèse · {CONFIDENCE_LABEL[h.confidence]} : {h.statement}</p><p className="text-muted">{h.rationale}</p><p className="text-muted-2">Appuis : {h.supporting_evidence_ids.join(", ") || "Aucun"}</p>{h.contradictory_evidence_ids.length > 0 && <p className="text-muted-2">Contradictions : {h.contradictory_evidence_ids.join(", ")}</p>}</div>)}

@@ -8,7 +8,8 @@ from sqlalchemy import text
 from app.db.enums import AlertSeverity, AlertSource, AlertStatus
 from app.db.models import Alert
 from app.mappers.dto import alert_to_dto
-from app.services.operational.alerts import _UI_STATUS, update_alert
+from app.services.operational.alerts import _UI_STATUS, alert_operational_time, update_alert
+from simulator.generators.events import emit_fms_alert
 
 
 def test_ui_status_mapping():
@@ -35,9 +36,12 @@ class _FakeSession:
 
 
 def test_assigned_actor_label_persists_as_assigned_to_label():
+    occurred_at = datetime(2026, 1, 29, 7, 8, tzinfo=timezone.utc)
+    persisted_at = datetime(2026, 8, 27, 17, 50, tzinfo=timezone.utc)
     alert = Alert(
         alert_id=42,
-        created_at=datetime(2026, 8, 19, tzinfo=timezone.utc),
+        created_at=persisted_at,
+        occurred_at=occurred_at,
         source=AlertSource.RULE,
         severity=AlertSeverity.WARNING,
         status=AlertStatus.NEW,
@@ -53,6 +57,40 @@ def test_assigned_actor_label_persists_as_assigned_to_label():
     dto = alert_to_dto(out, {}, {})
     assert dto["status"] == "assigned"
     assert dto["assignedTo"] == "Régulateur de poste"
+    assert dto["occurredAt"] == int(occurred_at.timestamp() * 1000)
+    assert dto["createdAt"] == int(persisted_at.timestamp() * 1000)
+
+
+def test_legacy_alert_operational_time_falls_back_to_created_at():
+    created_at = datetime(2026, 1, 29, 7, 8, tzinfo=timezone.utc)
+    alert = Alert(created_at=created_at)
+    assert alert_operational_time(alert) == created_at
+
+
+def test_simulator_alert_separates_operational_and_persistence_time():
+    class FakeSession:
+        def __init__(self):
+            self.row = None
+
+        def add(self, row):
+            self.row = row
+
+        def flush(self):
+            return None
+
+    operational_time = datetime(2026, 1, 29, 7, 8, tzinfo=timezone.utc)
+    session = FakeSession()
+    row = emit_fms_alert(
+        session,
+        operational_time,
+        "WAIT_TEST",
+        "Attente",
+        "Condition détectée",
+        equipment_id=10,
+    )
+    assert row.occurred_at == operational_time
+    assert row.created_at.tzinfo is not None
+    assert row.created_at != operational_time
 
 
 def test_alert_patch_assignee_survives_new_session():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -68,9 +68,11 @@ def test_site_level_monitoring_alert_is_visible_without_fake_equipment_scope():
                 pytest.skip("No active persisted site")
         except Exception as exc:
             pytest.skip(f"PostgreSQL unavailable: {exc}")
+        operational_now = get_operational_context(session, site_code=site.code).sim_now
         alert = Alert(
             site_id=site.site_id,
-            created_at=get_operational_context(session, site_code=site.code).sim_now,
+            created_at=datetime.now(timezone.utc),
+            occurred_at=operational_now,
             source=AlertSource.RULE,
             severity=AlertSeverity.WARNING,
             status=AlertStatus.NEW,
@@ -153,6 +155,8 @@ def test_persisted_stop_creates_one_automatic_investigation_then_deduplicates():
             assert second["deduplicated"] == 1
             assert len(investigations) == 1
             assert len(alerts) == 1
+            assert alerts[0].occurred_at == context.sim_now
+            assert alerts[0].created_at != alerts[0].occurred_at
             assert investigations[0].trigger_data["source_record_id"] == f"alert-{alerts[0].alert_id}"
             assert investigations[0].trigger_data["trigger_source"] == "AUTOMATIC_MONITORING"
         finally:

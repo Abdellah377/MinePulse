@@ -213,7 +213,8 @@ def site_alerts(session: Session, ctx: OperationalContext) -> EvidenceItem:
     value = [
         {
             "alertId": alert.alert_id,
-            "createdAt": alert.created_at,
+            "occurredAt": alert_service.alert_operational_time(alert),
+            "persistedAt": alert.created_at,
             "source": alert.source.value,
             "severity": alert.severity.value,
             "status": alert.status.value,

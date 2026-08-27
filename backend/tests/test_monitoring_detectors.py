@@ -107,6 +107,21 @@ def test_prolonged_wait_boundary():
     assert findings[0].trigger_type == TriggerType.CONGESTION_RISK
 
 
+def test_wait_duration_is_consistent_with_operational_detection_time():
+    duration_minutes = 8.3
+    finding = detect_prolonged_idle_wait(
+        _snapshot(
+            state=EquipmentState.WAITING_LOADING,
+            state_minutes=duration_minutes,
+        ),
+        _settings(),
+    )[0]
+    inferred_state_start = finding.detected_at - timedelta(minutes=finding.value)
+    assert finding.detected_at == NOW
+    assert inferred_state_start == NOW - timedelta(minutes=duration_minutes)
+    assert "8.3 min" in finding.reason
+
+
 def test_communication_measured_zero_is_critical_but_null_is_not_zero():
     measured_zero = EquipmentTelemetry(
         telemetry_id=1, equipment_id=10, ts=NOW,

@@ -43,7 +43,8 @@ def _remove_failed_test_sites(session) -> None:
 def _alert(site_id: int, *, source: AlertSource, title: str, monitoring: bool = False, ts=NOW) -> Alert:
     return Alert(
         site_id=site_id,
-        created_at=ts,
+        created_at=datetime.now(timezone.utc),
+        occurred_at=ts,
         source=source,
         severity=AlertSeverity.WARNING,
         status=AlertStatus.NEW,

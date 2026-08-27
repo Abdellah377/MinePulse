@@ -4,6 +4,7 @@ import { Search, Bell, ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useApiMode } from "@/lib/api/client"
 import { timeAgo } from "@/lib/format"
+import { operationalAlertTime } from "@/lib/alerts/order"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 import { useUiStore } from "@/lib/store/useUiStore"
 import { useWorkspaceStore, useActiveWorkspace } from "@/lib/store/useWorkspaceStore"
@@ -76,6 +77,7 @@ export function BrandHeader() {
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
   const setSelectedSite = useOpsStore((s) => s.setSelectedSite)
   const alerts = useOpsStore((s) => s.alerts)
+  const simNowIso = useOpsStore((s) => s.simNowIso)
   const apiPollError = useOpsStore((s) => s.apiPollError)
   const setCommandOpen = useUiStore((s) => s.setCommandOpen)
   const openModuleHome = useWorkspaceStore((s) => s.openModuleHome)
@@ -85,7 +87,7 @@ export function BrandHeader() {
   const unresolved = alerts.filter((a) => a.status !== "resolved").length
   const recentAlerts = [...alerts]
     .filter((a) => a.status !== "resolved")
-    .sort((a, b) => b.createdAt - a.createdAt)
+    .sort((a, b) => operationalAlertTime(b) - operationalAlertTime(a))
     .slice(0, 5)
 
   function goModule(module: WorkspaceModule, path: string) {
@@ -231,7 +233,7 @@ export function BrandHeader() {
                   <div className="flex w-full items-center gap-1.5">
                     <span className={cn("size-1.5 rounded-full", cfg.dot)} />
                     <span className="font-medium">{alert.title}</span>
-                    <span className="ml-auto text-[10px] text-muted-2">{timeAgo(alert.createdAt)}</span>
+                    <span className="ml-auto text-[10px] text-muted-2">{timeAgo(operationalAlertTime(alert), simNowIso ? Date.parse(simNowIso) : undefined)}</span>
                   </div>
                   <p className="line-clamp-1 pl-3 text-[11px] text-muted">{alert.description}</p>
                 </DropdownMenuItem>

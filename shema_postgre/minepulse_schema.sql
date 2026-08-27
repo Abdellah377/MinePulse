@@ -318,6 +318,7 @@ CREATE TABLE IF NOT EXISTS system_events (
 CREATE TABLE IF NOT EXISTS alerts (
   alert_id BIGSERIAL PRIMARY KEY,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  occurred_at TIMESTAMPTZ,
   predicted_for TIMESTAMPTZ,
   source alert_source NOT NULL,
   severity alert_severity NOT NULL,
@@ -418,6 +419,7 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_equipment_ts ON equipment_telemetry(equ
 CREATE INDEX IF NOT EXISTS idx_states_equipment_start ON equipment_states(equipment_id,start_time DESC);
 CREATE INDEX IF NOT EXISTS idx_cycles_truck_started ON cycles(truck_id,started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_status_severity ON alerts(status,severity,created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_alerts_occurred_at ON alerts(occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_predictions_time ON predictions(prediction_for);
 CREATE INDEX IF NOT EXISTS idx_ai_recommendations_status ON ai_recommendations(status,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_investigations_site_created ON ai_investigations(site_id,created_at DESC);
@@ -469,7 +471,7 @@ WHERE e.active=TRUE;
 
 CREATE OR REPLACE VIEW v_active_alerts AS
 SELECT
-  a.alert_id,a.created_at,a.predicted_for,a.source,a.severity,a.status,
+  a.alert_id,a.created_at,a.occurred_at,a.predicted_for,a.source,a.severity,a.status,
   a.alert_type,a.title,a.description,e.code AS equipment_code,
   z.name AS zone_name,a.confidence,a.estimated_impact_t,a.estimated_impact_tph
 FROM alerts a
@@ -478,7 +480,7 @@ LEFT JOIN zones z ON z.zone_id=a.zone_id
 WHERE a.status <> 'RESOLVED'
 ORDER BY
   CASE a.severity WHEN 'CRITICAL' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END,
-  a.created_at DESC;
+  COALESCE(a.occurred_at, a.created_at) DESC;
 
 CREATE TABLE IF NOT EXISTS operational_settings (
   setting_id BIGSERIAL PRIMARY KEY,

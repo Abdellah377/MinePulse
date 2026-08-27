@@ -61,6 +61,7 @@ export type AlertDto = {
   zoneId: string | null
   location: string
   category: string
+  occurredAt: number
   createdAt: number
   updatedAt: number
   assignedTo: string | null

@@ -77,6 +77,14 @@ class ConfidenceLevel(str, Enum):
     HIGH = "HIGH"
 
 
+class DiagnosisStatus(str, Enum):
+    """Operator-facing strength of the final causal diagnosis."""
+
+    CONFIRMED = "CONFIRMED"
+    PROBABLE = "PROBABLE"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
 class InvestigationStatus(str, Enum):
     PENDING = "PENDING"
     RESOLVING_CONTEXT = "RESOLVING_CONTEXT"
@@ -268,6 +276,7 @@ class DiagnosisResult(ContractModel):
 
 class InvestigationConclusion(ContractModel):
     summary: str = Field(min_length=1, max_length=2400)
+    diagnosis_status: DiagnosisStatus = DiagnosisStatus.INCONCLUSIVE
     root_cause: str | None = Field(default=None, max_length=1200)
     reliable_root_cause: bool = False
     observed_fact_evidence_ids: list[str] = Field(default_factory=list)

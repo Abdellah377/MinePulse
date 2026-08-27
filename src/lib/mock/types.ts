@@ -284,6 +284,9 @@ export interface Alert {
   zoneId: string | null
   location: string
   category: string
+  /** Operational event time. Legacy/mock records may fall back to createdAt. */
+  occurredAt?: number | null
+  /** Persistence time in API mode; historical mock time in demo mode. */
   createdAt: number
   updatedAt: number
   assignedTo: string | null

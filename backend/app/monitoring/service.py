@@ -202,7 +202,8 @@ class MonitoringService:
     def _create_alert(self, session: Session, candidate: MonitoringCandidate) -> Alert:
         alert = Alert(
             site_id=candidate.site_id,
-            created_at=candidate.detected_at,
+            created_at=datetime.now(timezone.utc),
+            occurred_at=candidate.detected_at,
             source=AlertSource.RULE,
             severity=_AI_TO_ALERT_SEVERITY[candidate.severity.value],
             status=AlertStatus.NEW,

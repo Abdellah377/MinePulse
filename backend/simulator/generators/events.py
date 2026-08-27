@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,7 +38,8 @@ def emit_fms_alert(
     severity: AlertSeverity = AlertSeverity.WARNING,
 ) -> Alert:
     alert = Alert(
-        created_at=ts,
+        created_at=datetime.now(timezone.utc),
+        occurred_at=ts,
         source=AlertSource.FMS,
         severity=severity,
         status=AlertStatus.NEW,

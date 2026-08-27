@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.ai.contracts import (
     ConfidenceLevel,
     Contradiction,
+    DiagnosisStatus,
     DiagnosisResult,
     EvidenceKind,
     EvidenceRequest,
@@ -49,6 +50,54 @@ class InvestigationRuntime:
 
 
 logger = logging.getLogger(__name__)
+
+_CONFIDENCE_RANK = {
+    ConfidenceLevel.LOW: 0,
+    ConfidenceLevel.MEDIUM: 1,
+    ConfidenceLevel.HIGH: 2,
+}
+_TEMPORAL_KEYS = {
+    "ts",
+    "occurredAt",
+    "startTime",
+    "startedAt",
+    "firstObservedAt",
+    "lastObservedAt",
+    "windowStart",
+}
+
+
+def _as_aware_timestamp(value) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            parsed = datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    else:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def _contains_preincident_timestamp(value, incident_at: datetime) -> bool:
+    if isinstance(value, list):
+        return any(_contains_preincident_timestamp(item, incident_at) for item in value)
+    if not isinstance(value, dict):
+        return False
+    for key, item in value.items():
+        if key in _TEMPORAL_KEYS:
+            timestamp = _as_aware_timestamp(item)
+            if timestamp is not None and timestamp <= incident_at:
+                return True
+        if isinstance(item, (dict, list)) and _contains_preincident_timestamp(item, incident_at):
+            return True
+    return False
 
 
 def _error(stage: str, exc: Exception, investigation_id: str) -> dict:
@@ -363,14 +412,16 @@ class InvestigationNodes:
         diagnosis: DiagnosisResult,
         state: InvestigationState,
     ) -> DiagnosisResult:
-        valid_evidence = {
-            item.evidence_id for item in state["evidence"] if item.available
+        evidence_by_id = {
+            item.evidence_id: item for item in state["evidence"] if item.available
         }
         hypotheses = []
         for hypothesis in diagnosis.hypotheses:
-            supporting = [item for item in hypothesis.supporting_evidence_ids if item in valid_evidence]
+            supporting = [
+                item for item in hypothesis.supporting_evidence_ids if item in evidence_by_id
+            ]
             contradictory = [
-                item for item in hypothesis.contradictory_evidence_ids if item in valid_evidence
+                item for item in hypothesis.contradictory_evidence_ids if item in evidence_by_id
             ]
             confidence = hypothesis.confidence if supporting else ConfidenceLevel.LOW
             hypotheses.append(
@@ -382,9 +433,26 @@ class InvestigationNodes:
                     }
                 )
             )
+        hypotheses.sort(
+            key=lambda hypothesis: (
+                bool(hypothesis.supporting_evidence_ids),
+                not bool(hypothesis.contradictory_evidence_ids),
+                len(
+                    {
+                        evidence_by_id[evidence_id].source_tool
+                        for evidence_id in hypothesis.supporting_evidence_ids
+                    }
+                ),
+                len(hypothesis.supporting_evidence_ids),
+                _CONFIDENCE_RANK[hypothesis.confidence],
+            ),
+            reverse=True,
+        )
         contradictions: list[Contradiction] = []
         for contradiction in diagnosis.contradictions:
-            ids = list(dict.fromkeys(i for i in contradiction.evidence_ids if i in valid_evidence))
+            ids = list(
+                dict.fromkeys(i for i in contradiction.evidence_ids if i in evidence_by_id)
+            )
             if ids:
                 contradictions.append(contradiction.model_copy(update={"evidence_ids": ids}))
         return diagnosis.model_copy(
@@ -396,22 +464,39 @@ class InvestigationNodes:
         conclusion: InvestigationConclusion,
         state: InvestigationState,
     ) -> InvestigationConclusion:
+        evidence_by_id = {
+            item.evidence_id: item for item in state["evidence"] if item.available
+        }
         fact_ids = {
-            item.evidence_id
-            for item in state["evidence"]
-            if item.available and item.kind == EvidenceKind.FACT
+            item.evidence_id for item in evidence_by_id.values() if item.kind == EvidenceKind.FACT
         }
         metric_ids = {
             item.evidence_id
-            for item in state["evidence"]
-            if item.available
-            and item.kind in {EvidenceKind.DERIVED_METRIC, EvidenceKind.MODEL_PREDICTION}
+            for item in evidence_by_id.values()
+            if item.kind in {EvidenceKind.DERIVED_METRIC, EvidenceKind.MODEL_PREDICTION}
         }
-        hypothesis_ids = {item.hypothesis_id for item in state["hypotheses"]}
-        evidence_backed_hypotheses = {
-            item.hypothesis_id: item
+        backed_hypotheses = [
+            item
             for item in state["hypotheses"]
             if item.supporting_evidence_ids
+        ]
+        backed_hypotheses.sort(
+            key=lambda hypothesis: (
+                not bool(hypothesis.contradictory_evidence_ids),
+                len(
+                    {
+                        evidence_by_id[evidence_id].source_tool
+                        for evidence_id in hypothesis.supporting_evidence_ids
+                        if evidence_id in evidence_by_id
+                    }
+                ),
+                len(hypothesis.supporting_evidence_ids),
+                _CONFIDENCE_RANK[hypothesis.confidence],
+            ),
+            reverse=True,
+        )
+        evidence_backed_hypotheses = {
+            item.hypothesis_id: item for item in backed_hypotheses
         }
         diagnosis = state["diagnosis"]
         updates = {
@@ -437,17 +522,130 @@ class InvestigationNodes:
         }
         has_valid_root_cause_support = bool(cited_evidence & hypothesis_support)
         cannot_conclude = diagnosis is None or not diagnosis.can_conclude
-        must_be_uncertain = bool(
+        forced_inconclusive = bool(
             state["iteration_limit_reached"]
             or state["evidence_expansion_exhausted"]
             or cannot_conclude
-            or not has_valid_root_cause_support
-            or conclusion.root_cause is None
-            or not conclusion.reliable_root_cause
         )
-        if must_be_uncertain:
-            uncertainties = list(conclusion.unresolved_uncertainties)
-            uncertainties.extend(req.reason for req in state["requested_information"])
+        top = backed_hypotheses[0] if backed_hypotheses else None
+        supported_top = bool(
+            top is not None and top.hypothesis_id in updates["supported_hypothesis_ids"]
+        )
+        global_contradiction_ids = {
+            evidence_id
+            for contradiction in state["contradictions"]
+            for evidence_id in contradiction.evidence_ids
+        }
+        top_conflicted = bool(
+            top
+            and (
+                top.contradictory_evidence_ids
+                or set(top.supporting_evidence_ids) & global_contradiction_ids
+            )
+        )
+        top_rank = None
+        second_rank = None
+        if top is not None:
+            top_rank = (
+                len({evidence_by_id[item].source_tool for item in top.supporting_evidence_ids}),
+                len(top.supporting_evidence_ids),
+                _CONFIDENCE_RANK[top.confidence],
+            )
+        if len(backed_hypotheses) > 1:
+            second = backed_hypotheses[1]
+            second_rank = (
+                len({evidence_by_id[item].source_tool for item in second.supporting_evidence_ids}),
+                len(second.supporting_evidence_ids),
+                _CONFIDENCE_RANK[second.confidence],
+            )
+        clearly_dominant = bool(top_rank is not None and (second_rank is None or top_rank > second_rank))
+        incident_at = state["trigger"].occurred_at.astimezone(timezone.utc)
+        temporal_support = bool(
+            top
+            and any(
+                (
+                    evidence_by_id[evidence_id].metadata.get("preIncidentSampleCount", 0) > 0
+                    or (
+                        evidence_by_id[evidence_id].observed_at is not None
+                        and evidence_by_id[evidence_id].observed_at.astimezone(timezone.utc)
+                        <= incident_at
+                    )
+                    or _contains_preincident_timestamp(
+                        evidence_by_id[evidence_id].value, incident_at
+                    )
+                    or _contains_preincident_timestamp(
+                        evidence_by_id[evidence_id].metadata, incident_at
+                    )
+                )
+                for evidence_id in top.supporting_evidence_ids
+                if evidence_id in cited_evidence
+            )
+        )
+        probable_supported = bool(
+            not forced_inconclusive
+            and conclusion.diagnosis_status != DiagnosisStatus.INCONCLUSIVE
+            and has_valid_root_cause_support
+            and supported_top
+            and top is not None
+            and top.confidence != ConfidenceLevel.LOW
+            and not top_conflicted
+            and clearly_dominant
+            and temporal_support
+        )
+        authoritative_confirmation = bool(
+            top
+            and any(
+                evidence_id in cited_evidence
+                and evidence_by_id[evidence_id].kind == EvidenceKind.FACT
+                and evidence_by_id[evidence_id].metadata.get("causalConfirmation") is True
+                for evidence_id in top.supporting_evidence_ids
+            )
+        )
+        confirmed = bool(
+            probable_supported
+            and conclusion.diagnosis_status == DiagnosisStatus.CONFIRMED
+            and conclusion.reliable_root_cause
+            and conclusion.confidence == ConfidenceLevel.HIGH
+            and top is not None
+            and top.confidence == ConfidenceLevel.HIGH
+            and authoritative_confirmation
+        )
+        uncertainties = list(conclusion.unresolved_uncertainties)
+        uncertainties.extend(req.reason for req in state["requested_information"])
+        if confirmed:
+            root_cause = conclusion.root_cause or top.statement
+            updates.update(
+                {
+                    "diagnosis_status": DiagnosisStatus.CONFIRMED,
+                    "summary": f"Authoritative evidence supports the following root cause: {root_cause}",
+                    "root_cause": root_cause,
+                    "reliable_root_cause": True,
+                    "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
+                }
+            )
+        elif probable_supported:
+            root_cause = top.statement
+            uncertainties.append(
+                "The exact causal mechanism or failed component still requires direct verification."
+            )
+            updates.update(
+                {
+                    "diagnosis_status": DiagnosisStatus.PROBABLE,
+                    "summary": (
+                        "The available evidence supports the following as the best current "
+                        f"explanation: {root_cause}"
+                    ),
+                    "root_cause": root_cause,
+                    "reliable_root_cause": False,
+                    "confidence": (
+                        top.confidence
+                        if conclusion.confidence == ConfidenceLevel.LOW
+                        else conclusion.confidence
+                    ),
+                    "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
+                }
+            )
+        else:
             if state["iteration_limit_reached"]:
                 reason = "The maximum evidence-gathering iteration count was reached."
             elif state["evidence_expansion_exhausted"]:
@@ -459,6 +657,7 @@ class InvestigationNodes:
             uncertainties.append(reason)
             updates.update(
                 {
+                    "diagnosis_status": DiagnosisStatus.INCONCLUSIVE,
                     "summary": (
                         "Available evidence is insufficient to determine a reliable root cause. "
                         "The observed operational condition requires further verification."
@@ -469,10 +668,6 @@ class InvestigationNodes:
                     "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
                 }
             )
-        elif conclusion.root_cause is None:
-            updates["reliable_root_cause"] = False
-        elif conclusion.reliable_root_cause:
-            updates["reliable_root_cause"] = has_valid_root_cause_support
         return conclusion.model_copy(update=updates)
 
     @staticmethod

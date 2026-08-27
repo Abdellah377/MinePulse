@@ -34,6 +34,7 @@ from app.mappers.enums import (
 from app.mappers.geo import lng_lat_to_workspace
 from app.services.operational.context import OperationalContext, shift_window
 from app.services.operational.clock import get_operational_now
+from app.services.operational.alerts import alert_operational_time
 from app.services.operational.cycles import avg_cycle_minutes_for_equipment
 from app.services.operational.equipment import (
     FleetBulkContext,
@@ -321,6 +322,7 @@ def alert_to_dto(
 ) -> dict:
     eq_code = equip_codes.get(alert.equipment_id) if alert.equipment_id else None
     zone_code = zone_codes.get(alert.zone_id) if alert.zone_id else None
+    occurred = int(alert_operational_time(alert).timestamp() * 1000)
     created = int(alert.created_at.timestamp() * 1000)
     updated = int((alert.resolved_at or alert.acknowledged_at or alert.created_at).timestamp() * 1000)
     meta = alert.metadata_ or {}
@@ -338,6 +340,7 @@ def alert_to_dto(
         "zoneId": zone_code,
         "location": zone_code or "Site",
         "category": alert.alert_type,
+        "occurredAt": occurred,
         "createdAt": created,
         "updatedAt": updated,
         "assignedTo": assigned_label,

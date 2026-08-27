@@ -128,10 +128,16 @@ removed. Non-monitoring RULE alerts and records belonging to other sites are
 preserved. Predictions are not deleted because the current simulator and
 LangGraph V1 do not create them and they have no alert/run link.
 
+Alert timestamps deliberately separate operational truth from persistence
+metadata. `Alert.occurred_at` is the authoritative event/detection time used by
+the API, UI, ordering, and AI evidence. `Alert.created_at` is the wall-clock UTC
+time at which the row was persisted. Legacy rows without `occurred_at` fall back
+to `created_at`.
+
 Simulation-mode operational timestamps use the operational clock consistently:
 
-- simulator FMS `Alert.created_at` uses simulation time;
-- detector `detected_at`, monitoring RULE `Alert.created_at`, and LangGraph
+- simulator FMS `Alert.occurred_at` uses simulation time;
+- detector `detected_at`, monitoring RULE `Alert.occurred_at`, and LangGraph
   trigger `occurred_at` use the same operational timestamp;
 - monitoring cooldown metadata uses operational time so accelerated scenarios
   behave consistently;

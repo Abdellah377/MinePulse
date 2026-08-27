@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.enums import AlertStatus
@@ -37,6 +37,16 @@ _UI_STATUS = {
     "assigned": "ASSIGNED",
     "resolved": "RESOLVED",
 }
+
+
+def alert_operational_time(alert: Alert) -> datetime:
+    """Return an alert's event time, with a legacy persistence-time fallback."""
+    return alert.occurred_at or alert.created_at
+
+
+def alert_operational_time_expression():
+    """SQL expression matching :func:`alert_operational_time`."""
+    return func.coalesce(Alert.occurred_at, Alert.created_at)
 
 
 def update_alert(
@@ -115,6 +125,6 @@ def list_site_alerts(
         query = query.where(Alert.status != AlertStatus.RESOLVED)
     return list(
         session.scalars(
-            query.order_by(Alert.created_at.desc()).limit(limit)
+            query.order_by(alert_operational_time_expression().desc()).limit(limit)
         ).all()
     )

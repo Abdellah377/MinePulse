@@ -114,6 +114,9 @@ def test_candidate_builds_automatic_trigger_and_deduplicates_second_attempt(monk
     assert trigger.source_record_id == "alert-1"
     assert trigger.payload["reason"].startswith("TRK-010")
     assert session.alerts[1].source.value == "RULE"
+    assert session.alerts[1].occurred_at == NOW
+    assert session.alerts[1].created_at != NOW
+    assert session.alerts[1].created_at.tzinfo is not None
 
 
 def test_linked_authoritative_alert_wins_over_derived_duplicate():

@@ -75,16 +75,21 @@ Compare symptom timestamps with the incident time. Prefer patterns observed
 before the incident when assessing possible causes; a post-incident warning is
 not proof of the original cause. Consider competing hypotheses and preserve
 contradictory evidence when the supplied trends cannot discriminate between them.
+Rank hypotheses by valid support, independent signals, temporal relevance, and
+contradictions; do not invent numeric probabilities.
 """
 
 _CONCLUSION_PROMPT = _COMMON_POLICY + """
 
 Build a conclusion that explicitly separates observed facts, derived metrics,
-supported hypotheses, and unresolved uncertainty. Set reliable_root_cause false
-and root_cause null unless a cited, evidence-backed hypothesis supports it. If
-diagnosis can_conclude is false, evidence expansion is exhausted, or the
-iteration limit was reached, say that the available evidence is insufficient
-to determine a reliable root cause.
+supported hypotheses, and unresolved uncertainty. Set diagnosis_status to
+CONFIRMED only for direct authoritative causal confirmation, PROBABLE when one
+valid, temporally plausible hypothesis is clearly better supported but exact
+causal/component verification is incomplete, and INCONCLUSIVE when evidence
+cannot discriminate. PROBABLE must keep reliable_root_cause false. Set
+reliable_root_cause true only for CONFIRMED. If diagnosis can_conclude is false,
+evidence expansion is exhausted, or the iteration limit was reached, return
+INCONCLUSIVE and say that available evidence is insufficient.
 """
 
 _RECOMMENDATION_PROMPT = _COMMON_POLICY + """

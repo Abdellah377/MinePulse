@@ -6,6 +6,7 @@ from app.db.models import Alert, Equipment, HaulRoad, Zone
 from app.mappers.dto import alert_to_dto, road_to_dto, zone_to_dto
 from app.schemas.zones import ZoneCreateRequest, ZonePatchRequest
 from app.services.operational import zones as zone_service
+from app.services.operational.alerts import alert_operational_time_expression
 
 router = APIRouter()
 roads_router = APIRouter()
@@ -92,5 +93,7 @@ def list_alerts(session: DbSession, ctx: Ctx):
     equipment = session.scalars(select(Equipment).where(Equipment.site_id == ctx.site_id)).all()
     zone_codes = {z.zone_id: z.code for z in zones}
     equip_codes = {e.equipment_id: e.code for e in equipment}
-    alerts = session.scalars(select(Alert).order_by(Alert.created_at.desc()).limit(100)).all()
+    alerts = session.scalars(
+        select(Alert).order_by(alert_operational_time_expression().desc()).limit(100)
+    ).all()
     return [alert_to_dto(a, equip_codes, zone_codes, session=session) for a in alerts]
