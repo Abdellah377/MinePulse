@@ -132,6 +132,8 @@ class EvaluationReport(EvaluationModel):
     iteration_count: int = 0
     checks: list[EvaluationCheck] = Field(default_factory=list)
     data_quality_warnings: list[str] = Field(default_factory=list)
+    telemetry_trend_evidence: list[dict] = Field(default_factory=list)
+    pre_incident_sample_count: int = 0
     failure_stage: str | None = None
     human_review_notes: str | None = None
     quality_levels: dict[str, bool | None] = Field(default_factory=dict)

@@ -108,8 +108,10 @@ class ScriptedProvider:
     def __init__(self, diagnoses):
         self.diagnoses = list(diagnoses)
         self.diagnose_calls = 0
+        self.diagnose_payloads = []
 
     def diagnose(self, payload):
+        self.diagnose_payloads.append(payload)
         result = self.diagnoses[min(self.diagnose_calls, len(self.diagnoses) - 1)]
         self.diagnose_calls += 1
         if isinstance(result, Exception):
@@ -228,6 +230,50 @@ def test_graph_completes_with_mocked_llm_and_sanitizes_citations():
     assert len(persisted) == 1
 
 
+def test_initial_telemetry_trends_reach_the_provider_payload_unchanged():
+    class TrendTools(FakeTools):
+        def gather_initial(self, ctx, trigger):
+            return [
+                _evidence(),
+                EvidenceItem(
+                    evidence_id="ev-trends",
+                    kind=EvidenceKind.DERIVED_METRIC,
+                    source_tool="equipment_telemetry_trends",
+                    source_service="app.oem.queries.get_equipment_signal_trends",
+                    metric="equipment_telemetry_trends",
+                    value={
+                        "metrics": [
+                            {
+                                "metric": "oil_pressure_kpa",
+                                "direction": "falling",
+                                "representativeSamples": [
+                                    {"ts": "2026-08-24T09:45:00Z", "value": 410},
+                                    {"ts": "2026-08-24T09:55:00Z", "value": 275},
+                                ],
+                            }
+                        ]
+                    },
+                    equipment_id=7,
+                ),
+            ]
+
+    provider = ScriptedProvider([_diagnosis()])
+    _run(provider, tools=TrendTools())
+
+    payload_evidence = provider.diagnose_payloads[0]["evidence"]
+    trend = next(item for item in payload_evidence if item["evidence_id"] == "ev-trends")
+    assert trend["value"]["metrics"][0]["representativeSamples"][0]["value"] == 410
+    assert "EQUIPMENT_TELEMETRY_TRENDS" in provider.diagnose_payloads[0][
+        "approvedEvidenceRequestTypes"
+    ]
+    assert provider.diagnose_payloads[0]["approvedTelemetryMetricGroups"] == [
+        "equipment",
+        "mechanical",
+        "fuel",
+        "connectivity",
+    ]
+
+
 def test_graph_gathers_requested_evidence_then_reanalyzes():
     request = EvidenceRequest(
         request_type=EvidenceRequestType.DOWNTIME,
@@ -316,6 +362,46 @@ def test_cannot_conclude_without_requests_finishes_inconclusively():
     assert result["conclusion"].reliable_root_cause is False
     assert result["conclusion"].root_cause is None
     assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
+
+
+def test_uncertain_result_cannot_repeat_provider_confirmation_language():
+    class ContradictoryWordingProvider(ScriptedProvider):
+        def build_conclusion(self, payload):
+            return InvestigationConclusion(
+                summary=(
+                    "Evidence is insufficient, while confirming the reliability of the diagnosis."
+                ),
+                root_cause="A confirmed component failure",
+                reliable_root_cause=True,
+                derived_metric_evidence_ids=["ev-production"],
+                supported_hypothesis_ids=["hyp-1"],
+                confidence=ConfidenceLevel.HIGH,
+            )
+
+        def build_recommendation(self, payload):
+            return InvestigationRecommendation(
+                action_type=RecommendationAction.INSPECT_EQUIPMENT,
+                description="Act on the confirmed diagnosis.",
+                rationale="This confirms the reliable root cause.",
+                evidence_ids=["ev-production"],
+            )
+
+    result, _, _ = _run(
+        ContradictoryWordingProvider([_diagnosis(can_conclude=False)])
+    )
+
+    combined = " ".join(
+        [
+            result["conclusion"].summary,
+            result["recommendation"].description,
+            result["recommendation"].rationale,
+        ]
+    ).casefold()
+    assert result["conclusion"].reliable_root_cause is False
+    assert result["conclusion"].root_cause is None
+    assert "confirming" not in combined
+    assert "confirmed diagnosis" not in combined
+    assert "did not establish a reliable root cause" in combined
 
 
 def test_repeated_unavailable_request_stops_before_iteration_limit():

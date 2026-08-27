@@ -10,9 +10,13 @@ from sqlalchemy import select
 
 from ai_eval.cases import EVALUATION_CASES
 from ai_eval.runner import run_evaluation
+from app.ai.contracts import EvidenceRequest, EvidenceRequestType
 from app.ai.persistence import get_investigation
+from app.ai.tools import oem as ai_oem_tools
 from app.db.database import SessionLocal
 from app.db.models import Equipment, EquipmentTelemetry
+from app.oem import queries as oem_queries
+from app.services.operational.context import get_operational_context
 from simulator.apply_commands import _apply_command
 from simulator.commands import SimulationCommand
 
@@ -107,6 +111,38 @@ def test_causal_scenario_persists_observable_evidence_before_evaluation():
         oil_values = [float(row.oil_pressure_kpa) for row in telemetry if row.oil_pressure_kpa is not None]
         assert len(oil_values) >= 3
         assert oil_values[-1] < oil_values[0]
+        trends = oem_queries.get_equipment_signal_trends(
+            session,
+            "TRK-001",
+            run.started_at.isoformat(),
+            run.incident_at.isoformat(),
+            ["oil_pressure_kpa", "engine_temp_c", "fuel_rate_lph"],
+            site_id=equipment.site_id,
+        )
+        oil_trend = next(
+            item for item in trends["metrics"] if item["metric"] == "oil_pressure_kpa"
+        )
+        assert oil_trend["direction"] == "falling"
+        assert 3 <= oil_trend["sampleCount"]
+        assert len(oil_trend["representativeSamples"]) <= 8
+        assert oil_trend["firstObservedAt"] < oil_trend["lastObservedAt"] <= run.incident_at.isoformat()
+
+        ctx = get_operational_context(session, site_id=equipment.site_id)
+        trend_evidence = ai_oem_tools.telemetry_trends(
+            session,
+            ctx,
+            EvidenceRequest(
+                request_type=EvidenceRequestType.EQUIPMENT_TELEMETRY_TRENDS,
+                equipment_id=equipment.equipment_id,
+                start_time=run.started_at,
+                end_time=run.incident_at,
+                parameters=["mechanical"],
+                reason="Verify persisted pre-incident telemetry.",
+            ),
+        )
+        assert trend_evidence.available
+        assert trend_evidence.metadata["preIncidentSampleCount"] >= 3
+        assert "scenario" not in trend_evidence.model_dump_json().casefold()
 
         report = run_evaluation(session, "causal_lubrication_degradation")
         assert report.pipeline_correct
@@ -120,3 +156,62 @@ def test_causal_scenario_persists_observable_evidence_before_evaluation():
         serialized_trigger = report.trigger.model_dump_json().casefold()
         assert "lubrication_degradation" not in serialized_trigger
         assert "lubrication_system_degradation" not in serialized_trigger
+        report_trend = next(
+            item for item in report.evidence if item.source_tool == "equipment_telemetry_trends"
+        )
+        assert report_trend.available
+
+
+@pytest.mark.ai_eval
+@requires_integration
+def test_fuel_sabotage_persists_bounded_load_aware_history_for_ai():
+    """The fuel case exposes observations, never the simulator's hidden profile."""
+    from simulator.engine import SimulationEngine
+
+    with SessionLocal() as session:
+        try:
+            engine = SimulationEngine(session)
+        except RuntimeError as exc:
+            pytest.skip(f"simulator seed is unavailable: {exc}")
+        equipment = session.scalar(select(Equipment).where(Equipment.code == "TRK-016"))
+        if equipment is None:
+            pytest.skip("TRK-016 is not seeded")
+        command = SimulationCommand.create(
+            target_type="EQUIPMENT",
+            target_id="TRK-016",
+            action="FUEL_RATE_HIGH",
+            parameters={"seed": 1616},
+        )
+        injection = _apply_command(engine._command_ctx(), command)
+        assert injection is not None
+        run = engine.causal_scenarios.active[injection.original_state["causal_run_id"]]
+        engine.start()
+        ticks = math.ceil(run.duration_sec / (engine.cfg.tick_seconds * engine.clock.speed)) + 3
+        for _ in range(ticks):
+            engine.tick()
+        engine.pause()
+
+        trends = oem_queries.get_equipment_signal_trends(
+            session,
+            "TRK-016",
+            run.started_at.isoformat(),
+            run.incident_at.isoformat(),
+            ["fuel_rate_lph", "engine_load_pct", "speed_kmh", "payload_t", "engine_temp_c"],
+            site_id=equipment.site_id,
+        )
+        by_metric = {item["metric"]: item for item in trends["metrics"]}
+        assert by_metric["fuel_rate_lph"]["sampleCount"] >= 3
+        assert by_metric["fuel_rate_lph"]["max"] > by_metric["fuel_rate_lph"]["min"]
+        assert by_metric["engine_load_pct"]["sampleCount"] >= 3
+        assert all(
+            len(item["representativeSamples"]) <= 8 for item in trends["metrics"]
+        )
+        serialized = str(trends).casefold()
+        assert "fuel_efficiency_degradation" not in serialized
+        assert "hidden" not in serialized
+
+        report = run_evaluation(session, "causal_fuel_efficiency_degradation")
+        report_trend = next(
+            item for item in report.evidence if item.source_tool == "equipment_telemetry_trends"
+        )
+        assert report_trend.available

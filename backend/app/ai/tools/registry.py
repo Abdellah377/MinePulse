@@ -15,6 +15,7 @@ from app.ai.contracts import (
     EvidenceRequestType,
     EvidenceStatus,
     InvestigationTrigger,
+    TelemetryMetricGroup,
     TriggerType,
 )
 from app.ai.tools import oem, operational
@@ -52,6 +53,25 @@ class EvidenceToolRegistry:
             ("downtime", lambda: operational.downtime(self.session, ctx)),
             ("site_alerts", lambda: operational.site_alerts(self.session, ctx)),
         ]
+        if trigger.equipment_id is not None:
+            group = (
+                TelemetryMetricGroup.CONNECTIVITY
+                if trigger.trigger_type == TriggerType.CONNECTIVITY_ISSUE
+                else TelemetryMetricGroup.EQUIPMENT
+            )
+            trend_request = EvidenceRequest(
+                request_type=EvidenceRequestType.EQUIPMENT_TELEMETRY_TRENDS,
+                equipment_id=trigger.equipment_id,
+                end_time=trigger.occurred_at,
+                parameters=[group.value],
+                reason="Collect bounded telemetry trends preceding the investigated incident.",
+            )
+            tools.append(
+                (
+                    "equipment_telemetry_trends",
+                    lambda: oem.telemetry_trends(self.session, ctx, trend_request),
+                )
+            )
         return [self._safe_call(ctx, name, call) for name, call in tools]
 
     def gather_requested(
@@ -88,6 +108,9 @@ class EvidenceToolRegistry:
             EvidenceRequestType.OEM_DIAGNOSTICS.value: lambda: oem.diagnostics(self.session, ctx, request),
             EvidenceRequestType.OEM_ERRORS.value: lambda: oem.errors(self.session, ctx, request),
             EvidenceRequestType.OEM_MAINTENANCE_INDICATORS.value: lambda: oem.maintenance_indicators(
+                self.session, ctx, request
+            ),
+            EvidenceRequestType.EQUIPMENT_TELEMETRY_TRENDS.value: lambda: oem.telemetry_trends(
                 self.session, ctx, request
             ),
         }

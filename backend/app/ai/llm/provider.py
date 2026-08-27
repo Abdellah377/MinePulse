@@ -71,6 +71,10 @@ request only evidence types present in the supplied approved request catalog.
 Set can_conclude false when material uncertainty remains. Requests must be
 specific and justified. If no useful approved request exists, return an empty
 request list and keep can_conclude false. Do not treat hypotheses as evidence.
+Compare symptom timestamps with the incident time. Prefer patterns observed
+before the incident when assessing possible causes; a post-incident warning is
+not proof of the original cause. Consider competing hypotheses and preserve
+contradictory evidence when the supplied trends cannot discriminate between them.
 """
 
 _CONCLUSION_PROMPT = _COMMON_POLICY + """

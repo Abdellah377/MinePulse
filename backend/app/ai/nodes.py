@@ -29,6 +29,7 @@ from app.ai.contracts import (
     InvestigationStatus,
     InvestigationTrigger,
     ResolvedOperationalContext,
+    TelemetryMetricGroup,
 )
 from app.ai.llm.provider import LLMProvider
 from app.ai.persistence import InvestigationPersistenceError, persist_investigation
@@ -116,6 +117,7 @@ class InvestigationNodes:
             "investigationRound": next_iteration,
             "maxInvestigationRounds": state["max_iterations"],
             "approvedEvidenceRequestTypes": [item.value for item in EvidenceRequestType],
+            "approvedTelemetryMetricGroups": [item.value for item in TelemetryMetricGroup],
         }
         try:
             diagnosis = self.runtime.provider.diagnose(payload)
@@ -251,6 +253,19 @@ class InvestigationNodes:
             or not conclusion.reliable_root_cause
             or conclusion.unresolved_uncertainties
         )
+        if uncertain:
+            recommendation = recommendation.model_copy(
+                update={
+                    "description": (
+                        "Verify the observed operational condition and collect the missing "
+                        "evidence before any intervention."
+                    ),
+                    "rationale": (
+                        "This investigation did not establish a reliable root cause; human "
+                        "validation remains required."
+                    ),
+                }
+            )
         return {
             "recommendation": recommendation,
             "status": (
@@ -446,7 +461,7 @@ class InvestigationNodes:
                 {
                     "summary": (
                         "Available evidence is insufficient to determine a reliable root cause. "
-                        + conclusion.summary
+                        "The observed operational condition requires further verification."
                     ),
                     "root_cause": None,
                     "reliable_root_cause": False,

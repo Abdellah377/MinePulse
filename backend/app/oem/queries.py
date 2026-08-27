@@ -22,6 +22,8 @@ from app.oem.connectivity import parse_range
 from app.oem.thresholds import SIM_THRESHOLDS, classify_value, expected_range
 
 MAX_POINTS = 720
+AI_TREND_MAX_METRICS = 8
+AI_TREND_MAX_REPRESENTATIVE_POINTS = 8
 
 
 def _equipment(session: Session, code: str, *, site_id: int) -> Equipment | None:
@@ -114,6 +116,130 @@ def get_equipment_signal_history(
         "points": points,
         "unavailable": unavailable,
         "empty": len(points) == 0,
+    }
+
+
+def _representative_samples(
+    samples: list[dict],
+    *,
+    max_points: int = AI_TREND_MAX_REPRESENTATIVE_POINTS,
+) -> list[dict]:
+    """Deterministically retain endpoints and evenly spaced observed samples."""
+    if max_points <= 1:
+        return samples[:1]
+    if len(samples) <= max_points:
+        return samples
+    indices = [round(index * (len(samples) - 1) / (max_points - 1)) for index in range(max_points)]
+    return [samples[index] for index in dict.fromkeys(indices)]
+
+
+def get_equipment_signal_trends(
+    session: Session,
+    code: str,
+    from_s: str | None,
+    to_s: str | None,
+    signals: list[str],
+    *,
+    site_id: int,
+    ctx=None,
+    max_metrics: int = AI_TREND_MAX_METRICS,
+    max_representative_points: int = AI_TREND_MAX_REPRESENTATIVE_POINTS,
+) -> dict:
+    """Compact observed telemetry history for investigation reasoning.
+
+    This reuses the canonical site-scoped/bucketed OEM history query. It adds
+    deterministic summaries and bounded representative points; it does not
+    interpolate values or infer a diagnosis.
+    """
+    bounded_signals = list(dict.fromkeys(signals))[:max_metrics]
+    history = get_equipment_signal_history(
+        session,
+        code,
+        from_s,
+        to_s,
+        bounded_signals,
+        site_id=site_id,
+        ctx=ctx,
+    )
+    if history.get("error"):
+        return history
+    definitions = {item["key"]: item for item in history.get("signals", [])}
+    points = history.get("points") or []
+    trends = []
+    for key in bounded_signals:
+        definition = definitions.get(key)
+        samples = [
+            {"ts": point.get("ts"), "value": point.get(key)}
+            for point in points
+            if point.get("ts") is not None and point.get(key) is not None
+        ]
+        values = [float(sample["value"]) for sample in samples]
+        if not values:
+            trends.append(
+                {
+                    "metric": key,
+                    "unit": definition.get("unit") if definition else None,
+                    "sampleCount": 0,
+                    "firstObservedAt": None,
+                    "lastObservedAt": None,
+                    "firstValue": None,
+                    "lastValue": None,
+                    "min": None,
+                    "max": None,
+                    "mean": None,
+                    "absoluteChange": None,
+                    "percentageChange": None,
+                    "direction": "insufficient_data",
+                    "missingData": True,
+                    "representativeSamples": [],
+                }
+            )
+            continue
+        precision = SENSORS[key].precision
+        first = values[0]
+        last = values[-1]
+        change = last - first
+        stable_tolerance = max(10 ** (-precision), abs(first) * 0.02)
+        direction = "stable"
+        if change > stable_tolerance:
+            direction = "rising"
+        elif change < -stable_tolerance:
+            direction = "falling"
+        percentage_change = (change / abs(first) * 100.0) if first != 0 else None
+        trends.append(
+            {
+                "metric": key,
+                "unit": definition.get("unit") if definition else SENSORS[key].unit,
+                "sampleCount": len(values),
+                "firstObservedAt": samples[0]["ts"],
+                "lastObservedAt": samples[-1]["ts"],
+                "firstValue": round(first, precision),
+                "lastValue": round(last, precision),
+                "min": round(min(values), precision),
+                "max": round(max(values), precision),
+                "mean": round(sum(values) / len(values), precision),
+                "absoluteChange": round(change, precision),
+                "percentageChange": (
+                    round(percentage_change, 1) if percentage_change is not None else None
+                ),
+                "direction": direction,
+                "missingData": False,
+                "representativeSamples": _representative_samples(
+                    samples,
+                    max_points=max_representative_points,
+                ),
+            }
+        )
+    return {
+        "code": history.get("code"),
+        "type": history.get("type"),
+        "from": history.get("from"),
+        "to": history.get("to"),
+        "bucketSec": history.get("bucketSec"),
+        "metrics": trends,
+        "unavailable": history.get("unavailable", []),
+        "sourcePointCount": len(points),
+        "empty": not any(item["sampleCount"] for item in trends),
     }
 
 

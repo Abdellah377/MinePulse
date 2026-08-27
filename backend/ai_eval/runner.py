@@ -106,6 +106,9 @@ def report_from_result(
     persisted_ok: bool,
 ) -> EvaluationReport:
     checks, warnings, outcome = evaluate_result(case, result)
+    telemetry_trends = [
+        item for item in result.evidence if item.source_tool == "equipment_telemetry_trends"
+    ]
     reasoning_checks = [
         item for item in checks if item.category.value not in {"PIPELINE", "DATA_QUALITY"}
     ]
@@ -179,6 +182,24 @@ def report_from_result(
         iteration_count=result.iteration_count,
         checks=checks,
         data_quality_warnings=warnings,
+        telemetry_trend_evidence=[
+            {
+                "evidenceId": item.evidence_id,
+                "available": item.available,
+                "windowStart": item.metadata.get("windowStart"),
+                "windowEnd": item.metadata.get("windowEnd"),
+                "metricCount": item.metadata.get("metricCount", 0),
+                "sourcePointCount": item.metadata.get("sourcePointCount", 0),
+            }
+            for item in telemetry_trends
+        ],
+        pre_incident_sample_count=max(
+            (
+                int(item.metadata.get("preIncidentSampleCount", 0))
+                for item in telemetry_trends
+            ),
+            default=0,
+        ),
         failure_stage=result.error.stage if result.error else None,
         human_review_notes=(
             case.ground_truth.reviewer_notes

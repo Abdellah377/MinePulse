@@ -1,7 +1,16 @@
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 
-from app.ai.contracts import EvidenceRequest, EvidenceRequestType, EvidenceStatus
+from app.ai.contracts import (
+    EvidenceItem,
+    EvidenceKind,
+    EvidenceRequest,
+    EvidenceRequestType,
+    EvidenceStatus,
+    InvestigationTrigger,
+    TriggerSource,
+    TriggerType,
+)
 from app.ai.tools import oem, operational
 from app.ai.tools.registry import EvidenceToolRegistry
 from app.db.models import Shift, Site
@@ -151,3 +160,148 @@ def test_oem_diagnostics_reuses_existing_history_service_for_temporal_evidence(m
     assert evidence.source_service == "app.oem.queries.diagnostic_parameters"
     assert evidence.metadata["signalHistory"]["points"][0]["oil_pressure_kpa"] == 410
     assert "scenario" not in evidence.model_dump_json().casefold()
+
+
+def test_trend_service_summarizes_and_downsamples_without_coercing_missing_to_zero(monkeypatch):
+    points = [
+        {
+            "ts": f"2026-08-24T09:{index:02d}:00+00:00",
+            "oil_pressure_kpa": 420 - index * 10,
+            "fuel_rate_lph": None,
+        }
+        for index in range(20)
+    ]
+    monkeypatch.setattr(
+        oem.queries,
+        "get_equipment_signal_history",
+        lambda *args, **kwargs: {
+            "code": "TRK-001",
+            "type": "truck",
+            "from": "2026-08-24T09:00:00+00:00",
+            "to": "2026-08-24T09:19:00+00:00",
+            "bucketSec": 10,
+            "signals": [
+                {"key": "oil_pressure_kpa", "unit": "kPa"},
+                {"key": "fuel_rate_lph", "unit": "l/h"},
+            ],
+            "points": points,
+            "unavailable": [],
+            "empty": False,
+        },
+    )
+
+    result = oem.queries.get_equipment_signal_trends(
+        object(),
+        "TRK-001",
+        None,
+        None,
+        ["oil_pressure_kpa", "fuel_rate_lph"],
+        site_id=1,
+    )
+
+    oil, fuel = result["metrics"]
+    assert oil["direction"] == "falling"
+    assert oil["firstValue"] == 420
+    assert oil["lastValue"] == 230
+    assert len(oil["representativeSamples"]) == 8
+    assert [sample["ts"] for sample in oil["representativeSamples"]] == sorted(
+        sample["ts"] for sample in oil["representativeSamples"]
+    )
+    assert fuel["sampleCount"] == 0
+    assert fuel["firstValue"] is None
+    assert fuel["direction"] == "insufficient_data"
+
+
+def test_ai_telemetry_trend_adapter_has_bounded_incident_provenance_and_no_hidden_truth(monkeypatch):
+    monkeypatch.setattr(oem, "_equipment_code", lambda session, ctx, equipment_id: "TRK-001")
+    captured = {}
+
+    def fake_trends(*args, **kwargs):
+        captured["args"] = args
+        return {
+            "code": "TRK-001",
+            "from": args[2],
+            "to": args[3],
+            "metrics": [
+                {
+                    "metric": "oil_pressure_kpa",
+                    "unit": "kPa",
+                    "sampleCount": 5,
+                    "firstObservedAt": args[2],
+                    "lastObservedAt": args[3],
+                    "firstValue": 410,
+                    "lastValue": 275,
+                    "direction": "falling",
+                    "representativeSamples": [],
+                }
+            ],
+            "sourcePointCount": 5,
+            "empty": False,
+        }
+
+    monkeypatch.setattr(oem.queries, "get_equipment_signal_trends", fake_trends)
+    incident = _context().sim_now - timedelta(minutes=2)
+    request = EvidenceRequest(
+        request_type=EvidenceRequestType.EQUIPMENT_TELEMETRY_TRENDS,
+        equipment_id=7,
+        end_time=incident,
+        parameters=["mechanical"],
+        reason="Inspect pre-incident telemetry.",
+    )
+
+    evidence = oem.telemetry_trends(object(), _context(), request)
+
+    assert evidence.available
+    assert evidence.source_service == "app.oem.queries.get_equipment_signal_trends"
+    assert evidence.equipment_id == 7
+    assert datetime.fromisoformat(evidence.metadata["windowEnd"].replace("Z", "+00:00")) == incident
+    assert evidence.metadata["metricCount"] == 1
+    assert evidence.source_record_ids == ["equipment:7"]
+    assert "scenario" not in evidence.model_dump_json().casefold()
+    assert "root_cause" not in evidence.model_dump_json().casefold()
+
+
+def test_equipment_investigation_initial_evidence_includes_telemetry_trends(monkeypatch):
+    captured = []
+
+    def fake_safe(self, ctx, name, call, **kwargs):
+        captured.append(name)
+        if name == "equipment_telemetry_trends":
+            return call()
+        return EvidenceItem(
+            kind=EvidenceKind.FACT,
+            source_tool=name,
+            source_service="test",
+            metric=name,
+            value={},
+        )
+
+    monkeypatch.setattr(EvidenceToolRegistry, "_safe_call", fake_safe)
+    monkeypatch.setattr(
+        oem,
+        "telemetry_trends",
+        lambda session, ctx, request: EvidenceItem(
+            kind=EvidenceKind.DERIVED_METRIC,
+            source_tool="equipment_telemetry_trends",
+            source_service="app.oem.queries.get_equipment_signal_trends",
+            metric="equipment_telemetry_trends",
+            value={"metrics": []},
+            equipment_id=request.equipment_id,
+            metadata={"incidentTime": request.end_time.isoformat()},
+        ),
+    )
+    incident = _context().sim_now - timedelta(minutes=1)
+    trigger = InvestigationTrigger(
+        trigger_type=TriggerType.EQUIPMENT_ANOMALY,
+        trigger_source=TriggerSource.USER_INVESTIGATE,
+        site_id=1,
+        shift_id=2,
+        equipment_id=7,
+        occurred_at=incident,
+    )
+
+    evidence = EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
+
+    trend = next(item for item in evidence if item.source_tool == "equipment_telemetry_trends")
+    assert "equipment_telemetry_trends" in captured
+    assert datetime.fromisoformat(trend.metadata["incidentTime"].replace("Z", "+00:00")) == incident

@@ -102,6 +102,14 @@ class EvidenceRequestType(str, Enum):
     OEM_DIAGNOSTICS = "OEM_DIAGNOSTICS"
     OEM_ERRORS = "OEM_ERRORS"
     OEM_MAINTENANCE_INDICATORS = "OEM_MAINTENANCE_INDICATORS"
+    EQUIPMENT_TELEMETRY_TRENDS = "EQUIPMENT_TELEMETRY_TRENDS"
+
+
+class TelemetryMetricGroup(str, Enum):
+    EQUIPMENT = "equipment"
+    MECHANICAL = "mechanical"
+    FUEL = "fuel"
+    CONNECTIVITY = "connectivity"
 
 
 class RecommendationAction(str, Enum):
