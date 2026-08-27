@@ -33,8 +33,14 @@ def step_tyres(truck: TruckRuntime) -> None:
                 p_target = 400.0
             if truck.tyre_temp_high:
                 t_target = 92.0
-        tyre["pressure_kpa"] += (p_target - tyre["pressure_kpa"]) * 0.08 + truck.rng.uniform(-1.2, 1.2)
-        tyre["temperature_c"] += (t_target - tyre["temperature_c"]) * 0.06 + truck.rng.uniform(-0.4, 0.4)
+            if truck.scenario_tyre_pressure_target is not None:
+                p_target = truck.scenario_tyre_pressure_target
+            if truck.scenario_tyre_temp_target is not None:
+                t_target = truck.scenario_tyre_temp_target
+        pressure_response = 0.25 if truck.scenario_tyre_pressure_target is not None else 0.08
+        temperature_response = 0.18 if truck.scenario_tyre_temp_target is not None else 0.06
+        tyre["pressure_kpa"] += (p_target - tyre["pressure_kpa"]) * pressure_response + truck.rng.uniform(-1.2, 1.2)
+        tyre["temperature_c"] += (t_target - tyre["temperature_c"]) * temperature_response + truck.rng.uniform(-0.4, 0.4)
         tyre["pressure_kpa"] = max(250.0, min(950.0, tyre["pressure_kpa"]))
         tyre["temperature_c"] = max(15.0, min(120.0, tyre["temperature_c"]))
 

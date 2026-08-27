@@ -35,3 +35,9 @@ class DurationPresetBody(BaseModel):
     """Helper: duration presets in simulated minutes."""
 
     minutes: int | None = None  # None = until restore
+
+
+class CausalScenarioStartBody(BaseModel):
+    target_id: str = Field(min_length=1, max_length=80)
+    duration_min: float | None = Field(default=None, gt=0, le=120)
+    seed: int | None = None

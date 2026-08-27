@@ -96,6 +96,15 @@ class TruckRuntime:
     oil_pressure_kpa: float = 410.0
     battery_voltage: float = 27.2
     communication_quality: float = 95.0
+    # Optional causal-scenario targets. These are simulator runtime controls;
+    # only their resulting telemetry/state is persisted.
+    performance_factor: float = 1.0
+    scenario_oil_pressure_target: float | None = None
+    scenario_engine_temp_target: float | None = None
+    scenario_coolant_temp_target: float | None = None
+    scenario_comm_quality_target: float | None = None
+    scenario_tyre_pressure_target: float | None = None
+    scenario_tyre_temp_target: float | None = None
     tyres: dict = field(default_factory=dict)
     active_oem_codes: set = field(default_factory=set)
     pre_stop_phase: TruckPhase | None = None
@@ -216,6 +225,7 @@ class TruckRuntime:
             return
 
         limit = min(cfg.truck_max_speed, self.road_speed_limit or cfg.truck_max_speed)
+        limit *= max(0.1, min(1.0, self.performance_factor))
         self.speed_kmh = self.rng.uniform(max(cfg.truck_min_speed, limit * 0.5), limit)
         # Progress from distance and speed (sim tick advances tick_seconds * speed wall→sim)
         sim_hours = (cfg.tick_seconds * cfg.speed) / 3600.0

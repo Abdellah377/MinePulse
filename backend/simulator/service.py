@@ -101,6 +101,36 @@ class SimulationService:
             self._engine.pause()
         return read_control()
 
+    def activate_causal_scenario(
+        self,
+        scenario_id: str,
+        target_id: str,
+        *,
+        duration_min: float | None = None,
+        seed: int | None = None,
+    ) -> dict:
+        self.ensure_started()
+        with self._lock:
+            assert self._engine is not None
+            return self._engine.activate_causal_scenario(
+                scenario_id,
+                target_id,
+                duration_min=duration_min,
+                seed=seed,
+            )
+
+    def stop_causal_scenario(self, run_id: str) -> dict:
+        self.ensure_started()
+        with self._lock:
+            assert self._engine is not None
+            return self._engine.stop_causal_scenario(run_id)
+
+    def causal_scenario_status(self) -> list[dict]:
+        self.ensure_started()
+        with self._lock:
+            assert self._engine is not None
+            return self._engine.causal_scenarios.developer_status(include_hidden=True)
+
     def status_extra(self) -> dict[str, Any]:
         return {
             "embedded": True,

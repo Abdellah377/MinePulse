@@ -9,7 +9,7 @@ from app.ai.contracts import EvidenceItem, EvidenceKind, EvidenceRequest
 from app.ai.tools.operational import _evidence
 from app.db.models import Equipment
 from app.oem import queries
-from app.oem.connectivity import fleet_connectivity
+from app.oem.connectivity import fleet_connectivity, ping_diagram
 from app.services.operational.context import OperationalContext
 
 
@@ -47,6 +47,31 @@ def connectivity(session: Session, ctx: OperationalContext, request: EvidenceReq
                 notes="Equipment is not active at the investigation site or does not exist.",
             )
         rows = [row for row in rows if row["code"] == code]
+    else:
+        code = None
+    signal_history = None
+    ping_history = None
+    if code is not None:
+        raw_history = queries.get_equipment_signal_history(
+            session,
+            code,
+            since.isoformat(),
+            until.isoformat(),
+            ["communication_quality"],
+            site_id=ctx.site_id,
+            ctx=ctx,
+        )
+        signal_history = {
+            **{key: value for key, value in raw_history.items() if key != "points"},
+            "points": (raw_history.get("points") or [])[-60:],
+        }
+        ping_history = ping_diagram(
+            session,
+            code,
+            since,
+            until,
+            site_id=ctx.site_id,
+        )
     return _evidence(
         ctx,
         kind=EvidenceKind.DERIVED_METRIC,
@@ -55,7 +80,12 @@ def connectivity(session: Session, ctx: OperationalContext, request: EvidenceReq
         metric="oem_connectivity",
         value=rows,
         equipment_id=request.equipment_id,
-        metadata={"windowStart": since, "windowEnd": until},
+        metadata={
+            "windowStart": since,
+            "windowEnd": until,
+            "signalHistory": signal_history,
+            "pingTimeline": ping_history,
+        },
     )
 
 
@@ -81,6 +111,22 @@ def diagnostics(session: Session, ctx: OperationalContext, request: EvidenceRequ
         site_id=ctx.site_id,
         ctx=ctx,
     )
+    history = None
+    if code is not None:
+        raw_history = queries.get_equipment_signal_history(
+            session,
+            code,
+            since.isoformat(),
+            until.isoformat(),
+            params,
+            site_id=ctx.site_id,
+            ctx=ctx,
+        )
+        # Keep the LLM payload focused while preserving actual temporal order.
+        history = {
+            **{key: value for key, value in raw_history.items() if key != "points"},
+            "points": (raw_history.get("points") or [])[-60:],
+        }
     return _evidence(
         ctx,
         kind=EvidenceKind.DERIVED_METRIC,
@@ -89,7 +135,12 @@ def diagnostics(session: Session, ctx: OperationalContext, request: EvidenceRequ
         metric="oem_diagnostic_parameters",
         value=rows,
         equipment_id=request.equipment_id,
-        metadata={"windowStart": since, "windowEnd": until, "parameters": params},
+        metadata={
+            "windowStart": since,
+            "windowEnd": until,
+            "parameters": params,
+            "signalHistory": history,
+        },
     )
 
 
@@ -110,6 +161,21 @@ def errors(session: Session, ctx: OperationalContext, request: EvidenceRequest) 
         site_id=ctx.site_id,
         ctx=ctx,
     )
+    tyre_history = None
+    if code is not None:
+        raw_tyres = queries.get_tyre_history(
+            session,
+            code,
+            since.isoformat(),
+            until.isoformat(),
+            None,
+            site_id=ctx.site_id,
+            ctx=ctx,
+        )
+        tyre_history = {
+            **{key: value for key, value in raw_tyres.items() if key != "points"},
+            "points": (raw_tyres.get("points") or [])[-60:],
+        }
     return _evidence(
         ctx,
         kind=EvidenceKind.FACT,
@@ -118,7 +184,11 @@ def errors(session: Session, ctx: OperationalContext, request: EvidenceRequest) 
         metric="oem_error_codes",
         value=rows,
         equipment_id=request.equipment_id,
-        metadata={"windowStart": since, "windowEnd": until},
+        metadata={
+            "windowStart": since,
+            "windowEnd": until,
+            "tyreHistory": tyre_history,
+        },
     )
 
 

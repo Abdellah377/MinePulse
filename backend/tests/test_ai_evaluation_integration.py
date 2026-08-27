@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import math
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
 
 from ai_eval.cases import EVALUATION_CASES
 from ai_eval.runner import run_evaluation
 from app.ai.persistence import get_investigation
 from app.db.database import SessionLocal
+from app.db.models import Equipment, EquipmentTelemetry
 
 
 requires_integration = pytest.mark.skipif(
@@ -59,3 +62,54 @@ def test_one_persisted_case_against_configured_real_provider():
         report = run_evaluation(session, "clear_equipment_failure", real_llm=True)
     assert report.pipeline_correct
     assert report.reasoning_mode == "REAL_LLM"
+
+
+@pytest.mark.ai_eval
+@requires_integration
+def test_causal_scenario_persists_observable_evidence_before_evaluation():
+    """Opt-in setup uses simulator; investigation still uses only DB/services."""
+    from simulator.engine import SimulationEngine
+
+    with SessionLocal() as session:
+        try:
+            engine = SimulationEngine(session)
+        except RuntimeError as exc:
+            pytest.skip(f"simulator seed is unavailable: {exc}")
+        equipment = session.scalar(select(Equipment).where(Equipment.code == "TRK-001"))
+        if equipment is None:
+            pytest.skip("TRK-001 is not seeded")
+        run_status = engine.activate_causal_scenario(
+            "lubrication_degradation",
+            "TRK-001",
+            seed=2026,
+        )
+        run = engine.causal_scenarios.active[run_status["run_id"]]
+        engine.start()
+        ticks = math.ceil(run.duration_sec / (engine.cfg.tick_seconds * engine.clock.speed)) + 3
+        for _ in range(ticks):
+            engine.tick()
+        engine.pause()
+        telemetry = session.scalars(
+            select(EquipmentTelemetry)
+            .where(
+                EquipmentTelemetry.equipment_id == equipment.equipment_id,
+                EquipmentTelemetry.ts >= run.started_at,
+            )
+            .order_by(EquipmentTelemetry.ts)
+        ).all()
+        oil_values = [float(row.oil_pressure_kpa) for row in telemetry if row.oil_pressure_kpa is not None]
+        assert len(oil_values) >= 3
+        assert oil_values[-1] < oil_values[0]
+
+        report = run_evaluation(session, "causal_lubrication_degradation")
+        assert report.pipeline_correct
+        assert report.quality_levels["LEVEL_1_INTEGRATION"] is True
+        assert report.quality_levels["LEVEL_3_ROOT_CAUSE_DIAGNOSIS"] is None
+        assert all(
+            item.source_service.startswith(("app.services.operational", "app.oem"))
+            for item in report.evidence
+            if item.available
+        )
+        serialized_trigger = report.trigger.model_dump_json().casefold()
+        assert "lubrication_degradation" not in serialized_trigger
+        assert "lubrication_system_degradation" not in serialized_trigger

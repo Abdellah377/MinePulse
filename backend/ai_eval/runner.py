@@ -80,11 +80,15 @@ def default_mock_provider(case: EvaluationCase) -> DeterministicEvaluationProvid
         concept = "equipment stop"
     else:
         profile = MockProfile.REQUEST_MORE_EVIDENCE
-        concept = (
-            "communication loss"
-            if case.trigger_type.value == "CONNECTIVITY_ISSUE"
-            else "mechanical failure"
-        )
+        concepts = {
+            "CONNECTIVITY_LOSS": "communication loss",
+            "COMMUNICATION_DEGRADATION": "communication degradation",
+            "LUBRICATION_DEGRADATION": "lubrication and oil-pressure degradation",
+            "COOLING_DEGRADATION": "cooling degradation and overheating",
+            "TYRE_DEGRADATION": "progressive tyre pressure degradation",
+            "OPERATIONAL_BOTTLENECK": "loader queue bottleneck",
+        }
+        concept = concepts.get(case.ground_truth.label.value, "mechanical failure")
     return DeterministicEvaluationProvider(
         profile=profile,
         concept=concept,
@@ -104,6 +108,30 @@ def report_from_result(
     reasoning_checks = [
         item for item in checks if item.category.value not in {"PIPELINE", "DATA_QUALITY"}
     ]
+    level_two_checks = [
+        item
+        for item in checks
+        if item.category.value
+        in {"EVIDENCE", "ROOT_CAUSE_SAFETY", "CONTRADICTIONS", "UNCERTAINTY", "RECOMMENDATION_SAFETY", "PROVENANCE"}
+    ]
+    level_three_checks = [
+        item
+        for item in checks
+        if item.category.value in {"GROUND_TRUTH_ALIGNMENT", "UNCERTAINTY", "DATA_QUALITY"}
+    ]
+    quality_levels = {
+        "LEVEL_1_INTEGRATION": bool(persisted_ok and result.error is None),
+        "LEVEL_2_EVIDENCE_REASONING": (
+            all(item.passed for item in level_two_checks)
+            if reasoning_mode == "REAL_LLM"
+            else None
+        ),
+        "LEVEL_3_ROOT_CAUSE_DIAGNOSIS": (
+            all(item.passed for item in level_three_checks)
+            if reasoning_mode == "REAL_LLM" and case.evaluation_level.value == "LEVEL_3_ROOT_CAUSE_DIAGNOSIS"
+            else None
+        ),
+    }
     return EvaluationReport(
         case_id=case.case_id,
         case_description=case.description,
@@ -156,6 +184,7 @@ def report_from_result(
             if reasoning_mode == "REAL_LLM"
             else "Mocked run validates pipeline behavior, not model diagnosis quality."
         ),
+        quality_levels=quality_levels,
     )
 
 

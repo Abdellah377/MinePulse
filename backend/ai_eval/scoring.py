@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import re
 import unicodedata
 
@@ -63,8 +63,86 @@ def _check(
 def _parse_operational_timestamp(value) -> datetime:
     if isinstance(value, (int, float)):
         seconds = value / 1000 if abs(value) > 10_000_000_000 else value
-        return datetime.fromtimestamp(seconds)
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _history_points(result: InvestigationResult) -> list[dict]:
+    points: list[dict] = []
+    for evidence in result.evidence:
+        if not evidence.available or not isinstance(evidence.metadata, dict):
+            continue
+        for key in ("signalHistory", "tyreHistory"):
+            history = evidence.metadata.get(key)
+            if isinstance(history, dict) and isinstance(history.get("points"), list):
+                points.extend(item for item in history["points"] if isinstance(item, dict))
+    return points
+
+
+def _incident_times(result: InvestigationResult) -> list[datetime]:
+    times: list[datetime] = []
+    for evidence in result.evidence:
+        if evidence.metric != "active_site_alerts" or not isinstance(evidence.value, list):
+            continue
+        for row in evidence.value:
+            if not isinstance(row, dict) or not row.get("createdAt"):
+                continue
+            target_equipment_id = result.trigger.equipment_id
+            if (
+                target_equipment_id is not None
+                and row.get("equipmentId") is not None
+                and row.get("equipmentId") != target_equipment_id
+            ):
+                continue
+            alert_type = str(row.get("alertType") or "").upper()
+            if any(token in alert_type for token in ("STOP", "LOSS", "DEGRADED", "BREAKDOWN")):
+                try:
+                    times.append(_parse_operational_timestamp(row["createdAt"]))
+                except (TypeError, ValueError):
+                    continue
+    return times
+
+
+def _temporal_check(case: EvaluationCase, result: InvestigationResult) -> tuple[bool, str]:
+    if not case.requires_temporal_evidence:
+        return True, "This case does not require a pre-incident sensor trend."
+    points = _history_points(result)
+    ordered: list[tuple[datetime, dict]] = []
+    for point in points:
+        try:
+            ordered.append((_parse_operational_timestamp(point["ts"]), point))
+        except (KeyError, TypeError, ValueError):
+            continue
+    ordered.sort(key=lambda item: item[0])
+    incident_times = _incident_times(result)
+    # Active alerts can contain older incidents for the same equipment. The
+    # investigation is anchored to the most recent incident at operational now.
+    incident_at = max(incident_times) if incident_times else None
+    if incident_at is not None:
+        ordered = [item for item in ordered if item[0] < incident_at]
+    if len(ordered) < 3 or incident_at is None or ordered[0][0] >= incident_at:
+        return False, "No adequate timestamped symptom series predates the operational incident."
+    values: list[float] = []
+    for _, point in ordered:
+        for key, raw in point.items():
+            if key == "ts" or raw is None:
+                continue
+            if any(pattern in key for pattern in case.temporal_signal_patterns):
+                try:
+                    values.append(float(raw))
+                    break
+                except (TypeError, ValueError):
+                    continue
+    if len(values) < 3 or case.temporal_direction is None:
+        return False, "Timestamped evidence does not contain enough expected signal values."
+    delta = values[-1] - values[0]
+    expected = delta > 0 if case.temporal_direction == "INCREASING" else delta < 0
+    return (
+        expected,
+        "Expected symptom trend predates the incident."
+        if expected
+        else f"Expected {case.temporal_direction.lower()} trend was not observed.",
+    )
 
 
 def cited_evidence_ids(result: InvestigationResult) -> set[str]:
@@ -113,6 +191,57 @@ def detect_data_quality_warnings(result: InvestigationResult) -> list[str]:
                     warnings.append(
                         "Overlapping equipment-state intervals for "
                         f"{equipment}: {previous[2]} and {current[2]}."
+                    )
+    points = _history_points(result)
+    timestamped: list[tuple[datetime, dict]] = []
+    for point in points:
+        try:
+            timestamped.append((_parse_operational_timestamp(point["ts"]), point))
+        except (KeyError, TypeError, ValueError):
+            warnings.append("Malformed timestamp in OEM temporal evidence.")
+    incident_times = _incident_times(result)
+    if incident_times:
+        incident_at = max(incident_times)
+        recent_start = incident_at - timedelta(minutes=30)
+        timestamped = [
+            item for item in timestamped if recent_start <= item[0] <= incident_at
+        ]
+    for previous, current in zip(timestamped, timestamped[1:]):
+        if current[0] <= previous[0]:
+            warnings.append("OEM temporal evidence contains duplicate or backwards timestamps.")
+        jump_limits = {
+            "oil_pressure_kpa": 120.0,
+            "engine_temp_c": 15.0,
+            "coolant_temp_c": 15.0,
+            "communication_quality": 35.0,
+        }
+        for key, limit in jump_limits.items():
+            left, right = previous[1].get(key), current[1].get(key)
+            if left is not None and right is not None and abs(float(right) - float(left)) > limit:
+                warnings.append(f"Unrealistic abrupt telemetry jump for {key}.")
+    seen_alerts: dict[str, dict] = {}
+    for evidence in result.evidence:
+        if evidence.metric == "active_site_alerts" and isinstance(evidence.value, list):
+            for row in evidence.value:
+                if not isinstance(row, dict) or row.get("alertId") is None:
+                    continue
+                key = str(row["alertId"])
+                previous = seen_alerts.get(key)
+                if previous is not None and previous != row:
+                    warnings.append(f"Conflicting duplicate alert record {key}.")
+                seen_alerts[key] = row
+        if evidence.metric == "oem_error_codes" and isinstance(evidence.value, list) and incident_times:
+            incident_at = min(incident_times)
+            for row in evidence.value:
+                if not isinstance(row, dict) or not row.get("firstOccurrence"):
+                    continue
+                try:
+                    warning_at = _parse_operational_timestamp(row["firstOccurrence"])
+                except (TypeError, ValueError):
+                    continue
+                if warning_at > incident_at:
+                    warnings.append(
+                        "OEM warning occurs after the incident and cannot establish its original cause."
                     )
     return list(dict.fromkeys(warnings))
 
@@ -284,6 +413,16 @@ def evaluate_result(
         )
     )
 
+    temporal_ok, temporal_message = _temporal_check(case, result)
+    checks.append(
+        _check(
+            "symptom_trend_predates_incident",
+            CheckCategory.DATA_QUALITY,
+            temporal_ok,
+            temporal_message,
+        )
+    )
+
     recommendation = result.recommendation
     recommendation_text = (
         f"{recommendation.description} {recommendation.rationale}" if recommendation else ""
@@ -324,6 +463,9 @@ def evaluate_result(
     )
 
     warnings = detect_data_quality_warnings(result)
+    temporal_points_available = bool(_history_points(result))
+    if case.requires_temporal_evidence and temporal_points_available and not temporal_ok:
+        warnings.append(f"Temporal scenario evidence is inconsistent: {temporal_message}")
     checks.append(
         _check(
             "operational_data_is_internally_consistent",
@@ -346,7 +488,9 @@ def evaluate_result(
             outcome = EvaluationOutcome.INTEGRATION_FAILURE
     elif warnings:
         outcome = EvaluationOutcome.DATA_QUALITY_WARNING
-    elif missing_tools or missing_kinds or any(
+    elif missing_tools or missing_kinds or (
+        case.requires_temporal_evidence and not temporal_points_available
+    ) or any(
         item.status in {EvidenceStatus.UNAVAILABLE, EvidenceStatus.ERROR}
         and item.source_tool in case.expected_evidence_tools
         for item in result.evidence

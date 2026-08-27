@@ -15,6 +15,11 @@ runtime isolation assertion before LangGraph is called.
 - `clear_equipment_failure` resolves `EXC-002` and evaluates a persisted breakdown.
 - `connectivity_loss` resolves `TRK-004` and evaluates communication/telemetry loss.
 - `ambiguous_stop` resolves `TRK-012` and expects an appropriately inconclusive result.
+- `causal_lubrication_degradation` evaluates a pre-stop oil-pressure/thermal trend.
+- `causal_cooling_degradation` evaluates a pre-stop engine/coolant trend.
+- `causal_tyre_degradation` evaluates tyre threshold evidence before a safe stop.
+- `causal_communication_degradation` evaluates degraded link quality/gaps without a mechanical claim.
+- `causal_loader_bottleneck` evaluates a non-mechanical cross-fleet loading bottleneck.
 
 The equipment codes are setup locators only. The graph receives resolved normal
 database IDs and does not know a simulator scenario name.
@@ -58,6 +63,16 @@ test additionally requires `--run-ai`; it is skipped otherwise.
 - Simulator-driven preparation is optional and outside production AI. If the
   simulator is removed, only its data-preparation/catalog setup needs replacing;
   the evaluator runner and production graph continue to use persisted data.
+
+Reports expose three distinct quality levels:
+
+- `LEVEL_1_INTEGRATION`: did the persisted operational path and graph execute?
+- `LEVEL_2_EVIDENCE_REASONING`: did a real model use valid evidence and uncertainty safely?
+- `LEVEL_3_ROOT_CAUSE_DIAGNOSIS`: did a real model align with isolated hidden truth using credible temporal evidence?
+
+Mocked-provider runs score Level 1 only. Levels 2 and 3 are reported as
+`NOT_SCORED`, even when scripted checks pass. See `CAUSAL_SCENARIOS.md` for data
+preparation and demo commands.
 
 Reports distinguish provider failures, application/integration failures,
 missing operational data, contradictory/data-quality warnings, and reasoning

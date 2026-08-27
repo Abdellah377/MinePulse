@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
 
 from app.ai.contracts import EvidenceRequest, EvidenceRequestType, EvidenceStatus
-from app.ai.tools import operational
+from app.ai.tools import oem, operational
 from app.ai.tools.registry import EvidenceToolRegistry
 from app.db.models import Shift, Site
 from app.services.operational.context import OperationalContext
@@ -116,3 +116,38 @@ def test_unexpected_service_exception_is_logged_and_safely_classified(monkeypatc
     record = next(record for record in caplog.records if record.message == "AI evidence service failed")
     assert record.tool_name == "downtime"
     assert record.request_id == request.request_id
+
+
+def test_oem_diagnostics_reuses_existing_history_service_for_temporal_evidence(monkeypatch):
+    monkeypatch.setattr(oem, "_equipment_code", lambda session, ctx, equipment_id: "TRK-001")
+    monkeypatch.setattr(
+        oem.queries,
+        "diagnostic_parameters",
+        lambda *args, **kwargs: [{"parameterKey": "oil_pressure_kpa", "min": 180}],
+    )
+    called = []
+
+    def fake_history(*args, **kwargs):
+        called.append((args, kwargs))
+        return {
+            "code": "TRK-001",
+            "points": [
+                {"ts": "2026-08-24T09:00:00+00:00", "oil_pressure_kpa": 410},
+                {"ts": "2026-08-24T10:00:00+00:00", "oil_pressure_kpa": 180},
+            ],
+        }
+
+    monkeypatch.setattr(oem.queries, "get_equipment_signal_history", fake_history)
+    request = EvidenceRequest(
+        request_type=EvidenceRequestType.OEM_DIAGNOSTICS,
+        equipment_id=7,
+        parameters=["oil_pressure_kpa"],
+        reason="Inspect the pre-stop trend.",
+    )
+
+    evidence = oem.diagnostics(object(), _context(), request)
+
+    assert called
+    assert evidence.source_service == "app.oem.queries.diagnostic_parameters"
+    assert evidence.metadata["signalHistory"]["points"][0]["oil_pressure_kpa"] == 410
+    assert "scenario" not in evidence.model_dump_json().casefold()

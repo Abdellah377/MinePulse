@@ -58,6 +58,9 @@ class DeterministicEvaluationProvider:
             EvidenceRequestType.OEM_MAINTENANCE_INDICATORS: "oem_maintenance_indicators",
             EvidenceRequestType.OEM_CONNECTIVITY: "oem_connectivity",
             EvidenceRequestType.EQUIPMENT_TIMELINE: "equipment_timeline",
+            EvidenceRequestType.OEM_DIAGNOSTICS: "oem_diagnostics",
+            EvidenceRequestType.OEM_ERRORS: "oem_errors",
+            EvidenceRequestType.ASSIGNMENTS: "assignments",
         }.get(self.request_type)
         if preferred_tool:
             preferred = [item for item in evidence if item.get("source_tool") == preferred_tool]

@@ -23,6 +23,17 @@ class GroundTruthLabel(str, Enum):
     MECHANICAL_FAILURE = "MECHANICAL_FAILURE"
     CONNECTIVITY_LOSS = "CONNECTIVITY_LOSS"
     UNEXPLAINED_STOP = "UNEXPLAINED_STOP"
+    LUBRICATION_DEGRADATION = "LUBRICATION_DEGRADATION"
+    COOLING_DEGRADATION = "COOLING_DEGRADATION"
+    TYRE_DEGRADATION = "TYRE_DEGRADATION"
+    COMMUNICATION_DEGRADATION = "COMMUNICATION_DEGRADATION"
+    OPERATIONAL_BOTTLENECK = "OPERATIONAL_BOTTLENECK"
+
+
+class EvaluationLevel(str, Enum):
+    INTEGRATION = "LEVEL_1_INTEGRATION"
+    EVIDENCE_REASONING = "LEVEL_2_EVIDENCE_REASONING"
+    ROOT_CAUSE_DIAGNOSIS = "LEVEL_3_ROOT_CAUSE_DIAGNOSIS"
 
 
 class EvaluationOutcome(str, Enum):
@@ -71,6 +82,10 @@ class EvaluationCase(EvaluationModel):
     expected_confidence: ConfidenceLevel | None = None
     inconclusive_acceptable: bool = False
     mock_request_type: EvidenceRequestType | None = None
+    evaluation_level: EvaluationLevel = EvaluationLevel.EVIDENCE_REASONING
+    requires_temporal_evidence: bool = False
+    temporal_signal_patterns: list[str] = Field(default_factory=list)
+    temporal_direction: str | None = Field(default=None, pattern=r"^(INCREASING|DECREASING)$")
 
 
 class EvaluationCheck(EvaluationModel):
@@ -118,3 +133,4 @@ class EvaluationReport(EvaluationModel):
     data_quality_warnings: list[str] = Field(default_factory=list)
     failure_stage: str | None = None
     human_review_notes: str | None = None
+    quality_levels: dict[str, bool | None] = Field(default_factory=dict)

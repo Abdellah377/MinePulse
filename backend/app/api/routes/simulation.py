@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.enums import AlertSource, AlertStatus
 from app.db.models import Alert, Equipment, EquipmentState as EquipmentStateRow, HaulRoad, Site, SystemEvent, Zone
-from app.schemas.simulation import InjectBody, ModeBody, ScenarioBody, SpeedBody
+from app.schemas.simulation import CausalScenarioStartBody, InjectBody, ModeBody, ScenarioBody, SpeedBody
 from fastapi import Depends
 from simulator.commands import (
     SimulationCommand,
@@ -25,6 +25,7 @@ from simulator.commands import (
     load_all_commands,
     read_event_log,
 )
+from simulator.causal_scenarios import scenario_catalog
 from simulator.control import (
     VALID_SPEEDS,
     patch_control_mode,
@@ -81,6 +82,7 @@ def simulation_status():
             **_heartbeat_status(),
             "runtime": {
                 "injections": snap.get("injections", []),
+                "causal_scenarios": snap.get("causal_scenarios", []),
                 "zone_queues": {
                     k: {"queue": v.get("queue", []), "occupants": v.get("occupants", []), "capacity": v.get("capacity")}
                     for k, v in (snap.get("zones") or {}).items()
@@ -142,6 +144,38 @@ def set_scenario(body: ScenarioBody):
 
     write_control(control)
     return _with_note(control)
+
+
+@router.get("/causal-scenarios")
+def list_causal_scenarios():
+    """Developer-only catalog/status; it is not an operational or AI API."""
+    return {
+        "catalog": scenario_catalog(include_hidden=True),
+        "active": get_simulation_service().causal_scenario_status(),
+    }
+
+
+@router.post("/causal-scenarios/{scenario_id}/start")
+def start_causal_scenario(scenario_id: str, body: CausalScenarioStartBody):
+    try:
+        run = get_simulation_service().activate_causal_scenario(
+            scenario_id,
+            body.target_id,
+            duration_min=body.duration_min,
+            seed=body.seed,
+        )
+        return {"ok": True, "run": run}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.delete("/causal-scenarios/{run_id}")
+def stop_causal_scenario(run_id: str):
+    try:
+        run = get_simulation_service().stop_causal_scenario(run_id)
+        return {"ok": True, "run": run}
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.get("/speeds")

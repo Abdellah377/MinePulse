@@ -231,6 +231,126 @@ def test_data_quality_overlap_is_classified_separately():
 
 
 @pytest.mark.ai_eval
+def test_causal_case_scores_timestamped_preincident_trend():
+    incident_at = NOW.replace(hour=6, minute=10)
+    evidence = [
+        EvidenceItem(
+            evidence_id="ev-fact",
+            kind="FACT",
+            source_tool="site_alerts",
+            source_service="app.services.operational.alerts.list_site_alerts",
+            metric="active_site_alerts",
+            value=[
+                {
+                    "alertId": 9,
+                    "createdAt": NOW.replace(hour=5, minute=50).isoformat(),
+                    "alertType": "EQUIPMENT_MECHANICAL_STOP",
+                },
+                {
+                    "alertId": 10,
+                    "createdAt": incident_at.isoformat(),
+                    "alertType": "EQUIPMENT_MECHANICAL_STOP",
+                }
+            ],
+        ),
+        EvidenceItem(
+            evidence_id="ev-metric",
+            kind="DERIVED_METRIC",
+            source_tool="fleet_snapshot",
+            source_service="app.services.operational.equipment.build_fleet_bulk_context",
+            metric="fleet_snapshot",
+            value=[{"code": "TRK-001", "currentState": "STOPPED_MECHANICAL"}],
+        ),
+        EvidenceItem(
+            evidence_id="ev-diag",
+            kind="DERIVED_METRIC",
+            source_tool="oem_diagnostics",
+            source_service="app.oem.queries.diagnostic_parameters",
+            metric="oem_diagnostic_parameters",
+            value=[{"parameterKey": "oil_pressure_kpa", "min": 140, "max": 410}],
+            metadata={
+                "signalHistory": {
+                    "points": [
+                        {"ts": NOW.replace(hour=6, minute=1).isoformat(), "oil_pressure_kpa": 410},
+                        {"ts": NOW.replace(hour=6, minute=4).isoformat(), "oil_pressure_kpa": 330},
+                        {"ts": NOW.replace(hour=6, minute=7).isoformat(), "oil_pressure_kpa": 220},
+                    ]
+                }
+            },
+        ),
+    ]
+    result = _result(
+        statement="Lubrication and oil pressure degradation preceded the stop.",
+        reliable=True,
+        citation="ev-diag",
+        evidence=evidence,
+        status=InvestigationStatus.COMPLETED,
+    )
+    checks, warnings, outcome = evaluate_result(
+        get_case("causal_lubrication_degradation"), result
+    )
+    assert next(c for c in checks if c.check_id == "symptom_trend_predates_incident").passed
+    assert not warnings
+    assert outcome == EvaluationOutcome.PASS
+
+
+@pytest.mark.ai_eval
+def test_causal_case_reports_wrong_temporal_direction_as_data_quality():
+    evidence = [
+        EvidenceItem(
+            evidence_id="ev-fact",
+            kind="FACT",
+            source_tool="site_alerts",
+            source_service="app.services.operational.alerts.list_site_alerts",
+            metric="active_site_alerts",
+            value=[
+                {
+                    "createdAt": NOW.replace(hour=6, minute=10).isoformat(),
+                    "alertType": "EQUIPMENT_MECHANICAL_STOP",
+                }
+            ],
+        ),
+        EvidenceItem(
+            evidence_id="ev-metric",
+            kind="DERIVED_METRIC",
+            source_tool="fleet_snapshot",
+            source_service="app.services.operational.equipment.build_fleet_bulk_context",
+            metric="fleet_snapshot",
+            value=[],
+        ),
+        EvidenceItem(
+            evidence_id="ev-diag",
+            kind="DERIVED_METRIC",
+            source_tool="oem_diagnostics",
+            source_service="app.oem.queries.diagnostic_parameters",
+            metric="oem_diagnostic_parameters",
+            value=[],
+            metadata={
+                "signalHistory": {
+                    "points": [
+                        {"ts": NOW.replace(hour=6, minute=1).isoformat(), "oil_pressure_kpa": 200},
+                        {"ts": NOW.replace(hour=6, minute=3).isoformat(), "oil_pressure_kpa": 300},
+                        {"ts": NOW.replace(hour=6, minute=5).isoformat(), "oil_pressure_kpa": 410},
+                    ]
+                }
+            },
+        ),
+    ]
+    result = _result(
+        statement="Lubrication degradation preceded the stop.",
+        reliable=True,
+        citation="ev-diag",
+        evidence=evidence,
+        status=InvestigationStatus.COMPLETED,
+    )
+    _, warnings, outcome = evaluate_result(
+        get_case("causal_lubrication_degradation"), result
+    )
+    assert any("Temporal scenario evidence" in warning for warning in warnings)
+    assert outcome == EvaluationOutcome.DATA_QUALITY_WARNING
+
+
+@pytest.mark.ai_eval
 def test_provider_failure_has_its_own_classification():
     result = _result(
         status=InvestigationStatus.FAILED,
@@ -314,6 +434,8 @@ def test_report_is_json_serializable_and_contains_trace():
     assert restored == report
     assert report.evidence[0].source_service.startswith("app.services.operational")
     assert report.hypotheses and report.conclusion and report.recommendation
+    assert report.quality_levels["LEVEL_1_INTEGRATION"] is True
+    assert report.quality_levels["LEVEL_2_EVIDENCE_REASONING"] is None
 
 
 @pytest.mark.ai_eval
@@ -334,8 +456,15 @@ def test_production_ai_has_no_simulator_import_and_eval_does_not_leak_back():
 
 
 def test_case_catalog_contains_three_control_conditions():
-    assert set(EVALUATION_CASES) == {
+    assert {
         "clear_equipment_failure",
         "connectivity_loss",
         "ambiguous_stop",
-    }
+    }.issubset(EVALUATION_CASES)
+    assert {
+        "causal_lubrication_degradation",
+        "causal_cooling_degradation",
+        "causal_tyre_degradation",
+        "causal_communication_degradation",
+        "causal_loader_bottleneck",
+    }.issubset(EVALUATION_CASES)

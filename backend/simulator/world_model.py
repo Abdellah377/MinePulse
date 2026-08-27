@@ -118,13 +118,23 @@ class SimulationWorld(SimWorld):
                 return r
         return None
 
-    def write_runtime_snapshot(self, sim_now: datetime, status: str, speed: float) -> None:
+    def write_runtime_snapshot(
+        self,
+        sim_now: datetime,
+        status: str,
+        speed: float,
+        *,
+        causal_scenarios: list[dict[str, Any]] | None = None,
+    ) -> None:
         payload = {
             "sim_now": sim_now.isoformat(),
             "status": status,
             "speed": speed,
             "mode": self.mode,
             "injections": [asdict(i) for i in self.injections.values()],
+            # Simulator/developer status only. Operational APIs and AI evidence
+            # never read this runtime file.
+            "causal_scenarios": causal_scenarios or [],
             "zones": {
                 c: {
                     "capacity": z.capacity,

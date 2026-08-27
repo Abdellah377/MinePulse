@@ -30,6 +30,7 @@ from app.db.models import (
 )
 from app.oem.schema import ensure_oem_schema
 from simulator.apply_commands import CommandContext, process_equipment_commands, process_pending_commands
+from simulator.causal_scenarios import CausalScenarioManager, ObservableTransition, SCENARIO_SPECS
 from simulator.clock import SimClock, get_sim_logger
 from simulator.commands import clear_commands, clear_event_log, load_all_commands
 from simulator.config import SimConfig
@@ -68,6 +69,7 @@ class SimulationEngine:
         self.session = session
         self.cfg = cfg or SimConfig()
         self.world = SimulationWorld(self.cfg)
+        self.causal_scenarios = CausalScenarioManager()
         control = read_control()
         sim_now = datetime.fromisoformat(control["sim_now"])
         if sim_now.tzinfo is None:
@@ -115,10 +117,37 @@ class SimulationEngine:
         trucks = [(e.equipment_id, e.code) for e in all_equip if e.type == EquipmentType.HAUL_TRUCK]
         centroids = {c: z.centroid for c, z in self.zones_geom.items()}
         self.world.load_trucks(trucks, self.cfg.random_seed, centroids)
+        self._hydrate_truck_telemetry()
         self._boot_world_runtime(all_equip)
         for truck in self.world.trucks.values():
             self._bind_road(truck)
         self._ensure_assignments()
+
+    def _hydrate_truck_telemetry(self) -> None:
+        """Continue persisted sensor values across simulator process restarts."""
+        for truck in self.world.trucks.values():
+            latest = self.session.scalar(
+                select(EquipmentTelemetry)
+                .where(EquipmentTelemetry.equipment_id == truck.equipment_id)
+                .order_by(EquipmentTelemetry.ts.desc())
+                .limit(1)
+            )
+            if latest is None:
+                continue
+            mappings = {
+                "fuel_pct": "fuel_level_pct",
+                "engine_temp_c": "engine_temp_c",
+                "coolant_temp_c": "coolant_temp_c",
+                "oil_pressure_kpa": "oil_pressure_kpa",
+                "battery_voltage": "battery_voltage",
+                "communication_quality": "communication_quality",
+                "engine_hours": "engine_hours",
+                "odometer_km": "odometer_km",
+            }
+            for runtime_name, column_name in mappings.items():
+                value = getattr(latest, column_name, None)
+                if value is not None:
+                    setattr(truck, runtime_name, float(value))
 
     def _boot_world_runtime(self, all_equip) -> None:
         # Zones
@@ -251,7 +280,12 @@ class SimulationEngine:
                 "note": "Simulateur intégré à l'API — contrôlez depuis le Centre de simulation.",
             }
         )
-        self.world.write_runtime_snapshot(self.clock.sim_now, self.clock.status, self.clock.speed)
+        self.world.write_runtime_snapshot(
+            self.clock.sim_now,
+            self.clock.status,
+            self.clock.speed,
+            causal_scenarios=self.causal_scenarios.developer_status(include_hidden=True),
+        )
 
     def _ensure_assignments(self) -> None:
         operators = list(self.session.scalars(select(Operator).order_by(Operator.operator_id)).all())
@@ -378,6 +412,12 @@ class SimulationEngine:
             self.session.commit()
             self._persist_control()
             return
+
+        # Causal scenarios progress independently of legacy/manual fault
+        # injection. They mutate normal runtime signals; only resulting
+        # operational records are persisted below.
+        causal_transitions = self.causal_scenarios.step(self.world, self.clock.sim_now)
+        self._persist_causal_transitions(causal_transitions)
 
         # Auto scenarios only outside MANUAL mode
         if self.world.mode != "MANUAL":
@@ -592,6 +632,7 @@ class SimulationEngine:
         ]
         if not values:
             return
+
         stmt = pg_insert(TyreTelemetry).values(values)
         self.session.execute(
             stmt.on_conflict_do_update(
@@ -829,6 +870,46 @@ class SimulationEngine:
         self.clock.start()
         self._persist_control()
 
+    def _persist_causal_transitions(
+        self,
+        transitions: list[ObservableTransition],
+    ) -> None:
+        for transition in transitions:
+            if transition.stage.value != "INCIDENT":
+                continue
+            equipment_id = self.equip_id_by_code.get(transition.target_id)
+            emit_system_event(
+                self.session,
+                transition.occurred_at,
+                transition.event_kind,
+                equipment_id,
+                transition.description or transition.title or transition.event_kind,
+            )
+            if transition.alert_type:
+                severity = AlertSeverity[transition.severity or "WARNING"]
+                emit_fms_alert(
+                    self.session,
+                    transition.occurred_at,
+                    transition.alert_type,
+                    transition.title or transition.alert_type,
+                    transition.description or "Operational condition requires review.",
+                    equipment_id,
+                    severity=severity,
+                )
+            if transition.maintenance_required and equipment_id:
+                self.session.add(
+                    MaintenanceEvent(
+                        equipment_id=equipment_id,
+                        type="UNPLANNED_STOP",
+                        component=None,
+                        description="Unplanned stop pending inspection and diagnosis.",
+                        start_time=transition.occurred_at,
+                        severity=AlertSeverity.CRITICAL,
+                        status="OPEN",
+                        planned=False,
+                    )
+                )
+
     def pause(self) -> None:
         self.clock.pause()
         self._persist_control()
@@ -838,6 +919,7 @@ class SimulationEngine:
         self._persist_control()
 
     def reset(self) -> None:
+        self.causal_scenarios.reset(self.world)
         self._clear_dynamic_data()
         self.world.clear_scenario_memory()
         clear_commands()
@@ -851,6 +933,55 @@ class SimulationEngine:
         self._persist_control()
         self._boot()
         self.world.log_test(self.clock.sim_now, "Simulation reset", "SYSTEM", None)
+
+    def activate_causal_scenario(
+        self,
+        scenario_id: str,
+        target_id: str,
+        *,
+        duration_min: float | None = None,
+        seed: int | None = None,
+    ) -> dict:
+        try:
+            spec = SCENARIO_SPECS[scenario_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown causal scenario: {scenario_id}") from exc
+        min_duration_min = 8.0 * self.cfg.tick_seconds * self.clock.speed / 60.0
+        effective_duration = duration_min
+        if effective_duration is None:
+            effective_duration = max(spec.default_duration_min, min_duration_min)
+        elif effective_duration < min_duration_min:
+            raise ValueError(
+                "duration_min is too short for the current simulation speed; "
+                f"use at least {min_duration_min:.1f} simulated minutes"
+            )
+        run = self.causal_scenarios.activate(
+            self.world,
+            scenario_id,
+            target_id,
+            self.clock.sim_now,
+            duration_min=effective_duration,
+            seed=self.cfg.random_seed if seed is None else seed,
+        )
+        self._persist_control()
+        self.world.log_test(
+            self.clock.sim_now,
+            f"Causal scenario {scenario_id} activated for {target_id}",
+            "EQUIPMENT",
+            target_id,
+        )
+        return run.developer_status(include_hidden=True)
+
+    def stop_causal_scenario(self, run_id: str) -> dict:
+        run = self.causal_scenarios.stop(self.world, run_id)
+        self._persist_control()
+        self.world.log_test(
+            self.clock.sim_now,
+            f"Causal scenario stopped for {run.target_id}",
+            "EQUIPMENT",
+            run.target_id,
+        )
+        return run.developer_status(include_hidden=True)
 
     def _clear_dynamic_data(self) -> None:
         tables = [

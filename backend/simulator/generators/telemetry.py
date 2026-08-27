@@ -99,15 +99,26 @@ def build_telemetry(truck: TruckRuntime) -> dict:
         target_temp = 82.0 + load_pct * 0.18 + (8.0 if is_moving else 0.0)
         if truck.high_engine_temp:
             target_temp = max(target_temp, 108.0)
+        if truck.scenario_engine_temp_target is not None:
+            target_temp = max(target_temp, truck.scenario_engine_temp_target)
         truck.engine_temp_c += (target_temp - truck.engine_temp_c) * 0.12 + jitter
-        truck.coolant_temp_c += (target_temp - 6.0 - truck.coolant_temp_c) * 0.1 + jitter * 0.5
+        coolant_target = target_temp - 6.0
+        if truck.scenario_coolant_temp_target is not None:
+            coolant_target = max(coolant_target, truck.scenario_coolant_temp_target)
+        truck.coolant_temp_c += (coolant_target - truck.coolant_temp_c) * 0.1 + jitter * 0.5
         oil_target = 380.0 if truck.low_oil_pressure else 420.0 + load_pct * 0.8
         if truck.low_oil_pressure:
             oil_target = 140.0
+        if truck.scenario_oil_pressure_target is not None:
+            oil_target = min(oil_target, truck.scenario_oil_pressure_target)
         truck.oil_pressure_kpa += (oil_target - truck.oil_pressure_kpa) * 0.2
         batt_target = 23.0 if truck.battery_low else 27.4
         truck.battery_voltage += (batt_target - truck.battery_voltage) * 0.15
-        truck.communication_quality = max(40.0, min(99.0, 94.0 + truck.rng.uniform(-3, 3)))
+        comm_target = 94.0 + truck.rng.uniform(-3, 3)
+        if truck.scenario_comm_quality_target is not None:
+            comm_target = min(comm_target, truck.scenario_comm_quality_target)
+        truck.communication_quality += (comm_target - truck.communication_quality) * 0.35
+        truck.communication_quality = max(0.0, min(99.0, truck.communication_quality))
     else:
         truck.engine_temp_c += (28.0 - truck.engine_temp_c) * 0.04
         truck.coolant_temp_c += (24.0 - truck.coolant_temp_c) * 0.04

@@ -14,6 +14,11 @@ def format_report(report: EvaluationReport) -> str:
         f"PROVIDER/MODEL: {report.provider or 'unknown'} / {report.model or 'unknown'}",
         f"STATUS: {report.status}; ITERATIONS: {report.iteration_count}",
         f"PIPELINE: {'PASS' if report.pipeline_correct else 'FAIL'}",
+        "QUALITY LEVELS: "
+        + ", ".join(
+            f"{name}={'NOT_SCORED' if value is None else 'PASS' if value else 'FAIL'}"
+            for name, value in report.quality_levels.items()
+        ),
         (
             "REASONING CHECKS: "
             f"{report.reasoning_checks_passed}/{report.reasoning_checks_total} "
