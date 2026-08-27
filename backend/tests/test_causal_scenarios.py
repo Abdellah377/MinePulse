@@ -16,9 +16,12 @@ from simulator.causal_scenarios import (
     CausalScenarioManager,
     CausalStage,
     SCENARIO_SPECS,
+    causal_plan_for_sabotage,
     scenario_catalog,
     validate_trace,
 )
+from simulator.apply_commands import CommandContext, _apply_command
+from simulator.commands import SimulationCommand
 from simulator.generators.telemetry import build_telemetry
 from simulator.generators.tyres import tyre_rows
 from simulator.loaders import LoaderRuntime
@@ -29,7 +32,7 @@ NOW = datetime(2026, 1, 29, 6, 0, tzinfo=timezone.utc)
 
 
 def _world() -> SimpleNamespace:
-    return SimpleNamespace(
+    world = SimpleNamespace(
         trucks={
             f"TRK-{index:03d}": TruckRuntime(
                 code=f"TRK-{index:03d}",
@@ -42,6 +45,14 @@ def _world() -> SimpleNamespace:
             "EXC-001": LoaderRuntime(code="EXC-001", equipment_id=101),
         },
     )
+    world.injections = {}
+    world.ground_truth = []
+    world.add_injection = lambda injection: world.injections.update(
+        {injection.injection_id: injection}
+    )
+    world.log_test = lambda *_args, **_kwargs: None
+    world.log_sim = lambda *_args, **_kwargs: None
+    return world
 
 
 def _times(run) -> list[datetime]:
@@ -66,6 +77,9 @@ def _complete(manager: CausalScenarioManager, world, run):
         ("tyre_degradation", "TRK-003"),
         ("communication_degradation", "TRK-004"),
         ("loader_bottleneck", "EXC-001"),
+        ("fuel_efficiency_degradation", "TRK-001"),
+        ("ambiguous_stop", "TRK-002"),
+        ("ambiguous_mechanical_degradation", "TRK-003"),
     ],
 )
 def test_all_causal_scenarios_progress_through_warning_before_incident(
@@ -215,14 +229,119 @@ def test_production_ai_still_has_no_simulator_imports():
                 assert not (node.module or "").startswith("simulator")
 
 
-def test_scenario_catalog_has_five_high_value_cases():
+def test_scenario_catalog_contains_diagnostic_and_manual_sabotage_profiles():
     assert set(SCENARIO_SPECS) == {
         "lubrication_degradation",
         "cooling_degradation",
         "tyre_degradation",
         "communication_degradation",
         "loader_bottleneck",
+        "fuel_efficiency_degradation",
+        "ambiguous_stop",
+        "ambiguous_mechanical_degradation",
     }
+
+
+def test_manual_sabotage_profile_selection_is_varied_and_reproducible():
+    first = causal_plan_for_sabotage("MECHANICAL_BREAKDOWN", "TRUCK", seed=5)
+    replay = causal_plan_for_sabotage("MECHANICAL_BREAKDOWN", "TRUCK", seed=5)
+    profiles = {
+        causal_plan_for_sabotage("MECHANICAL_BREAKDOWN", "TRUCK", seed=seed)
+        for seed in (1, 5, 8, 9)
+    }
+
+    assert first == replay
+    assert len(profiles) == 4
+    assert causal_plan_for_sabotage("MECHANICAL_BREAKDOWN", "LOADER", seed=5) is None
+
+
+def _command_context(world, manager):
+    return CommandContext(
+        world=world,
+        session=SimpleNamespace(),
+        sim_now=NOW,
+        open_states={},
+        equip_id_by_code={code: truck.equipment_id for code, truck in world.trucks.items()},
+        zone_id_by_code={},
+        site_id=1,
+        causal_scenarios=manager,
+        causal_min_duration_min=1.0,
+        causal_tick_sim_sec=30.0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_scenario", "final_flag"),
+    [
+        ("MECHANICAL_BREAKDOWN", "lubrication_degradation", "mechanical_hold"),
+        ("COMMUNICATION_LOSS", "communication_degradation", "comm_lost"),
+        ("FUEL_RATE_HIGH", "fuel_efficiency_degradation", None),
+        ("STOP_UNDEFINED", "ambiguous_stop", "unexplained_hold"),
+    ],
+)
+def test_existing_sabotage_command_starts_progression_before_final_condition(
+    action,
+    expected_scenario,
+    final_flag,
+):
+    world = _world()
+    manager = CausalScenarioManager()
+    parameters = {"seed": 1}
+    if action == "MECHANICAL_BREAKDOWN":
+        parameters["profile"] = "lubrication"
+    command = SimulationCommand.create(
+        target_type="EQUIPMENT",
+        target_id="TRK-001",
+        action=action,
+        parameters=parameters,
+    )
+
+    injection = _apply_command(_command_context(world, manager), command)
+    truck = world.trucks["TRK-001"]
+    run = next(iter(manager.active.values()))
+
+    assert injection is not None
+    assert run.scenario_id == expected_scenario
+    assert run.progress == 0
+    if final_flag:
+        assert getattr(truck, final_flag) is False
+    _complete(manager, world, run)
+    if final_flag:
+        assert getattr(truck, final_flag) is True
+    else:
+        assert truck.fuel_rate_factor > 2.0
+
+
+def test_manual_sabotage_immediate_mode_retains_legacy_switch(monkeypatch):
+    from simulator import apply_commands
+
+    world = _world()
+    manager = CausalScenarioManager()
+    monkeypatch.setattr(apply_commands, "_persist_equipment_effects", lambda *_args: None)
+    command = SimulationCommand.create(
+        target_type="EQUIPMENT",
+        target_id="TRK-001",
+        action="MECHANICAL_BREAKDOWN",
+        parameters={"immediate": True},
+    )
+
+    _apply_command(_command_context(world, manager), command)
+
+    assert world.trucks["TRK-001"].mechanical_hold is True
+    assert manager.active == {}
+
+
+def test_undefined_stop_keeps_precursors_non_diagnostic():
+    world = _world()
+    manager = CausalScenarioManager()
+    run = manager.activate(world, "ambiguous_stop", "TRK-001", NOW, seed=19)
+    transitions = _complete(manager, world, run)
+
+    assert world.trucks["TRK-001"].unexplained_hold
+    assert transitions[-1].alert_type == "UNEXPLAINED_STOP"
+    assert "cause non confirmée" in (transitions[-1].description or "")
+    warning_sample = next(sample for sample in run.trace if sample.stage == CausalStage.WARNING)
+    assert warning_sample.ts < run.incident_at
 
 
 def test_manager_rejects_backwards_timestamps():
@@ -266,6 +385,6 @@ def test_causal_scenario_developer_api_exposes_lifecycle_without_operational_cou
     )
     stopped = client.delete("/api/simulation/causal-scenarios/causal-test")
 
-    assert catalog.status_code == 200 and len(catalog.json()["catalog"]) == 5
+    assert catalog.status_code == 200 and len(catalog.json()["catalog"]) == len(SCENARIO_SPECS)
     assert started.status_code == 200 and started.json()["run"]["run_id"] == "causal-test"
     assert stopped.status_code == 200 and stopped.json()["ok"] is True

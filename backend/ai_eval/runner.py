@@ -83,6 +83,7 @@ def default_mock_provider(case: EvaluationCase) -> DeterministicEvaluationProvid
         concepts = {
             "CONNECTIVITY_LOSS": "communication loss",
             "COMMUNICATION_DEGRADATION": "communication degradation",
+            "FUEL_EFFICIENCY_DEGRADATION": "fuel-efficiency degradation",
             "LUBRICATION_DEGRADATION": "lubrication and oil-pressure degradation",
             "COOLING_DEGRADATION": "cooling degradation and overheating",
             "TYRE_DEGRADATION": "progressive tyre pressure degradation",

@@ -2,7 +2,9 @@
 
 MinePulse keeps two simulator fault mechanisms for different jobs:
 
-- Instant injections remain available for UI, alert, resilience, and transport tests.
+- The normal diagnostic sabotage buttons start causal progression.
+- Instant injections remain available for UI, alert, resilience, and transport tests
+  by sending `parameters: {"immediate": true}`.
 - Causal scenarios create time-ordered symptoms for diagnostic evaluation. They
   progress from early degradation through measurable symptoms, warning,
   critical condition, and an incident.
@@ -31,10 +33,43 @@ duplicating them.
 | `tyre_degradation` | haul truck | one tyre loses pressure and heats, speed derates, OEM threshold event | safe stop |
 | `communication_degradation` | haul truck | link quality falls, intermittent telemetry gaps, connection loss | `NO_DATA`; never mechanical failure |
 | `loader_bottleneck` | loader/excavator | loading capacity falls, loading/wait/cycle effects spread across assigned trucks | persistent reduced capacity |
+| `fuel_efficiency_degradation` | haul truck | fuel rate rises with mild thermal, performance, and cycle effects | high-fuel-rate alert |
+| `ambiguous_stop` | haul truck | weak mixed precursors that do not establish a cause | undefined stop |
+| `ambiguous_mechanical_degradation` | haul truck | mixed weak engine/link/performance signals | generic mechanical stop with unconfirmed cause |
 
 Durations include small seeded variation. Sensor noise remains bounded and
 repeatable. The defaults reach an incident in roughly 7–10 simulated minutes,
 which is suitable for an accelerated demo.
+
+## Existing sabotage buttons
+
+The existing `/api/simulation/inject` workflow now maps truck diagnostic actions
+to the same causal manager:
+
+| Requested condition | Hidden profile selection |
+| --- | --- |
+| `MECHANICAL_BREAKDOWN` | seeded lubrication, cooling, ambiguous, or intentionally inconclusive mechanical profile |
+| `COMMUNICATION_LOSS`, `SENSOR_SIGNAL_LOSS` | communication degradation |
+| `HIGH_ENGINE_TEMPERATURE` | cooling degradation |
+| `LOW_OIL_PRESSURE` | lubrication degradation |
+| `TYRE_PRESSURE_LOW`, `TYRE_TEMPERATURE_HIGH` | tyre degradation |
+| `FUEL_RATE_HIGH` | fuel-efficiency degradation |
+| `STOP_UNDEFINED` | ambiguous stop |
+
+Loader breakdown, battery/low-fuel, engine-off, maintenance, refuel, zone, and
+road commands remain instant because the current causal catalog does not provide
+a credible matching progression. The old instant implementation remains
+available for every mapped action:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/api/simulation/inject `
+  -ContentType application/json `
+  -Body '{"target_type":"EQUIPMENT","target_id":"TRK-001","action":"MECHANICAL_BREAKDOWN","parameters":{"immediate":true}}'
+```
+
+For a reproducible causal run, pass a seed. Mechanical demonstrations may also
+pin `profile` to `lubrication`, `cooling`, `ambiguous`, or `inconclusive`.
 
 ## Run from the embedded simulator API
 
@@ -59,6 +94,19 @@ Invoke-RestMethod -Method Delete `
 At 30x simulation speed, an eight-minute scenario takes about 16 wall-clock
 seconds. Pause the simulator after the incident, then run the evaluation.
 
+The Simulation Centre buttons use the same endpoint and require no UI change.
+For a controlled mechanical demo, select `TRK-001`, click
+`MECHANICAL_BREAKDOWN`, watch telemetry/OEM events progress, then pause and run:
+
+```powershell
+python scripts/evaluate_ai.py --case causal_lubrication_degradation
+```
+
+To pin the matching lubrication profile, submit the same inject request with
+`"parameters":{"seed":42,"profile":"lubrication"}`. For fuel, click
+`FUEL_RATE_HIGH`; for communications, click `COMMUNICATION_LOSS`. Both follow
+the same gradual path and remain active until Restore unless a duration is set.
+
 ## Prepare evidence from the CLI
 
 From `backend/`:
@@ -81,6 +129,7 @@ to watch the progression in the UI.
 python scripts/evaluate_ai.py --case causal_lubrication_degradation
 python scripts/evaluate_ai.py --case causal_communication_degradation
 python scripts/evaluate_ai.py --case causal_loader_bottleneck
+python scripts/evaluate_ai.py --case causal_fuel_efficiency_degradation
 ```
 
 These commands use the deterministic provider and cost $0. They validate the
@@ -97,4 +146,3 @@ operational API, AI contract, graph state, tool, or prompt consumes it.
 
 Results from these scenarios validate behavior against simulated operational
 evidence only. They are not proof of production diagnostic accuracy.
-

@@ -67,7 +67,7 @@ EVALUATION_CASES: dict[str, EvaluationCase] = {
         ground_truth=EvaluationGroundTruth(
             label=GroundTruthLabel.UNEXPLAINED_STOP,
             summary="The equipment stopped, but the cause is not established.",
-            scenario_name="unexplained_stop",
+            scenario_name="ambiguous_stop",
         ),
         expected_evidence_tools=["fleet_snapshot", "site_alerts", "equipment_timeline"],
         expected_evidence_kinds=[EvidenceKind.FACT, EvidenceKind.DERIVED_METRIC],
@@ -187,6 +187,29 @@ EVALUATION_CASES: dict[str, EvaluationCase] = {
         mock_request_type=EvidenceRequestType.ASSIGNMENTS,
         evaluation_level=EvaluationLevel.ROOT_CAUSE_DIAGNOSIS,
         requires_temporal_evidence=False,
+    ),
+    "causal_fuel_efficiency_degradation": EvaluationCase(
+        case_id="causal_fuel_efficiency_degradation",
+        description="Fuel rate rises relative to load while performance and cycle behavior degrade.",
+        equipment_code="TRK-001",
+        trigger_type=TriggerType.MAINTENANCE_RISK,
+        ground_truth=EvaluationGroundTruth(
+            label=GroundTruthLabel.FUEL_EFFICIENCY_DEGRADATION,
+            summary="Fuel efficiency degraded progressively under comparable operating load.",
+            scenario_name="fuel_efficiency_degradation",
+            reviewer_notes="Accept a fuel-efficiency anomaly; reject an unsupported named component.",
+        ),
+        expected_evidence_tools=["fleet_snapshot", "cycle_performance", "oem_diagnostics"],
+        expected_evidence_kinds=[EvidenceKind.FACT, EvidenceKind.DERIVED_METRIC],
+        expected_concept_groups=[["fuel", "carburant", "consumption", "consommation"]],
+        forbidden_concepts=["injector failure confirmed", "fuel leak confirmed", "engine rebuild"],
+        expected_reliable_root_cause=True,
+        expected_confidence=ConfidenceLevel.HIGH,
+        mock_request_type=EvidenceRequestType.OEM_DIAGNOSTICS,
+        evaluation_level=EvaluationLevel.ROOT_CAUSE_DIAGNOSIS,
+        requires_temporal_evidence=True,
+        temporal_signal_patterns=["fuel_rate_lph"],
+        temporal_direction="INCREASING",
     ),
 }
 

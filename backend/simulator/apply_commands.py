@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hashlib
 from typing import Any
 from uuid import uuid4
 
@@ -11,6 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.db.enums import AlertSeverity
 from app.db.models import MaintenanceEvent
+from simulator.causal_scenarios import (
+    SCENARIO_SPECS,
+    CausalScenarioManager,
+    causal_plan_for_sabotage,
+)
 from simulator.command_registry import (
     apply_runtime,
     canonical_action,
@@ -34,6 +40,9 @@ class CommandContext:
     equip_id_by_code: dict[str, int]
     zone_id_by_code: dict[str, int]
     site_id: int
+    causal_scenarios: CausalScenarioManager | None = None
+    causal_min_duration_min: float = 1.0
+    causal_tick_sim_sec: float = 1.0
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -56,6 +65,96 @@ def _format_alert(spec, target_id: str) -> tuple[str, str]:
     title = spec.title_template.format(target=target_id)
     desc = spec.description_template.format(target=target_id)
     return title, desc
+
+
+def _causal_seed(cmd: SimulationCommand) -> int:
+    explicit = cmd.parameters.get("seed")
+    if explicit is not None:
+        return int(explicit)
+    digest = hashlib.sha256(cmd.command_id.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) & 0x7FFFFFFF
+
+
+def _start_causal_injection(
+    ctx: CommandContext,
+    cmd: SimulationCommand,
+    action: str,
+) -> ActiveInjection | None:
+    """Start diagnostic progression, or return None for an instant-only action."""
+    if ctx.causal_scenarios is None or bool(cmd.parameters.get("immediate", False)):
+        return None
+    seed = _causal_seed(cmd)
+    plan = causal_plan_for_sabotage(
+        action,
+        equipment_kind(cmd.target_id),
+        seed=seed,
+        requested_profile=cmd.parameters.get("profile"),
+    )
+    if plan is None:
+        return None
+
+    spec = SCENARIO_SPECS[plan.scenario_id]
+    requested_total_sec = float(cmd.duration_sec) if cmd.duration_sec is not None else None
+    requested_progression_min = cmd.parameters.get("progression_duration_min")
+    if requested_progression_min is not None:
+        progression_min = float(requested_progression_min)
+    elif requested_total_sec is not None:
+        progression_min = requested_total_sec * 0.75 / 60.0
+    else:
+        progression_min = spec.default_duration_min
+    progression_min = max(ctx.causal_min_duration_min, progression_min)
+    run = ctx.causal_scenarios.activate(
+        ctx.world,
+        plan.scenario_id,
+        cmd.target_id,
+        ctx.sim_now,
+        duration_min=progression_min,
+        seed=seed,
+        profile_variant=plan.profile_variant,
+    )
+
+    expires_at = None
+    if requested_total_sec is not None:
+        # Keep the requested final condition observable for at least two ticks.
+        effective_total_sec = max(
+            requested_total_sec,
+            run.duration_sec + 2.0 * ctx.causal_tick_sim_sec,
+        )
+        expires_at = (ctx.sim_now + timedelta(seconds=effective_total_sec)).isoformat()
+        cmd.expires_at = expires_at
+
+    cmd.original_state = {
+        "causal": True,
+        "causal_run_id": run.run_id,
+    }
+    cmd.status = "PERSISTED"
+    injection = ActiveInjection(
+        injection_id=str(uuid4()),
+        command_id=cmd.command_id,
+        target_type=cmd.target_type,
+        target_id=cmd.target_id,
+        action=action,
+        parameters={
+            "mode": "causal",
+            "run_id": run.run_id,
+        },
+        started_at=ctx.sim_now.isoformat(),
+        expires_at=expires_at,
+        ground_truth=(
+            f"{action} requested; hidden profile {plan.scenario_id}/"
+            f"{plan.profile_variant} on {cmd.target_id}"
+        ),
+        original_state=cmd.original_state,
+        alert_type=plan.final_alert_type,
+    )
+    ctx.world.add_injection(injection)
+    ctx.world.log_test(
+        ctx.sim_now,
+        f"{action} causal progression started on {cmd.target_id}",
+        cmd.target_type,
+        cmd.target_id,
+    )
+    return injection
 
 
 def _persist_equipment_effects(
@@ -204,6 +303,9 @@ def _apply_command(ctx: CommandContext, cmd: SimulationCommand) -> ActiveInjecti
         return None
 
     cmd.status = "VALIDATED"
+    causal_injection = _start_causal_injection(ctx, cmd, action)
+    if causal_injection is not None:
+        return causal_injection
     original = apply_runtime(ctx.world, cmd.target_type, tid, action, dict(cmd.parameters))
     cmd.original_state = original
 
@@ -240,7 +342,12 @@ def _apply_command(ctx: CommandContext, cmd: SimulationCommand) -> ActiveInjecti
 
 def _restore_injection(ctx: CommandContext, inj: ActiveInjection, reason: str) -> None:
     tid = inj.target_id
-    restore_runtime(ctx.world, inj.target_type, tid, inj.original_state or {})
+    causal_run_id = (inj.original_state or {}).get("causal_run_id")
+    if causal_run_id and ctx.causal_scenarios is not None:
+        if causal_run_id in ctx.causal_scenarios.active:
+            ctx.causal_scenarios.stop(ctx.world, causal_run_id)
+    else:
+        restore_runtime(ctx.world, inj.target_type, tid, inj.original_state or {})
 
     spec = get_spec(inj.action)
     if inj.target_type == "EQUIPMENT" and equipment_kind(tid) == "TRUCK":
@@ -306,6 +413,11 @@ def _restore_target(ctx: CommandContext, target_type: str, target_id: str) -> No
     for inj in to_remove:
         ctx.world.remove_injection(inj.injection_id)
         _restore_injection(ctx, inj, "manual restore")
+    if ctx.causal_scenarios is not None:
+        # Also restore scenarios started through the dedicated developer API.
+        for run in list(ctx.causal_scenarios.active.values()):
+            if run.target_id == target_id:
+                ctx.causal_scenarios.stop(ctx.world, run.run_id)
 
 
 def _restore_by_command(ctx: CommandContext, cmd: SimulationCommand) -> None:
@@ -380,7 +492,7 @@ def process_pending_commands(ctx: CommandContext) -> list[SimulationCommand]:
             _apply_command(ctx, cmd)
             cmd.status = "APPLIED"
             cmd.applied_at = ctx.sim_now.isoformat()
-            if cmd.duration_sec is not None:
+            if cmd.duration_sec is not None and not cmd.expires_at:
                 cmd.expires_at = (ctx.sim_now + timedelta(seconds=cmd.duration_sec)).isoformat()
             applied.append(cmd)
             changed = True

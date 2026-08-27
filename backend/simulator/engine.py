@@ -258,6 +258,7 @@ class SimulationEngine:
             truck.speed_kmh = 0
 
     def _command_ctx(self) -> CommandContext:
+        tick_sim_sec = self.cfg.tick_seconds * self.clock.speed
         return CommandContext(
             world=self.world,
             session=self.session,
@@ -266,6 +267,9 @@ class SimulationEngine:
             equip_id_by_code=self.equip_id_by_code,
             zone_id_by_code=self.zone_id_by_code,
             site_id=self.site_id or 0,
+            causal_scenarios=self.causal_scenarios,
+            causal_min_duration_min=8.0 * tick_sim_sec / 60.0,
+            causal_tick_sim_sec=tick_sim_sec,
         )
 
     def _persist_control(self) -> None:

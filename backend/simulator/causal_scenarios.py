@@ -37,6 +37,15 @@ class CausalScenarioSpec:
     final_behavior: str
 
 
+@dataclass(frozen=True)
+class CausalSabotagePlan:
+    """Simulator-only mapping from a requested test condition to a hidden profile."""
+
+    scenario_id: str
+    profile_variant: str
+    final_alert_type: str
+
+
 SCENARIO_SPECS: dict[str, CausalScenarioSpec] = {
     "lubrication_degradation": CausalScenarioSpec(
         scenario_id="lubrication_degradation",
@@ -83,7 +92,106 @@ SCENARIO_SPECS: dict[str, CausalScenarioSpec] = {
         observable_signals=("loading_duration", "queue_wait", "cycle_time", "production"),
         final_behavior="REDUCED_CAPACITY",
     ),
+    "fuel_efficiency_degradation": CausalScenarioSpec(
+        scenario_id="fuel_efficiency_degradation",
+        description="Progressive fuel-efficiency and load-response degradation",
+        target_kind="TRUCK",
+        hidden_root_cause="fuel_efficiency_degradation",
+        default_duration_min=8.0,
+        observable_signals=(
+            "fuel_rate_lph",
+            "engine_load_pct",
+            "engine_temp_c",
+            "cycle_time",
+        ),
+        final_behavior="HIGH_FUEL_RATE",
+    ),
+    "ambiguous_stop": CausalScenarioSpec(
+        scenario_id="ambiguous_stop",
+        description="Unexplained operational stop with weak, non-diagnostic precursors",
+        target_kind="TRUCK",
+        hidden_root_cause="unresolved_operational_stop",
+        default_duration_min=7.0,
+        observable_signals=("speed_kmh", "communication_quality", "engine_temp_c"),
+        final_behavior="UNDEFINED_STOP",
+    ),
+    "ambiguous_mechanical_degradation": CausalScenarioSpec(
+        scenario_id="ambiguous_mechanical_degradation",
+        description="Mixed weak degradation signals preceding a mechanical stop",
+        target_kind="TRUCK",
+        hidden_root_cause="unresolved_mechanical_degradation",
+        default_duration_min=8.0,
+        observable_signals=(
+            "oil_pressure_kpa",
+            "engine_temp_c",
+            "communication_quality",
+            "speed_kmh",
+        ),
+        final_behavior="MECHANICAL_STOP",
+    ),
 }
+
+
+_DIRECT_SABOTAGE_SCENARIOS: dict[str, tuple[str, str]] = {
+    "COMMUNICATION_LOSS": ("communication_degradation", "COMMUNICATION_LOSS"),
+    "HIGH_ENGINE_TEMPERATURE": ("cooling_degradation", "EQUIPMENT_MECHANICAL_STOP"),
+    "LOW_OIL_PRESSURE": ("lubrication_degradation", "EQUIPMENT_MECHANICAL_STOP"),
+    "TYRE_PRESSURE_LOW": ("tyre_degradation", "EQUIPMENT_SAFETY_STOP"),
+    "TYRE_TEMPERATURE_HIGH": ("tyre_degradation", "EQUIPMENT_SAFETY_STOP"),
+    "FUEL_RATE_HIGH": ("fuel_efficiency_degradation", "FUEL_CONSUMPTION_ANOMALY"),
+    "STOP_UNDEFINED": ("ambiguous_stop", "UNEXPLAINED_STOP"),
+    "SENSOR_SIGNAL_LOSS": ("communication_degradation", "COMMUNICATION_LOSS"),
+}
+
+
+def causal_plan_for_sabotage(
+    action: str,
+    target_kind: str,
+    *,
+    seed: int,
+    requested_profile: str | None = None,
+) -> CausalSabotagePlan | None:
+    """Resolve a manual sabotage into a reproducible hidden causal profile."""
+    action = action.upper()
+    if target_kind != "TRUCK":
+        return None
+    if action == "MECHANICAL_BREAKDOWN":
+        aliases = {
+            "lubrication": ("lubrication_degradation", "clear"),
+            "cooling": ("cooling_degradation", "clear"),
+            "ambiguous": ("ambiguous_mechanical_degradation", "ambiguous"),
+            "inconclusive": ("ambiguous_mechanical_degradation", "inconclusive"),
+        }
+        if requested_profile:
+            try:
+                scenario_id, variant = aliases[requested_profile.casefold()]
+            except KeyError as exc:
+                raise ValueError(
+                    "Mechanical profile must be lubrication, cooling, ambiguous, or inconclusive"
+                ) from exc
+        else:
+            # Ten stable slots: seven clear, two ambiguous, one intentionally
+            # inconclusive. Explicit seeds make tests and demos replayable.
+            scenario_id, variant = (
+                [("lubrication_degradation", "clear")] * 4
+                + [("cooling_degradation", "clear")] * 3
+                + [("ambiguous_mechanical_degradation", "ambiguous")] * 2
+                + [("ambiguous_mechanical_degradation", "inconclusive")]
+            )[seed % 10]
+        return CausalSabotagePlan(
+            scenario_id=scenario_id,
+            profile_variant=variant,
+            final_alert_type="EQUIPMENT_MECHANICAL_STOP",
+        )
+    direct = _DIRECT_SABOTAGE_SCENARIOS.get(action)
+    if not direct:
+        return None
+    scenario_id, alert_type = direct
+    return CausalSabotagePlan(
+        scenario_id=scenario_id,
+        profile_variant="ambiguous" if action == "STOP_UNDEFINED" else "clear",
+        final_alert_type=alert_type,
+    )
 
 
 @dataclass(frozen=True)
@@ -133,8 +241,9 @@ class ActiveCausalScenario:
     started_at: datetime
     duration_sec: float
     seed: int
-    variability: dict[str, float]
+    variability: dict[str, Any]
     original_state: dict[str, Any]
+    profile_variant: str = "clear"
     stage: CausalStage | None = None
     progress: float = 0.0
     last_step_at: datetime | None = None
@@ -156,6 +265,7 @@ class ActiveCausalScenario:
         }
         if include_hidden:
             data["hidden_root_cause"] = self.hidden_root_cause
+            data["profile_variant"] = self.profile_variant
         return data
 
 
@@ -177,10 +287,12 @@ def _capture_truck(truck: TruckRuntime) -> dict[str, Any]:
         "pre_stop_phase": truck.pre_stop_phase.value if truck.pre_stop_phase else None,
         "speed_kmh": truck.speed_kmh,
         "mechanical_hold": truck.mechanical_hold,
+        "unexplained_hold": truck.unexplained_hold,
         "in_maintenance": truck.in_maintenance,
         "comm_lost": truck.comm_lost,
         "sensor_signal_loss": truck.sensor_signal_loss,
         "performance_factor": truck.performance_factor,
+        "fuel_rate_factor": truck.fuel_rate_factor,
         "scenario_oil_pressure_target": truck.scenario_oil_pressure_target,
         "scenario_engine_temp_target": truck.scenario_engine_temp_target,
         "scenario_coolant_temp_target": truck.scenario_coolant_temp_target,
@@ -215,6 +327,7 @@ class CausalScenarioManager:
         *,
         duration_min: float | None = None,
         seed: int = 42,
+        profile_variant: str = "clear",
     ) -> ActiveCausalScenario:
         try:
             spec = SCENARIO_SPECS[scenario_id]
@@ -246,6 +359,7 @@ class CausalScenarioManager:
             seed=seed,
             variability=variability,
             original_state=original,
+            profile_variant=profile_variant,
         )
         self.active[run.run_id] = run
         return run
@@ -364,6 +478,43 @@ class CausalScenarioManager:
             loader.mechanical_breakdown = False
             loader.capacity_factor = max(0.25, 1.0 - 0.75 * progress)
             loader.slow_loading = progress >= 0.25
+        elif run.scenario_id == "fuel_efficiency_degradation":
+            truck = entity
+            assert isinstance(truck, TruckRuntime)
+            truck.fuel_rate_factor = 1.0 + 1.25 * progress + bias["sensor_bias"]
+            truck.performance_factor = max(0.78, 1.0 - 0.22 * progress)
+            truck.scenario_engine_temp_target = 88.0 + 13.0 * progress + bias["thermal_bias"]
+            truck.scenario_coolant_temp_target = 82.0 + 10.0 * progress + bias["thermal_bias"]
+            truck.scenario_oil_pressure_target = 425.0 - 35.0 * progress + bias["pressure_bias"]
+        elif run.scenario_id == "ambiguous_stop":
+            truck = entity
+            assert isinstance(truck, TruckRuntime)
+            truck.performance_factor = max(0.86, 1.0 - 0.14 * progress)
+            truck.scenario_engine_temp_target = 87.0 + 6.0 * progress + bias["thermal_bias"]
+            truck.scenario_comm_quality_target = 96.0 - 14.0 * progress
+            if 0.55 <= progress < 0.82:
+                tick_index = int((sim_now - run.started_at).total_seconds() // 30)
+                truck.sensor_signal_loss = (tick_index + int(bias["gap_phase"])) % 5 == 0
+            else:
+                truck.sensor_signal_loss = False
+            if progress >= 0.92:
+                truck.pre_stop_phase = truck.pre_stop_phase or truck.phase
+                truck.unexplained_hold = True
+        elif run.scenario_id == "ambiguous_mechanical_degradation":
+            truck = entity
+            assert isinstance(truck, TruckRuntime)
+            strength = 0.55 if run.profile_variant == "inconclusive" else 1.0
+            truck.scenario_oil_pressure_target = (
+                425.0 - 88.0 * progress * strength + bias["pressure_bias"]
+            )
+            truck.scenario_engine_temp_target = (
+                88.0 + 12.0 * progress * strength + bias["thermal_bias"]
+            )
+            truck.scenario_comm_quality_target = 96.0 - 11.0 * progress * strength
+            truck.performance_factor = max(0.74, 1.0 - 0.26 * progress * strength)
+            if progress >= 0.92:
+                truck.pre_stop_phase = truck.pre_stop_phase or truck.phase
+                truck.mechanical_hold = True
 
     @staticmethod
     def _observable_values(
@@ -383,6 +534,7 @@ class CausalScenarioManager:
             "tyre_pressure_target_kpa": entity.scenario_tyre_pressure_target,
             "tyre_temp_target_c": entity.scenario_tyre_temp_target,
             "performance_factor": round(entity.performance_factor, 4),
+            "fuel_rate_factor": round(entity.fuel_rate_factor, 4),
             "telemetry_gap": entity.sensor_signal_loss or entity.comm_lost,
             "operational_state": entity.phase.value,
         }
@@ -433,6 +585,49 @@ class CausalScenarioManager:
                     severity="WARNING",
                 )
             ]
+        if run.scenario_id == "fuel_efficiency_degradation":
+            return [
+                ObservableTransition(
+                    run_id=run.run_id,
+                    target_id=run.target_id,
+                    occurred_at=sim_now,
+                    stage=stage,
+                    event_kind="FUEL_CONSUMPTION_ANOMALY",
+                    alert_type="FUEL_CONSUMPTION_ANOMALY",
+                    title=f"{run.target_id} consommation carburant anormale",
+                    description="Consommation élevée après une dégradation progressive du rendement opérationnel.",
+                    severity="WARNING",
+                )
+            ]
+        if run.scenario_id == "ambiguous_stop":
+            return [
+                ObservableTransition(
+                    run_id=run.run_id,
+                    target_id=run.target_id,
+                    occurred_at=sim_now,
+                    stage=stage,
+                    event_kind="UNEXPLAINED_STOP",
+                    alert_type="UNEXPLAINED_STOP",
+                    title=f"{run.target_id} arrêt non défini",
+                    description=f"{run.target_id} arrêté — cause non confirmée par les données disponibles.",
+                    severity="WARNING",
+                )
+            ]
+        if run.scenario_id == "ambiguous_mechanical_degradation":
+            return [
+                ObservableTransition(
+                    run_id=run.run_id,
+                    target_id=run.target_id,
+                    occurred_at=sim_now,
+                    stage=stage,
+                    event_kind="MECHANICAL_STOP",
+                    alert_type="EQUIPMENT_MECHANICAL_STOP",
+                    title=f"{run.target_id} arrêt mécanique",
+                    description=f"{run.target_id} immobilisé — cause précise non confirmée.",
+                    severity="CRITICAL",
+                    maintenance_required=True,
+                )
+            ]
         if run.scenario_id == "tyre_degradation":
             return [
                 ObservableTransition(
@@ -473,10 +668,12 @@ class CausalScenarioManager:
             entity.mechanical_breakdown = original["mechanical_breakdown"]
             return
         entity.mechanical_hold = original["mechanical_hold"]
+        entity.unexplained_hold = original.get("unexplained_hold", False)
         entity.in_maintenance = original["in_maintenance"]
         entity.comm_lost = original["comm_lost"]
         entity.sensor_signal_loss = original["sensor_signal_loss"]
         entity.performance_factor = original["performance_factor"]
+        entity.fuel_rate_factor = original.get("fuel_rate_factor", 1.0)
         entity.scenario_oil_pressure_target = original["scenario_oil_pressure_target"]
         entity.scenario_engine_temp_target = original["scenario_engine_temp_target"]
         entity.scenario_coolant_temp_target = original["scenario_coolant_temp_target"]

@@ -13,6 +13,8 @@ from ai_eval.runner import run_evaluation
 from app.ai.persistence import get_investigation
 from app.db.database import SessionLocal
 from app.db.models import Equipment, EquipmentTelemetry
+from simulator.apply_commands import _apply_command
+from simulator.commands import SimulationCommand
 
 
 requires_integration = pytest.mark.skipif(
@@ -78,17 +80,22 @@ def test_causal_scenario_persists_observable_evidence_before_evaluation():
         equipment = session.scalar(select(Equipment).where(Equipment.code == "TRK-001"))
         if equipment is None:
             pytest.skip("TRK-001 is not seeded")
-        run_status = engine.activate_causal_scenario(
-            "lubrication_degradation",
-            "TRK-001",
-            seed=2026,
+        command = SimulationCommand.create(
+            target_type="EQUIPMENT",
+            target_id="TRK-001",
+            action="MECHANICAL_BREAKDOWN",
+            parameters={"seed": 2026, "profile": "lubrication"},
         )
-        run = engine.causal_scenarios.active[run_status["run_id"]]
+        injection = _apply_command(engine._command_ctx(), command)
+        assert injection is not None
+        run = engine.causal_scenarios.active[injection.original_state["causal_run_id"]]
+        assert not engine.world.trucks["TRK-001"].mechanical_hold
         engine.start()
         ticks = math.ceil(run.duration_sec / (engine.cfg.tick_seconds * engine.clock.speed)) + 3
         for _ in range(ticks):
             engine.tick()
         engine.pause()
+        assert engine.world.trucks["TRK-001"].mechanical_hold
         telemetry = session.scalars(
             select(EquipmentTelemetry)
             .where(

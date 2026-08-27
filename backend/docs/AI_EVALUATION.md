@@ -20,6 +20,8 @@ runtime isolation assertion before LangGraph is called.
 - `causal_tyre_degradation` evaluates tyre threshold evidence before a safe stop.
 - `causal_communication_degradation` evaluates degraded link quality/gaps without a mechanical claim.
 - `causal_loader_bottleneck` evaluates a non-mechanical cross-fleet loading bottleneck.
+- `causal_fuel_efficiency_degradation` evaluates a rising fuel-rate trend with
+  related performance and cycle evidence.
 
 The equipment codes are setup locators only. The graph receives resolved normal
 database IDs and does not know a simulator scenario name.

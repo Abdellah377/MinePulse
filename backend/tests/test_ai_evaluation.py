@@ -467,4 +467,5 @@ def test_case_catalog_contains_three_control_conditions():
         "causal_tyre_degradation",
         "causal_communication_degradation",
         "causal_loader_bottleneck",
+        "causal_fuel_efficiency_degradation",
     }.issubset(EVALUATION_CASES)
