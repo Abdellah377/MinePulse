@@ -103,10 +103,14 @@ def list_site_alerts(
     *,
     active_only: bool = False,
 ) -> list[Alert]:
-    """Alerts tied to equipment or zones of this site. Unscoped rows are excluded."""
+    """Site-scoped alerts, including equipment/zone-linked legacy rows."""
     site_eq = select(Equipment.equipment_id).where(Equipment.site_id == site_id)
     site_zn = select(Zone.zone_id).where(Zone.site_id == site_id)
-    query = select(Alert).where(or_(Alert.equipment_id.in_(site_eq), Alert.zone_id.in_(site_zn)))
+    query = select(Alert).where(or_(
+        Alert.site_id == site_id,
+        Alert.equipment_id.in_(site_eq),
+        Alert.zone_id.in_(site_zn),
+    ))
     if active_only:
         query = query.where(Alert.status != AlertStatus.RESOLVED)
     return list(

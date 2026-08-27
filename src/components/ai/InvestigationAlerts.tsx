@@ -35,6 +35,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
   const entry = useInvestigationStore((s) => s.entries[key])
   const { lookup, start } = useInvestigationStore.getState()
   const result = entry?.result
+  const automaticInvestigation = result?.trigger.trigger_source === "AUTOMATIC_MONITORING"
   const conclusion = result?.conclusion
   const recommendation = result?.recommendation
   const equipment = ops.equipment.find((e) => e.id === selected?.equipmentId)
@@ -49,6 +50,13 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
 
   useEffect(() => { setSelectedId(tab?.context.alertId ?? null) }, [tab?.context.alertId])
   useEffect(() => { if (scope) void lookup(scope) }, [scope, lookup]) // Reads only; POST requires a click.
+  useEffect(() => {
+    // Automatic investigations execute outside this component. Polling is
+    // read-only and cannot duplicate an expensive POST on React rerenders.
+    if (!scope || result || busy) return
+    const timer = window.setInterval(() => void lookup(scope, true), 10_000)
+    return () => window.clearInterval(timer)
+  }, [scope, result, busy, lookup])
   useEffect(() => {
     if (tabId && alertId) patchTabContext(tabId, {
       alertId, investigationId: result?.investigation_id,
@@ -95,7 +103,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
     <main className="min-w-0 flex-1 overflow-y-auto border-r border-border bg-background p-4">
       {ops.apiPollError && <p role="alert" className="mb-3 text-xs text-danger">Données opérationnelles non actualisées.</p>}
       {selected ? <div className="mx-auto max-w-2xl space-y-4">
-        <header><div className="mb-1 flex flex-wrap gap-1.5"><Badge className={cn(SEVERITY_CONFIG[selected.severity].bg, SEVERITY_CONFIG[selected.severity].color, "border-transparent")}>{SEVERITY_CONFIG[selected.severity].label}</Badge><Badge variant="outline">{selected.category}</Badge><Badge variant="outline">En cours</Badge></div><h2 className="text-[16px] font-semibold text-foreground">{selected.title}</h2></header>
+        <header><div className="mb-1 flex flex-wrap gap-1.5"><Badge className={cn(SEVERITY_CONFIG[selected.severity].bg, SEVERITY_CONFIG[selected.severity].color, "border-transparent")}>{SEVERITY_CONFIG[selected.severity].label}</Badge><Badge variant="outline">{selected.category}</Badge><Badge variant="outline">En cours</Badge>{result && <Badge variant="outline">{automaticInvestigation ? "Monitoring automatique" : "Investigation manuelle"}</Badge>}</div><h2 className="text-[16px] font-semibold text-foreground">{selected.title}</h2></header>
         <Section title="Résumé"><p className="text-[12px] leading-relaxed text-muted">{selected.description}</p><dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]"><Fact label="Où" value={selectedZone?.name ?? selected.location ?? "—"} /><Fact label="Depuis" value={new Date(selected.createdAt).toLocaleString("fr-FR")} /><Fact label="Équipement" value={equipment?.code ?? "—"} mono /><Fact label="Confiance" value={confidence} /></dl></Section>
         <Section title="Pourquoi"><p className="text-[12px] font-medium text-foreground">{conclusion?.summary ?? `${investigationStatus(entry)} — cause non évaluée.`}</p>
           {conclusion && !conclusion.reliable_root_cause && <p className="mt-2 text-[11px] text-muted">Conclusion non fiable : aucune cause racine établie.</p>}

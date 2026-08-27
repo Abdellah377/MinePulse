@@ -82,6 +82,11 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     alert_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Nullable for legacy rows; site-level monitoring alerts have neither an
+    # equipment nor a zone and therefore need an explicit operational scope.
+    site_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("sites.site_id", ondelete="CASCADE"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(nullable=False)
     predicted_for: Mapped[datetime | None] = mapped_column()
     source: Mapped[AlertSource] = mapped_column(nullable=False)

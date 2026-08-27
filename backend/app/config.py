@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +37,27 @@ class Settings(BaseSettings):
     ai_provider_timeout_seconds: float = Field(default=45, ge=5, le=60)
     # Cumulative provider budget per invocation; frontend allows 180s including DB overhead.
     ai_investigation_llm_budget_seconds: float = Field(default=150, ge=10, le=150)
+
+    # Deterministic operational monitoring. Disabled by default so a developer
+    # cannot accidentally create paid investigations without opting in.
+    monitoring_enabled: bool = False
+    monitoring_interval_seconds: float = Field(default=30, ge=5, le=3600)
+    monitoring_investigation_cooldown_minutes: float = Field(default=15, ge=1, le=1440)
+    monitoring_unexpected_stop_minutes: float = Field(default=2, ge=0.5, le=1440)
+    monitoring_idle_threshold_minutes: float = Field(default=5, ge=1, le=1440)
+    monitoring_communication_quality_threshold: float = Field(default=60, ge=0, le=100)
+    monitoring_communication_critical_threshold: float = Field(default=30, ge=0, le=100)
+    monitoring_telemetry_stale_seconds: float = Field(default=120, ge=10, le=86400)
+    monitoring_production_deviation_pct: float = Field(default=20, ge=1, le=100)
+    monitoring_cycle_duration_multiplier: float = Field(default=1.5, ge=1.05, le=10)
+
+    @model_validator(mode="after")
+    def validate_monitoring_threshold_order(self) -> "Settings":
+        if self.monitoring_communication_critical_threshold > self.monitoring_communication_quality_threshold:
+            raise ValueError(
+                "MONITORING_COMMUNICATION_CRITICAL_THRESHOLD must not exceed the warning threshold"
+            )
+        return self
 
     @property
     def database_url(self) -> str:

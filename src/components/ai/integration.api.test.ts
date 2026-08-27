@@ -39,6 +39,16 @@ it("API Alertes IA renders backend LangGraph output and qualitative confidence",
   expect(html).toContain("max-w-[360px]")
   expect(html).toContain("max-w-[340px]")
 })
+it("labels persisted automatic monitoring results without starting a frontend investigation", () => {
+  mocks.entry = {
+    phase: "ready",
+    result: { ...result, trigger: { ...result.trigger, trigger_source: "AUTOMATIC_MONITORING" } },
+  }
+  const html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Monitoring automatique")
+  expect(mocks.start).not.toHaveBeenCalled()
+  expect(mocks.demo).not.toHaveBeenCalled()
+})
 it("render and rerender cannot create investigations; pending is not confidence zero", () => {
   const html = renderToStaticMarkup(createElement(AlertesIA))
   renderToStaticMarkup(createElement(AlertesIA))
