@@ -14,6 +14,7 @@ import { AiBlock, Fact, Section } from "./InvestigationLayout"
 import { CONFIDENCE_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
 import { SEVERITY_CONFIG } from "@/lib/status"
 import { cn } from "@/lib/utils"
+import { newestAlertsFirst } from "@/lib/alerts/order"
 
 /** Original three-column workspace; live data never passes through demo intelligence. */
 export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
@@ -24,7 +25,12 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
   const [selectedId, setSelectedId] = useState<string | null>(tab?.context.alertId ?? null)
   const [severity, setSeverity] = useState("all")
   const [zone, setZone] = useState("all")
-  const alerts = ops.alerts.filter((a) => (severity === "all" || a.severity === severity) && (zone === "all" || a.zoneId === zone))
+  const alerts = useMemo(
+    () => newestAlertsFirst(ops.alerts.filter(
+      (a) => (severity === "all" || a.severity === severity) && (zone === "all" || a.zoneId === zone)
+    )),
+    [ops.alerts, severity, zone],
+  )
   const selected = alerts.find((a) => a.id === selectedId) ?? alerts[0]
   const siteId = ops.sites.find((s) => s.id === ops.selectedSiteId)?.databaseId
   const shiftId = ops.shifts.find((s) => s.id === ops.selectedShiftId)?.databaseId

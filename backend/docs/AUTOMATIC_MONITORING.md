@@ -118,3 +118,26 @@ hourly actual/target rows and therefore waits for complete non-null rows.
 Neither `app.monitoring` nor `app.ai` imports simulator code. The simulator is
 only one source that writes the same persisted operational records a future FMS
 or OEM ingestion path will write.
+
+## Simulation reset and clock rules
+
+A reset of `MP-SIM-01` now removes only that site's dynamic operational rows,
+FMS alerts, monitoring-generated RULE alerts, automatic investigations, and
+manual investigations/recommendations explicitly linked to alerts being
+removed. Non-monitoring RULE alerts and records belonging to other sites are
+preserved. Predictions are not deleted because the current simulator and
+LangGraph V1 do not create them and they have no alert/run link.
+
+Simulation-mode operational timestamps use the operational clock consistently:
+
+- simulator FMS `Alert.created_at` uses simulation time;
+- detector `detected_at`, monitoring RULE `Alert.created_at`, and LangGraph
+  trigger `occurred_at` use the same operational timestamp;
+- monitoring cooldown metadata uses operational time so accelerated scenarios
+  behave consistently;
+- `AiInvestigation.created_at`/`updated_at` remain wall-clock UTC audit metadata.
+
+Reset increments an in-process monitoring generation before deleting data.
+Candidates from an older generation cannot write alerts, and an investigation
+that finishes after Reset has already committed is deleted as stale. Reset does
+not wait for a long provider call and the simulator remains paused afterward.

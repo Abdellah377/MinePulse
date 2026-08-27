@@ -10,9 +10,10 @@ from uuid import uuid4
 from app.ai.contracts import InvestigationStatus, Severity, TriggerSource, TriggerType
 from app.config import Settings
 from app.db.enums import AlertStatus
-from app.db.models import Alert, Site
+from app.db.models import AiInvestigation, Alert, Site
 from app.monitoring.contracts import MonitoringCandidate
 from app.monitoring.scheduler import MonitoringScheduler
+from app.monitoring.coordination import monitoring_reset_coordinator
 from app.monitoring.service import MonitoringService, _coalesce_existing_alert_findings
 
 NOW = datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc)
@@ -50,6 +51,7 @@ def _candidate(*, severity=Severity.WARNING):
 class FakeSession:
     def __init__(self):
         self.alerts: dict[int, Alert] = {}
+        self.investigations: dict[object, object] = {}
         self.next_id = 1
 
     def add(self, obj):
@@ -60,7 +62,18 @@ class FakeSession:
             self.alerts[obj.alert_id] = obj
 
     def get(self, model, pk):
-        return self.alerts.get(pk) if model is Alert else None
+        if model is Alert:
+            return self.alerts.get(pk)
+        if model is AiInvestigation:
+            return self.investigations.get(pk)
+        return None
+
+    def delete(self, obj):
+        if isinstance(obj, Alert):
+            self.alerts.pop(obj.alert_id, None)
+        else:
+            investigation_id = getattr(obj, "investigation_id", None)
+            self.investigations.pop(investigation_id, None)
 
     def commit(self):
         pass
@@ -166,7 +179,11 @@ def test_detector_failure_isolated_and_other_detector_continues(monkeypatch):
     service = MonitoringService(
         settings=_settings(), detectors=(broken, healthy), snapshot_builder=lambda *_: snapshot
     )
-    monkeypatch.setattr(service, "_process_candidate", lambda _session, candidate: processed.append(candidate) or True)
+    monkeypatch.setattr(
+        service,
+        "_process_candidate",
+        lambda _session, candidate, **_kwargs: processed.append(candidate) or True,
+    )
     counts = service.run_cycle(CycleSession())
     assert counts["errors"] == 1
     assert counts["investigations"] == 1
@@ -239,3 +256,53 @@ def test_monitoring_package_has_no_simulator_imports():
             if any(name == "simulator" or name.startswith("simulator.") for name in imported):
                 violations.append(str(path))
     assert violations == []
+
+
+def test_candidate_from_pre_reset_generation_cannot_recreate_alert(monkeypatch):
+    session = FakeSession()
+    monkeypatch.setattr(
+        "app.monitoring.service.list_site_alerts",
+        lambda *_args, **_kwargs: list(session.alerts.values()),
+    )
+    stale_generation = monitoring_reset_coordinator.cycle_token()
+    assert stale_generation is not None
+    with monitoring_reset_coordinator.reset_guard():
+        pass
+
+    service = MonitoringService(
+        settings=_settings(),
+        investigation_runner=lambda *_: (_ for _ in ()).throw(
+            AssertionError("stale candidate reached LangGraph")
+        ),
+    )
+    assert service._process_candidate(
+        session, _candidate(), generation=stale_generation
+    ) is False
+    assert session.alerts == {}
+
+
+def test_inflight_investigation_finishing_after_reset_is_discarded(monkeypatch):
+    session = FakeSession()
+    monkeypatch.setattr(
+        "app.monitoring.service.list_site_alerts",
+        lambda *_args, **_kwargs: list(session.alerts.values()),
+    )
+
+    def runner(_session, _trigger):
+        investigation_id = uuid4()
+        # Reset wins while the provider/graph is in flight: persisted alerts
+        # are cleaned, then a late graph result arrives from the old generation.
+        with monitoring_reset_coordinator.reset_guard():
+            session.alerts.clear()
+        row = SimpleNamespace(investigation_id=investigation_id)
+        session.investigations[investigation_id] = row
+        return SimpleNamespace(
+            investigation_id=investigation_id,
+            status=InvestigationStatus.COMPLETED,
+            completed_at=NOW,
+        )
+
+    service = MonitoringService(settings=_settings(), investigation_runner=runner)
+    assert service._process_candidate(session, _candidate()) is False
+    assert session.alerts == {}
+    assert session.investigations == {}

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -923,20 +923,23 @@ class SimulationEngine:
         self._persist_control()
 
     def reset(self) -> None:
-        self.causal_scenarios.reset(self.world)
-        self._clear_dynamic_data()
-        self.world.clear_scenario_memory()
-        clear_commands()
-        clear_event_log()
-        self.open_states.clear()
-        self.open_cycles.clear()
-        self.open_cycle_stages.clear()
-        self.open_trips.clear()
-        self._last_queue_log.clear()
-        self.clock.reset()
-        self._persist_control()
-        self._boot()
-        self.world.log_test(self.clock.sim_now, "Simulation reset", "SYSTEM", None)
+        from app.monitoring.coordination import monitoring_reset_coordinator
+
+        with monitoring_reset_coordinator.reset_guard():
+            self.causal_scenarios.reset(self.world)
+            self._clear_dynamic_data()
+            self.world.clear_scenario_memory()
+            clear_commands()
+            clear_event_log()
+            self.open_states.clear()
+            self.open_cycles.clear()
+            self.open_cycle_stages.clear()
+            self.open_trips.clear()
+            self._last_queue_log.clear()
+            self.clock.reset()
+            self._persist_control()
+            self._boot()
+            self.world.log_test(self.clock.sim_now, "Simulation reset", "SYSTEM", None)
 
     def activate_causal_scenario(
         self,
@@ -988,35 +991,8 @@ class SimulationEngine:
         return run.developer_status(include_hidden=True)
 
     def _clear_dynamic_data(self) -> None:
-        tables = [
-            "production_actuals",
-            "cycle_stages",
-            "cycles",
-            "trips",
-            "equipment_assignments",
-            "equipment_states",
-            "equipment_telemetry",
-            "tyre_telemetry",
-            "equipment_positions",
-            "fuel_events",
-            "maintenance_events",
-            "downtime_events",
-            "system_events",
-        ]
-        for t in tables:
-            self.session.execute(text(f"DELETE FROM {t}"))
-        self.session.execute(text("DELETE FROM alerts WHERE source = 'FMS'"))
-        # Restore equipment states
-        self.session.execute(
-            text(
-                """
-                UPDATE equipment SET current_state = CASE
-                    WHEN type = 'HAUL_TRUCK' THEN 'PARKED'::equipment_state
-                    ELSE 'STOPPED_OPERATIONAL'::equipment_state
-                END
-                WHERE site_id = (SELECT site_id FROM sites WHERE code = 'MP-SIM-01')
-                """
-            )
-        )
+        from simulator.reset_cleanup import clear_simulation_run_data
+
+        counts = clear_simulation_run_data(self.session)
         self.session.commit()
-        log.info("Dynamic simulation data cleared")
+        log.info("Dynamic simulation data cleared: %s", counts)

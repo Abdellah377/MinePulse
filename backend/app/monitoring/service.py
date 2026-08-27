@@ -16,6 +16,7 @@ from app.db.database import SessionLocal
 from app.db.enums import AlertSeverity, AlertSource, AlertStatus
 from app.db.models import AiInvestigation, Alert, Site
 from app.monitoring.contracts import MonitoringCandidate, MonitoringSnapshot
+from app.monitoring.coordination import monitoring_reset_coordinator
 from app.monitoring.detectors import DEFAULT_DETECTORS, Detector
 from app.services.operational.alerts import list_site_alerts
 from app.services.operational.context import get_operational_context
@@ -98,6 +99,11 @@ class MonitoringService:
             logger.debug("Operational monitoring is disabled")
             return counts
 
+        generation = monitoring_reset_coordinator.cycle_token()
+        if generation is None:
+            logger.info("Monitoring cycle skipped during operational reset")
+            return counts
+
         logger.info("Monitoring cycle started")
         sites = list(session.scalars(select(Site).where(Site.active.is_(True)).order_by(Site.site_id)).all())
         for site in sites:
@@ -135,7 +141,7 @@ class MonitoringService:
             counts["candidates"] += len(candidates)
             for candidate in candidates:
                 try:
-                    if self._process_candidate(session, candidate):
+                    if self._process_candidate(session, candidate, generation=generation):
                         counts["investigations"] += 1
                     else:
                         counts["deduplicated"] += 1
@@ -259,15 +265,28 @@ class MonitoringService:
         alert.metadata_ = metadata
         session.commit()
 
-    def _process_candidate(self, session: Session, candidate: MonitoringCandidate) -> bool:
-        alert = self._matching_alert(session, candidate) or self._create_alert(session, candidate)
-        if self._should_deduplicate(session, candidate, alert):
-            logger.info(
-                "Monitoring candidate deduplicated",
-                extra={"alert_id": alert.alert_id, "deduplication_key": candidate.deduplication_key},
-            )
+    def _process_candidate(
+        self,
+        session: Session,
+        candidate: MonitoringCandidate,
+        *,
+        generation: int | None = None,
+    ) -> bool:
+        token = monitoring_reset_coordinator.cycle_token() if generation is None else generation
+        if token is None:
             return False
-        self._mark_attempt(session, alert, candidate)
+        with monitoring_reset_coordinator.candidate_guard(token) as current:
+            if not current:
+                logger.info("Stale monitoring candidate discarded after reset")
+                return False
+            alert = self._matching_alert(session, candidate) or self._create_alert(session, candidate)
+            if self._should_deduplicate(session, candidate, alert):
+                logger.info(
+                    "Monitoring candidate deduplicated",
+                    extra={"alert_id": alert.alert_id, "deduplication_key": candidate.deduplication_key},
+                )
+                return False
+            self._mark_attempt(session, alert, candidate)
         trigger = InvestigationTrigger(
             trigger_type=candidate.trigger_type,
             trigger_source=TriggerSource.AUTOMATIC_MONITORING,
@@ -306,7 +325,18 @@ class MonitoringService:
                 extra={"alert_id": alert.alert_id if alert else None, "detector_id": candidate.detector_id},
             )
             raise
-        self._mark_result(session, alert.alert_id, result)
+        with monitoring_reset_coordinator.candidate_guard(token) as current:
+            if not current:
+                row = session.get(AiInvestigation, result.investigation_id)
+                if row is not None:
+                    session.delete(row)
+                    session.commit()
+                logger.info(
+                    "Late automatic investigation discarded after reset",
+                    extra={"investigation_id": str(result.investigation_id)},
+                )
+                return False
+            self._mark_result(session, alert.alert_id, result)
         logger.info(
             "Automatic investigation created",
             extra={"investigation_id": str(result.investigation_id), "alert_id": alert.alert_id},
