@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai.contracts import (
     ConfidenceLevel,
+    DiagnosisStatus,
     EvidenceKind,
     EvidenceRequestType,
     InvestigationTrigger,
@@ -80,6 +81,7 @@ class EvaluationCase(EvaluationModel):
     expected_concept_groups: list[list[str]] = Field(default_factory=list)
     forbidden_concepts: list[str] = Field(default_factory=list)
     expected_reliable_root_cause: bool | None = None
+    expected_diagnosis_status: DiagnosisStatus | None = None
     expected_confidence: ConfidenceLevel | None = None
     inconclusive_acceptable: bool = False
     mock_request_type: EvidenceRequestType | None = None

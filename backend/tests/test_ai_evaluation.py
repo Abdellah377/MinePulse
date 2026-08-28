@@ -16,6 +16,7 @@ from app.ai.contracts import (
     ConfidenceLevel,
     Contradiction,
     DiagnosisResult,
+    DiagnosisStatus,
     EvidenceItem,
     EvidenceKind,
     EvidenceRequestType,
@@ -53,6 +54,7 @@ def _result(
     *,
     statement: str = "The equipment stop remains unexplained.",
     reliable: bool = False,
+    diagnosis_status: DiagnosisStatus | None = None,
     citation: str = "ev-fact",
     status: InvestigationStatus = InvestigationStatus.COMPLETED_WITH_UNCERTAINTY,
     error: InvestigationError | None = None,
@@ -99,21 +101,26 @@ def _result(
             observed_at=NOW,
         ),
     ]
+    status_value = diagnosis_status or (
+        DiagnosisStatus.CONFIRMED if reliable else DiagnosisStatus.INCONCLUSIVE
+    )
+    has_cause = reliable or status_value == DiagnosisStatus.PROBABLE
     hypothesis = Hypothesis(
         hypothesis_id="hyp-1",
         statement=statement,
         supporting_evidence_ids=[citation],
-        confidence=ConfidenceLevel.HIGH if reliable else ConfidenceLevel.LOW,
+        confidence=ConfidenceLevel.HIGH if has_cause else ConfidenceLevel.LOW,
         rationale="Evaluation fixture rationale.",
     )
     conclusion = InvestigationConclusion(
         summary=statement,
-        root_cause=statement if reliable else None,
+        diagnosis_status=status_value,
+        root_cause=statement if has_cause else None,
         reliable_root_cause=reliable,
         observed_fact_evidence_ids=[citation],
         supported_hypothesis_ids=["hyp-1"],
-        unresolved_uncertainties=[] if reliable else ["Cause is not established."],
-        confidence=ConfidenceLevel.HIGH if reliable else ConfidenceLevel.LOW,
+        unresolved_uncertainties=[] if has_cause else ["Cause is not established."],
+        confidence=ConfidenceLevel.HIGH if has_cause else ConfidenceLevel.LOW,
     )
     recommendation = InvestigationRecommendation(
         action_type=RecommendationAction.VERIFY_OPERATIONAL_CONDITION,
@@ -185,6 +192,7 @@ def test_inconclusive_case_accepts_explicit_uncertainty():
     checks, warnings, outcome = evaluate_result(case, _result())
     assert not warnings
     assert next(c for c in checks if c.check_id == "expected_reliability").passed
+    assert next(c for c in checks if c.check_id == "expected_diagnosis_status").passed
     assert next(c for c in checks if c.check_id == "expected_confidence").passed
     assert outcome == EvaluationOutcome.PASS
 
@@ -281,10 +289,11 @@ def test_causal_case_scores_timestamped_preincident_trend():
     ]
     result = _result(
         statement="Lubrication and oil pressure degradation preceded the stop.",
-        reliable=True,
+        reliable=False,
+        diagnosis_status=DiagnosisStatus.PROBABLE,
         citation="ev-diag",
         evidence=evidence,
-        status=InvestigationStatus.COMPLETED,
+        status=InvestigationStatus.COMPLETED_WITH_UNCERTAINTY,
     )
     checks, warnings, outcome = evaluate_result(
         get_case("causal_lubrication_degradation"), result

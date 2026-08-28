@@ -6,6 +6,7 @@ from enum import Enum
 
 from app.ai.contracts import (
     ConfidenceLevel,
+    DiagnosisStatus,
     DiagnosisResult,
     EvidenceRequest,
     EvidenceRequestType,
@@ -144,8 +145,11 @@ class DeterministicEvaluationProvider:
                 if can_conclude
                 else f"A {self.concept} is observed, but available evidence is insufficient."
             ),
+            diagnosis_status=(
+                DiagnosisStatus.PROBABLE if can_conclude else DiagnosisStatus.INCONCLUSIVE
+            ),
             root_cause=self.concept if can_conclude else None,
-            reliable_root_cause=can_conclude,
+            reliable_root_cause=False,
             observed_fact_evidence_ids=fact_ids,
             derived_metric_evidence_ids=metric_ids,
             supported_hypothesis_ids=[hypothesis_id] if hypothesis_id else [],

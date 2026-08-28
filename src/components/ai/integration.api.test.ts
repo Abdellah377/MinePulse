@@ -35,7 +35,7 @@ it("API Alertes IA renders backend LangGraph output and qualitative confidence",
   expect(html).toContain(alert.title)
   expect(html).not.toContain("0%")
   expect(mocks.demo).not.toHaveBeenCalled()
-  for (const section of ["Résumé", "Pourquoi", "Preuves / signaux", "Impact", "Liens utiles", "Panel IA", "Cause probable", "Action immédiate suggérée", "Ouvrir l’équipement"]) expect(html).toContain(section)
+  for (const section of ["Résumé", "Pourquoi", "Preuves / signaux", "Impact", "Liens utiles", "Panel IA", "Cause non déterminée", "Action immédiate suggérée", "Ouvrir l’équipement"]) expect(html).toContain(section)
   expect(html).toContain("max-w-[360px]")
   expect(html).toContain("max-w-[340px]")
 })
@@ -90,10 +90,60 @@ it("failure leaves the live panel unavailable, not populated with pseudo-AI", ()
 })
 it("renders all lifecycle states distinctly and null evidence as unavailable", () => {
   expect(investigationStatus({ phase: "running" })).toBe("Analyse IA en cours")
-  expect(investigationStatus({ phase: "ready", result })).toContain("incertaine")
+  expect(investigationStatus({ phase: "ready", result })).toContain("non déterminée")
   expect(investigationStatus({ phase: "ready", result: { ...result, status: "FAILED" } })).toContain("échouée")
   expect(investigationStatus({ phase: "ready", result: { ...result, status: "PENDING" } })).toContain("en attente")
   const html = renderToStaticMarkup(createElement(InvestigationResultView, { result }))
   expect(html).toContain("Indisponible (UNAVAILABLE)")
+  expect(html).toContain("Cause non déterminée")
   expect(html).not.toContain("0 t")
+})
+
+it("renders CONFIRMED, PROBABLE, and INCONCLUSIVE labels without false confidence", () => {
+  const probable = {
+    ...result,
+    conclusion: {
+      ...result.conclusion!,
+      diagnosis_status: "PROBABLE" as const,
+      root_cause: "Dégradation liée à la lubrification",
+      reliable_root_cause: false,
+      summary: "The available evidence supports lubrication-related degradation.",
+      unresolved_uncertainties: ["The exact causal mechanism or failed component is not confirmed."],
+    },
+  }
+  mocks.entry = { phase: "ready", result: probable }
+  let html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Cause probable")
+  expect(html).toContain("Dégradation liée à la lubrification")
+  expect(html).toContain("not confirmed")
+  expect(html).not.toContain("Cause confirmée")
+  expect(html).not.toContain("Conclusion non fiable")
+  expect(html).not.toContain("Cause étayée")
+  const probableView = renderToStaticMarkup(createElement(InvestigationResultView, { result: probable }))
+  expect(probableView).toContain("Cause probable")
+  expect(probableView).not.toContain("Cause confirmée")
+  expect(probableView).not.toContain("Cause étayée")
+
+  const confirmed = {
+    ...result,
+    status: "COMPLETED" as const,
+    conclusion: {
+      ...result.conclusion!,
+      diagnosis_status: "CONFIRMED" as const,
+      root_cause: "Panne mécanique confirmée par diagnostic",
+      reliable_root_cause: true,
+      summary: "Authoritative evidence supports a mechanical fault.",
+      unresolved_uncertainties: [],
+    },
+  }
+  mocks.entry = { phase: "ready", result: confirmed }
+  html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Cause confirmée")
+  expect(html).toContain("Panne mécanique confirmée par diagnostic")
+  expect(html).not.toContain("Cause probable")
+
+  mocks.entry = { phase: "ready", result }
+  html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Cause non déterminée")
+  expect(html).toContain("preuve insuffisante")
 })

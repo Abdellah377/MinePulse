@@ -1,10 +1,23 @@
-from app.main import app
-from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from datetime import datetime, timezone
+from uuid import uuid4
 from unittest.mock import MagicMock
 
+from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
+
+from app.main import app
 from app.api.routes import ai
 from app.db.database import get_db
+from app.ai.contracts import (
+    ConfidenceLevel,
+    DiagnosisStatus,
+    InvestigationConclusion,
+    InvestigationResult,
+    InvestigationStatus,
+    InvestigationTrigger,
+    TriggerSource,
+    TriggerType,
+)
 from app.ai.llm.provider import ProviderConfigurationError
 from app.ai.persistence import InvestigationPersistenceError
 
@@ -48,5 +61,52 @@ def test_provider_configuration_and_persistence_failures_remain_distinct(monkeyp
             assert response.json()["detail"]["code"] == code
             assert str(error) not in response.text
         assert client.post("/api/ai/investigations", json={"site_id": 1}).status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_investigation_api_serializes_diagnosis_status(monkeypatch):
+    now = datetime(2026, 8, 28, 10, tzinfo=timezone.utc)
+    result = InvestigationResult(
+        investigation_id=uuid4(),
+        trigger=InvestigationTrigger(
+            trigger_type=TriggerType.EQUIPMENT_ANOMALY,
+            trigger_source=TriggerSource.AUTOMATIC_MONITORING,
+            source="monitoring:test",
+            site_id=1,
+            shift_id=2,
+        ),
+        conclusion=InvestigationConclusion(
+            summary="The available evidence supports the following as the best current explanation: lubrication degradation.",
+            diagnosis_status=DiagnosisStatus.PROBABLE,
+            root_cause="lubrication degradation",
+            reliable_root_cause=False,
+            confidence=ConfidenceLevel.MEDIUM,
+        ),
+        max_iterations=3,
+        status=InvestigationStatus.COMPLETED_WITH_UNCERTAINTY,
+        started_at=now,
+        completed_at=now,
+        graph_version="1.3.0",
+        provider="mock",
+        model="mock",
+    )
+    session = MagicMock()
+    app.dependency_overrides[get_db] = lambda: session
+    monkeypatch.setattr(ai, "run_investigation", MagicMock(return_value=result))
+    try:
+        response = TestClient(app).post(
+            "/api/ai/investigations",
+            json={
+                "site_id": 1,
+                "trigger_type": "EQUIPMENT_ANOMALY",
+                "trigger_source": "AUTOMATIC_MONITORING",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()["conclusion"]
+        assert payload["diagnosis_status"] == "PROBABLE"
+        assert payload["reliable_root_cause"] is False
+        assert payload["root_cause"] == "lubrication degradation"
     finally:
         app.dependency_overrides.pop(get_db, None)

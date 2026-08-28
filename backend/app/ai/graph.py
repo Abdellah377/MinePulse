@@ -17,7 +17,7 @@ from app.ai.routers import (
 )
 from app.ai.state import InvestigationState
 
-GRAPH_VERSION = "1.2.0"
+GRAPH_VERSION = "1.3.0"
 
 
 def build_investigation_graph(runtime: InvestigationRuntime):

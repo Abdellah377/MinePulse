@@ -6,10 +6,13 @@ from pydantic import ValidationError
 from app.ai.contracts import (
     EvidenceItem,
     EvidenceKind,
+    DiagnosisStatus,
+    InvestigationConclusion,
     InvestigationSubject,
     InvestigationTrigger,
     TriggerSource,
     TriggerType,
+    ConfidenceLevel,
 )
 
 
@@ -90,3 +93,24 @@ def test_unavailable_evidence_requires_null_not_synthetic_zero():
         available=False,
     )
     assert item.model_dump(mode="json")["value"] is None
+
+
+def test_investigation_conclusion_includes_three_state_diagnosis_status():
+    probable = InvestigationConclusion(
+        summary="Best-supported lubrication-related degradation.",
+        diagnosis_status=DiagnosisStatus.PROBABLE,
+        root_cause="Mechanical degradation consistent with a lubrication-related issue.",
+        reliable_root_cause=False,
+        confidence=ConfidenceLevel.MEDIUM,
+        unresolved_uncertainties=["Exact failed component is not confirmed."],
+    )
+    payload = probable.model_dump(mode="json")
+    assert payload["diagnosis_status"] == "PROBABLE"
+    assert payload["reliable_root_cause"] is False
+    restored = InvestigationConclusion.model_validate(payload)
+    assert restored.diagnosis_status is DiagnosisStatus.PROBABLE
+    assert restored.reliable_root_cause is False
+
+    default = InvestigationConclusion(summary="Unknown.", confidence=ConfidenceLevel.LOW)
+    assert default.diagnosis_status is DiagnosisStatus.INCONCLUSIVE
+    assert {item.value for item in DiagnosisStatus} == {"CONFIRMED", "PROBABLE", "INCONCLUSIVE"}

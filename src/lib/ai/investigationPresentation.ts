@@ -1,18 +1,28 @@
-import type { ConfidenceLevel, InvestigationError } from "@/lib/api/types/ai"
+import type { ConfidenceLevel, DiagnosisStatus, InvestigationError } from "@/lib/api/types/ai"
 import type { InvestigationEntry } from "@/lib/store/useInvestigationStore"
 
 export const CONFIDENCE_LABEL: Record<ConfidenceLevel, string> = { LOW: "Faible", MEDIUM: "Moyenne", HIGH: "Élevée" }
+
+export const DIAGNOSIS_STATUS_LABEL: Record<DiagnosisStatus, string> = {
+  CONFIRMED: "Cause confirmée",
+  PROBABLE: "Cause probable",
+  INCONCLUSIVE: "Cause non déterminée",
+}
 
 export function investigationStatus(entry?: InvestigationEntry): string {
   if (!entry || entry.phase === "absent") return "Analyse IA non lancée"
   if (entry.phase === "loading") return "Recherche d’une investigation existante…"
   if (entry.phase === "running") return "Analyse IA en cours"
   if (entry.phase === "error") return "Analyse indisponible"
+  if (entry.result?.status === "FAILED") return "Investigation échouée"
+  if (entry.result?.status === "PENDING") return "Investigation en attente"
+  const diagnosis = entry.result?.conclusion?.diagnosis_status
+  if (diagnosis === "CONFIRMED") return "Cause confirmée"
+  if (diagnosis === "PROBABLE") return "Cause probable — confirmation incomplète"
+  if (diagnosis === "INCONCLUSIVE") return "Cause non déterminée"
   switch (entry.result?.status) {
-    case "FAILED": return "Investigation échouée"
     case "COMPLETED_WITH_UNCERTAINTY": return "Données insuffisantes / conclusion incertaine"
     case "COMPLETED": return "Analyse terminée"
-    case "PENDING": return "Investigation en attente"
     default: return "Analyse IA en cours"
   }
 }

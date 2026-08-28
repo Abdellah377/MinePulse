@@ -65,6 +65,21 @@ _TEMPORAL_KEYS = {
     "lastObservedAt",
     "windowStart",
 }
+_OVERCONFIDENT_PHRASES = (
+    "confirming",
+    "confirmed diagnosis",
+    "confirmed the",
+    "confirms the",
+    "reliable root cause",
+    "reliability of the diagnosis",
+)
+_INSUFFICIENT_EVIDENCE_SUMMARY = (
+    "Available evidence is insufficient to determine a reliable root cause. "
+    "The observed operational condition requires further verification."
+)
+_PROBABLE_COMPONENT_UNCERTAINTY = (
+    "The exact causal mechanism or failed component is not confirmed."
+)
 
 
 def _as_aware_timestamp(value) -> datetime | None:
@@ -98,6 +113,20 @@ def _contains_preincident_timestamp(value, incident_at: datetime) -> bool:
         if isinstance(item, (dict, list)) and _contains_preincident_timestamp(item, incident_at):
             return True
     return False
+
+
+def _contains_overconfident_language(*texts: str) -> bool:
+    combined = " ".join(text for text in texts if text).casefold()
+    cleaned = (
+        combined.replace("not confirmed", " ")
+        .replace("unconfirmed", " ")
+        .replace("not reliable", " ")
+    )
+    return any(phrase in cleaned for phrase in _OVERCONFIDENT_PHRASES)
+
+
+def _merge_ids(existing: list[str], extra: list[str], allowed: set[str]) -> list[str]:
+    return list(dict.fromkeys(item for item in [*existing, *extra] if item in allowed))
 
 
 def _error(stage: str, exc: Exception, investigation_id: str) -> dict:
@@ -296,13 +325,10 @@ class InvestigationNodes:
         except Exception as exc:
             return _error("build_recommendation", exc, state["investigation_id"])
         conclusion = state["conclusion"]
-        uncertain = bool(
-            state["iteration_limit_reached"]
-            or conclusion is None
-            or not conclusion.reliable_root_cause
-            or conclusion.unresolved_uncertainties
+        status = (
+            conclusion.diagnosis_status if conclusion is not None else DiagnosisStatus.INCONCLUSIVE
         )
-        if uncertain:
+        if conclusion is None or status == DiagnosisStatus.INCONCLUSIVE:
             recommendation = recommendation.model_copy(
                 update={
                     "description": (
@@ -315,12 +341,27 @@ class InvestigationNodes:
                     ),
                 }
             )
+        elif status == DiagnosisStatus.PROBABLE and _contains_overconfident_language(
+            recommendation.description,
+            recommendation.rationale,
+        ):
+            recommendation = recommendation.model_copy(
+                update={
+                    "description": (
+                        "Verify the probable cause with an operator before any intervention."
+                    ),
+                    "rationale": (
+                        "The evidence supports a probable cause, but it is not confirmed; "
+                        "human validation remains required."
+                    ),
+                }
+            )
         return {
             "recommendation": recommendation,
             "status": (
-                InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
-                if uncertain
-                else InvestigationStatus.COMPLETED
+                InvestigationStatus.COMPLETED
+                if status == DiagnosisStatus.CONFIRMED
+                else InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
             ),
             "completed_at": datetime.now(timezone.utc),
         }
@@ -498,7 +539,7 @@ class InvestigationNodes:
         evidence_backed_hypotheses = {
             item.hypothesis_id: item for item in backed_hypotheses
         }
-        diagnosis = state["diagnosis"]
+        hypothesis_ids = {item.hypothesis_id for item in state["hypotheses"]}
         updates = {
             "observed_fact_evidence_ids": [
                 item for item in conclusion.observed_fact_evidence_ids if item in fact_ids
@@ -512,25 +553,7 @@ class InvestigationNodes:
                 if item in hypothesis_ids and item in evidence_backed_hypotheses
             ],
         }
-        cited_evidence = set(updates["observed_fact_evidence_ids"]) | set(
-            updates["derived_metric_evidence_ids"]
-        )
-        hypothesis_support = {
-            evidence_id
-            for hypothesis_id in updates["supported_hypothesis_ids"]
-            for evidence_id in evidence_backed_hypotheses[hypothesis_id].supporting_evidence_ids
-        }
-        has_valid_root_cause_support = bool(cited_evidence & hypothesis_support)
-        cannot_conclude = diagnosis is None or not diagnosis.can_conclude
-        forced_inconclusive = bool(
-            state["iteration_limit_reached"]
-            or state["evidence_expansion_exhausted"]
-            or cannot_conclude
-        )
         top = backed_hypotheses[0] if backed_hypotheses else None
-        supported_top = bool(
-            top is not None and top.hypothesis_id in updates["supported_hypothesis_ids"]
-        )
         global_contradiction_ids = {
             evidence_id
             for contradiction in state["contradictions"]
@@ -560,33 +583,26 @@ class InvestigationNodes:
             )
         clearly_dominant = bool(top_rank is not None and (second_rank is None or top_rank > second_rank))
         incident_at = state["trigger"].occurred_at.astimezone(timezone.utc)
-        temporal_support = bool(
-            top
-            and any(
-                (
-                    evidence_by_id[evidence_id].metadata.get("preIncidentSampleCount", 0) > 0
-                    or (
-                        evidence_by_id[evidence_id].observed_at is not None
-                        and evidence_by_id[evidence_id].observed_at.astimezone(timezone.utc)
-                        <= incident_at
-                    )
-                    or _contains_preincident_timestamp(
-                        evidence_by_id[evidence_id].value, incident_at
-                    )
-                    or _contains_preincident_timestamp(
-                        evidence_by_id[evidence_id].metadata, incident_at
-                    )
+
+        def _temporal_support(evidence_id: str) -> bool:
+            evidence = evidence_by_id.get(evidence_id)
+            if evidence is None:
+                return False
+            return bool(
+                evidence.metadata.get("preIncidentSampleCount", 0) > 0
+                or (
+                    evidence.observed_at is not None
+                    and evidence.observed_at.astimezone(timezone.utc) <= incident_at
                 )
-                for evidence_id in top.supporting_evidence_ids
-                if evidence_id in cited_evidence
+                or _contains_preincident_timestamp(evidence.value, incident_at)
+                or _contains_preincident_timestamp(evidence.metadata, incident_at)
             )
+
+        temporal_support = bool(
+            top and any(_temporal_support(item) for item in top.supporting_evidence_ids)
         )
-        probable_supported = bool(
-            not forced_inconclusive
-            and conclusion.diagnosis_status != DiagnosisStatus.INCONCLUSIVE
-            and has_valid_root_cause_support
-            and supported_top
-            and top is not None
+        probable_eligible = bool(
+            top is not None
             and top.confidence != ConfidenceLevel.LOW
             and not top_conflicted
             and clearly_dominant
@@ -595,73 +611,102 @@ class InvestigationNodes:
         authoritative_confirmation = bool(
             top
             and any(
-                evidence_id in cited_evidence
-                and evidence_by_id[evidence_id].kind == EvidenceKind.FACT
+                evidence_by_id[evidence_id].kind == EvidenceKind.FACT
                 and evidence_by_id[evidence_id].metadata.get("causalConfirmation") is True
                 for evidence_id in top.supporting_evidence_ids
+                if evidence_id in evidence_by_id
             )
         )
-        confirmed = bool(
-            probable_supported
-            and conclusion.diagnosis_status == DiagnosisStatus.CONFIRMED
-            and conclusion.reliable_root_cause
-            and conclusion.confidence == ConfidenceLevel.HIGH
+        confirmed_eligible = bool(
+            probable_eligible
+            and authoritative_confirmation
             and top is not None
             and top.confidence == ConfidenceLevel.HIGH
-            and authoritative_confirmation
+            and conclusion.confidence == ConfidenceLevel.HIGH
+        )
+        confirmed = bool(
+            confirmed_eligible
+            and conclusion.diagnosis_status == DiagnosisStatus.CONFIRMED
+            and conclusion.reliable_root_cause
         )
         uncertainties = list(conclusion.unresolved_uncertainties)
         uncertainties.extend(req.reason for req in state["requested_information"])
-        if confirmed:
-            root_cause = conclusion.root_cause or top.statement
-            updates.update(
-                {
-                    "diagnosis_status": DiagnosisStatus.CONFIRMED,
-                    "summary": f"Authoritative evidence supports the following root cause: {root_cause}",
-                    "root_cause": root_cause,
-                    "reliable_root_cause": True,
-                    "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
-                }
-            )
-        elif probable_supported:
-            root_cause = top.statement
-            uncertainties.append(
-                "The exact causal mechanism or failed component still requires direct verification."
-            )
-            updates.update(
-                {
-                    "diagnosis_status": DiagnosisStatus.PROBABLE,
-                    "summary": (
-                        "The available evidence supports the following as the best current "
-                        f"explanation: {root_cause}"
-                    ),
-                    "root_cause": root_cause,
-                    "reliable_root_cause": False,
-                    "confidence": (
-                        top.confidence
-                        if conclusion.confidence == ConfidenceLevel.LOW
-                        else conclusion.confidence
-                    ),
-                    "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
-                }
-            )
+        if state["iteration_limit_reached"]:
+            gathering_reason = "The maximum evidence-gathering iteration count was reached."
+        elif state["evidence_expansion_exhausted"]:
+            gathering_reason = "No new supported evidence request remained available."
         else:
-            if state["iteration_limit_reached"]:
-                reason = "The maximum evidence-gathering iteration count was reached."
-            elif state["evidence_expansion_exhausted"]:
-                reason = "No new supported evidence request remained available."
-            elif cannot_conclude:
-                reason = "The diagnosis determined that the available evidence was insufficient."
+            gathering_reason = None
+        if confirmed or probable_eligible:
+            root_cause = (
+                conclusion.root_cause
+                if confirmed and conclusion.root_cause
+                else top.statement
+            )
+            updates["observed_fact_evidence_ids"] = _merge_ids(
+                updates["observed_fact_evidence_ids"],
+                [item for item in top.supporting_evidence_ids if item in fact_ids],
+                fact_ids,
+            )
+            updates["derived_metric_evidence_ids"] = _merge_ids(
+                updates["derived_metric_evidence_ids"],
+                [item for item in top.supporting_evidence_ids if item in metric_ids],
+                metric_ids,
+            )
+            updates["supported_hypothesis_ids"] = _merge_ids(
+                updates["supported_hypothesis_ids"],
+                [top.hypothesis_id],
+                set(evidence_backed_hypotheses),
+            )
+            if gathering_reason:
+                uncertainties.append(gathering_reason)
+            if confirmed:
+                updates.update(
+                    {
+                        "diagnosis_status": DiagnosisStatus.CONFIRMED,
+                        "summary": (
+                            "Authoritative evidence supports the following root cause: "
+                            f"{root_cause}"
+                        ),
+                        "root_cause": root_cause,
+                        "reliable_root_cause": True,
+                        "confidence": ConfidenceLevel.HIGH,
+                        "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
+                    }
+                )
             else:
-                reason = "No evidence-backed hypothesis supports a reliable root cause."
+                uncertainties.append(_PROBABLE_COMPONENT_UNCERTAINTY)
+                updates.update(
+                    {
+                        "diagnosis_status": DiagnosisStatus.PROBABLE,
+                        "summary": (
+                            "The available evidence supports the following as the best current "
+                            f"explanation: {root_cause}"
+                        ),
+                        "root_cause": root_cause,
+                        "reliable_root_cause": False,
+                        "confidence": (
+                            top.confidence
+                            if conclusion.confidence == ConfidenceLevel.LOW
+                            else conclusion.confidence
+                        ),
+                        "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
+                    }
+                )
+        else:
+            if top_conflicted or (len(backed_hypotheses) > 1 and not clearly_dominant):
+                reason = "Evidence cannot discriminate between competing hypotheses."
+            elif top is None or top.confidence == ConfidenceLevel.LOW:
+                reason = "No evidence-backed hypothesis supports a probable cause."
+            elif gathering_reason:
+                reason = gathering_reason
+            else:
+                reason = "Available evidence cannot support a probable or confirmed cause."
             uncertainties.append(reason)
             updates.update(
                 {
                     "diagnosis_status": DiagnosisStatus.INCONCLUSIVE,
-                    "summary": (
-                        "Available evidence is insufficient to determine a reliable root cause. "
-                        "The observed operational condition requires further verification."
-                    ),
+                    "summary": _INSUFFICIENT_EVIDENCE_SUMMARY,
                     "root_cause": None,
                     "reliable_root_cause": False,
                     "confidence": ConfidenceLevel.LOW,

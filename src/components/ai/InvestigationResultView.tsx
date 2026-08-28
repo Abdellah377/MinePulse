@@ -1,5 +1,5 @@
 import type { InvestigationResult, EvidenceItem } from "@/lib/api/types/ai"
-import { CONFIDENCE_LABEL, investigationFailure } from "@/lib/ai/investigationPresentation"
+import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure } from "@/lib/ai/investigationPresentation"
 
 export function EvidenceValue({ evidence }: { evidence: EvidenceItem }) {
   if (!evidence.available || evidence.value == null) return <span>Indisponible ({evidence.status ?? "UNAVAILABLE"})</span>
@@ -8,10 +8,12 @@ export function EvidenceValue({ evidence }: { evidence: EvidenceItem }) {
 
 export function InvestigationResultView({ result }: { result: InvestigationResult }) {
   const conclusion = result.conclusion
+  const diagnosisLabel = conclusion ? DIAGNOSIS_STATUS_LABEL[conclusion.diagnosis_status] : null
   return <div className="space-y-4 text-[12px]">
     <section><h3 className="mb-1 font-semibold">Conclusion</h3>
+      {diagnosisLabel && <p className="font-medium">{diagnosisLabel}</p>}
       <p>{conclusion?.summary ?? "Non évalué"}</p>
-      {conclusion?.root_cause && <p className="mt-2">{conclusion.reliable_root_cause ? "Cause étayée" : "Cause proposée — hypothèse"} : {conclusion.root_cause}</p>}
+      {conclusion?.root_cause && <p className="mt-2">{diagnosisLabel} : {conclusion.root_cause}</p>}
       <p className="mt-2 text-muted">Confiance : {conclusion ? CONFIDENCE_LABEL[conclusion.confidence] : "Non évalué"}</p>
       <p className="text-muted">Impact non quantifié</p>
     </section>

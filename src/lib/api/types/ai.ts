@@ -7,6 +7,8 @@ export type Contradiction = {
   evidence_ids: Array<string>
 }
 
+export type DiagnosisStatus = "CONFIRMED" | "PROBABLE" | "INCONCLUSIVE"
+
 export type EvidenceItem = {
   evidence_id: string
   kind: EvidenceKind
@@ -65,6 +67,7 @@ export type Hypothesis = {
 
 export type InvestigationConclusion = {
   summary: string
+  diagnosis_status: DiagnosisStatus
   root_cause: string | null
   reliable_root_cause: boolean
   observed_fact_evidence_ids: Array<string>

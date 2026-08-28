@@ -350,6 +350,19 @@ def evaluate_result(
             f"Root-cause reliability is {reliable}; expected {case.expected_reliable_root_cause}.",
         )
     )
+    status = conclusion.diagnosis_status if conclusion else None
+    status_ok = (
+        case.expected_diagnosis_status is None or status == case.expected_diagnosis_status
+    )
+    checks.append(
+        _check(
+            "expected_diagnosis_status",
+            CheckCategory.UNCERTAINTY,
+            status_ok,
+            f"Diagnosis status is {getattr(status, 'value', None)}; "
+            f"expected {getattr(case.expected_diagnosis_status, 'value', None)}.",
+        )
+    )
     confidence = conclusion.confidence if conclusion else None
     confidence_ok = case.expected_confidence is None or confidence == case.expected_confidence
     checks.append(

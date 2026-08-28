@@ -6,6 +6,7 @@ from app.ai.contracts import (
     ConfidenceLevel,
     Contradiction,
     DiagnosisResult,
+    DiagnosisStatus,
     EvidenceItem,
     EvidenceKind,
     EvidenceRequest,
@@ -47,14 +48,15 @@ def _ctx() -> OperationalContext:
     )
 
 
-def _trigger() -> InvestigationTrigger:
+def _trigger(*, trigger_source=TriggerSource.USER_INVESTIGATE):
     return InvestigationTrigger(
         trigger_type=TriggerType.PRODUCTION_DEVIATION,
-        trigger_source=TriggerSource.USER_INVESTIGATE,
+        trigger_source=trigger_source,
         subject=InvestigationSubject.PRODUCTION,
         source="test",
         site_id=1,
         shift_id=2,
+        occurred_at=datetime(2026, 8, 24, 10, tzinfo=timezone.utc),
     )
 
 
@@ -161,7 +163,7 @@ def _diagnosis(*, requests=None, can_conclude=True):
     )
 
 
-def _run(provider, *, max_iterations=3, tools=None):
+def _run(provider, *, max_iterations=3, tools=None, trigger=None):
     tools = tools or FakeTools()
     persisted = []
     runtime = InvestigationRuntime(
@@ -175,7 +177,7 @@ def _run(provider, *, max_iterations=3, tools=None):
     graph = build_investigation_graph(runtime)
     result = graph.invoke(
         initial_state(
-            _trigger(),
+            trigger or _trigger(),
             max_iterations=max_iterations,
             provider=provider.provider_name,
             model=provider.model_name,
@@ -221,7 +223,9 @@ def test_can_conclude_true_routes_to_conclusion_even_with_optional_request():
 def test_graph_completes_with_mocked_llm_and_sanitizes_citations():
     result, tools, persisted = _run(ScriptedProvider([_diagnosis()]))
 
-    assert result["status"] == InvestigationStatus.COMPLETED
+    assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
+    assert result["conclusion"].reliable_root_cause is False
     assert result["iteration_count"] == 1
     assert tools.request_calls == 0
     assert result["hypotheses"][0].supporting_evidence_ids == ["ev-production"]
@@ -288,7 +292,8 @@ def test_graph_gathers_requested_evidence_then_reanalyzes():
     assert provider.diagnose_calls == 2
     assert tools.request_calls == 1
     assert len(result["evidence"]) == 2
-    assert result["status"] == InvestigationStatus.COMPLETED
+    assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
 
 
 def test_iteration_limit_forces_explicit_uncertainty_and_no_root_cause():
@@ -304,9 +309,11 @@ def test_iteration_limit_forces_explicit_uncertainty_and_no_root_cause():
     assert tools.request_calls == 1
     assert result["iteration_limit_reached"] is True
     assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
     assert result["conclusion"].reliable_root_cause is False
-    assert result["conclusion"].root_cause is None
-    assert result["conclusion"].summary.startswith("Available evidence is insufficient")
+    assert result["conclusion"].root_cause is not None
+    assert not result["conclusion"].summary.startswith("Available evidence is insufficient")
+    assert any("iteration" in item.casefold() for item in result["conclusion"].unresolved_uncertainties)
 
 
 def test_provider_failure_is_persisted_as_failed_investigation(caplog):
@@ -330,8 +337,10 @@ def test_fabricated_only_hypothesis_cannot_support_reliable_root_cause():
     assert result["hypotheses"][0].supporting_evidence_ids == []
     assert result["hypotheses"][0].confidence == ConfidenceLevel.LOW
     assert result["conclusion"].supported_hypothesis_ids == []
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
     assert result["conclusion"].reliable_root_cause is False
     assert result["conclusion"].root_cause is None
+    assert result["conclusion"].summary.startswith("Available evidence is insufficient")
     assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
 
 
@@ -359,8 +368,9 @@ def test_cannot_conclude_without_requests_finishes_inconclusively():
     assert tools.request_calls == 0
     assert result["iteration_count"] == 1
     assert result["evidence_expansion_exhausted"] is True
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
     assert result["conclusion"].reliable_root_cause is False
-    assert result["conclusion"].root_cause is None
+    assert result["conclusion"].root_cause is not None
     assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
 
 
@@ -397,11 +407,13 @@ def test_uncertain_result_cannot_repeat_provider_confirmation_language():
             result["recommendation"].rationale,
         ]
     ).casefold()
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
     assert result["conclusion"].reliable_root_cause is False
-    assert result["conclusion"].root_cause is None
+    assert result["conclusion"].root_cause is not None
     assert "confirming" not in combined
     assert "confirmed diagnosis" not in combined
-    assert "did not establish a reliable root cause" in combined
+    assert "did not establish a reliable root cause" not in combined
+    assert "probable" in combined
 
 
 def test_repeated_unavailable_request_stops_before_iteration_limit():
@@ -430,7 +442,7 @@ def test_mocked_graph_execution_does_not_import_simulator_internals():
 
     after = {name for name in sys.modules if name == "simulator" or name.startswith("simulator.")}
     assert after == before
-    assert result["status"] == InvestigationStatus.COMPLETED
+    assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
 
 
 def test_runtime_does_not_cache_orm_operational_context():
@@ -461,3 +473,221 @@ def test_context_reconstruction_failure_is_persisted_without_calling_llm():
     assert result["status"] == InvestigationStatus.FAILED
     assert result["error"].stage == "gather_initial_evidence"
     assert len(persisted) == 1
+
+
+def _fault_evidence():
+    return EvidenceItem(
+        evidence_id="ev-fault",
+        kind=EvidenceKind.FACT,
+        source_tool="oem_diagnostics",
+        source_service="app.oem.queries.list_equipment_diagnostics",
+        metric="oem_diagnostics",
+        value={"code": "LUBE-FAULT", "confirmed": True},
+        site_id=1,
+        shift_id=2,
+        equipment_id=7,
+        observed_at=_ctx().sim_now,
+        metadata={"causalConfirmation": True},
+    )
+
+
+class ConfirmationTools(FakeTools):
+    def gather_initial(self, ctx, trigger):
+        return [_fault_evidence()]
+
+
+class ConfirmedProvider(ScriptedProvider):
+    def diagnose(self, payload):
+        self.diagnose_payloads.append(payload)
+        self.diagnose_calls += 1
+        return DiagnosisResult(
+            hypotheses=[
+                Hypothesis(
+                    hypothesis_id="hyp-1",
+                    statement="A confirmed lubrication-circuit fault stopped the equipment.",
+                    supporting_evidence_ids=["ev-fault"],
+                    contradictory_evidence_ids=[],
+                    confidence=ConfidenceLevel.HIGH,
+                    rationale="OEM diagnostic confirmation is present.",
+                )
+            ],
+            requested_information=[],
+            contradictions=[],
+            can_conclude=True,
+            confidence=ConfidenceLevel.HIGH,
+            confidence_rationale="Authoritative confirmation is present.",
+            reasoning_summary="Direct diagnostic confirmation supports the cause.",
+        )
+
+    def build_conclusion(self, payload):
+        return InvestigationConclusion(
+            summary="Authoritative evidence supports a lubrication-circuit fault.",
+            diagnosis_status=DiagnosisStatus.CONFIRMED,
+            root_cause="A confirmed lubrication-circuit fault stopped the equipment.",
+            reliable_root_cause=True,
+            observed_fact_evidence_ids=["ev-fault"],
+            supported_hypothesis_ids=["hyp-1"],
+            unresolved_uncertainties=[],
+            confidence=ConfidenceLevel.HIGH,
+        )
+
+
+def test_authoritative_confirmation_yields_confirmed_root_cause():
+    result, _, _ = _run(ConfirmedProvider([_diagnosis()]), tools=ConfirmationTools())
+
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.CONFIRMED
+    assert result["conclusion"].reliable_root_cause is True
+    assert result["conclusion"].root_cause is not None
+    assert result["status"] == InvestigationStatus.COMPLETED
+    assert "authoritative" in result["conclusion"].summary.casefold()
+
+
+def test_probable_keeps_reliable_root_cause_false():
+    result, _, _ = _run(ScriptedProvider([_diagnosis()]))
+
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
+    assert result["conclusion"].reliable_root_cause is False
+    assert "downtime" in result["conclusion"].root_cause.casefold()
+    assert not result["conclusion"].summary.startswith("Available evidence is insufficient")
+    assert any("not confirmed" in item.casefold() for item in result["conclusion"].unresolved_uncertainties)
+
+
+def test_invalid_confirmed_without_authoritative_evidence_is_downgraded():
+    class OverconfidentProvider(ScriptedProvider):
+        def build_conclusion(self, payload):
+            return InvestigationConclusion(
+                summary="This is a confirmed component failure.",
+                diagnosis_status=DiagnosisStatus.CONFIRMED,
+                root_cause="A confirmed component failure",
+                reliable_root_cause=True,
+                derived_metric_evidence_ids=["ev-production"],
+                supported_hypothesis_ids=["hyp-1"],
+                confidence=ConfidenceLevel.HIGH,
+            )
+
+    result, _, _ = _run(OverconfidentProvider([_diagnosis()]))
+
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
+    assert result["conclusion"].reliable_root_cause is False
+    assert "confirmed component failure" not in result["conclusion"].summary.casefold()
+
+
+def test_llm_confirmed_with_fabricated_evidence_cannot_be_probable():
+    class FabricatedConfirmedProvider(ScriptedProvider):
+        def build_conclusion(self, payload):
+            return InvestigationConclusion(
+                summary="Confirmed from invented evidence.",
+                diagnosis_status=DiagnosisStatus.CONFIRMED,
+                root_cause="Invented component failure",
+                reliable_root_cause=True,
+                observed_fact_evidence_ids=["ev-invented"],
+                supported_hypothesis_ids=["hyp-1"],
+                confidence=ConfidenceLevel.HIGH,
+            )
+
+    diagnosis = _diagnosis()
+    diagnosis.hypotheses[0].supporting_evidence_ids = ["ev-invented"]
+    result, _, _ = _run(FabricatedConfirmedProvider([diagnosis]))
+
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
+    assert result["conclusion"].reliable_root_cause is False
+    assert result["conclusion"].root_cause is None
+    assert result["conclusion"].summary.startswith("Available evidence is insufficient")
+
+
+def test_unsupported_hypothesis_cannot_produce_probable():
+    diagnosis = _diagnosis()
+    diagnosis.hypotheses[0].supporting_evidence_ids = []
+    result, _, _ = _run(ScriptedProvider([diagnosis]))
+
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
+    assert result["conclusion"].root_cause is None
+    assert result["conclusion"].reliable_root_cause is False
+
+
+def test_low_confidence_support_is_inconclusive():
+    diagnosis = _diagnosis()
+    diagnosis.hypotheses[0].confidence = ConfidenceLevel.LOW
+    result, _, _ = _run(ScriptedProvider([diagnosis]))
+
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
+    assert result["conclusion"].summary.startswith("Available evidence is insufficient")
+
+
+def test_contradictory_evidence_downgrades_to_inconclusive():
+    diagnosis = _diagnosis()
+    diagnosis.contradictions = [
+        Contradiction(
+            description="The recorded state conflicts with the proposed cause.",
+            evidence_ids=["ev-production"],
+        )
+    ]
+    result, _, _ = _run(ScriptedProvider([diagnosis]))
+
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
+    assert result["conclusion"].root_cause is None
+    assert result["conclusion"].summary.startswith("Available evidence is insufficient")
+
+
+def test_equal_competing_hypotheses_are_inconclusive():
+    diagnosis = DiagnosisResult(
+        hypotheses=[
+            Hypothesis(
+                hypothesis_id="hyp-1",
+                statement="Downtime contributed to the shortfall.",
+                supporting_evidence_ids=["ev-production"],
+                contradictory_evidence_ids=[],
+                confidence=ConfidenceLevel.MEDIUM,
+                rationale="Production evidence indicates a gap.",
+            ),
+            Hypothesis(
+                hypothesis_id="hyp-2",
+                statement="An operator delay contributed to the shortfall.",
+                supporting_evidence_ids=["ev-production"],
+                contradictory_evidence_ids=[],
+                confidence=ConfidenceLevel.MEDIUM,
+                rationale="The same evidence also fits an operational delay.",
+            ),
+        ],
+        requested_information=[],
+        contradictions=[],
+        can_conclude=True,
+        confidence=ConfidenceLevel.MEDIUM,
+        confidence_rationale="Two equally supported explanations remain.",
+        reasoning_summary="The evidence cannot discriminate between the two hypotheses.",
+    )
+    result, _, _ = _run(ScriptedProvider([diagnosis]))
+
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
+    assert result["conclusion"].root_cause is None
+    assert "discriminate" in " ".join(result["conclusion"].unresolved_uncertainties).casefold()
+
+
+def test_automatic_and_manual_triggers_share_diagnosis_semantics():
+    for source in (TriggerSource.USER_INVESTIGATE, TriggerSource.AUTOMATIC_MONITORING):
+        result, _, _ = _run(
+            ScriptedProvider([_diagnosis()]),
+            trigger=_trigger(trigger_source=source),
+        )
+        assert result["trigger"].trigger_source == source
+        assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
+        assert result["conclusion"].reliable_root_cause is False
+        assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
+
+
+def test_inconclusive_recommendation_keeps_insufficient_root_cause_wording():
+    diagnosis = _diagnosis()
+    diagnosis.hypotheses[0].supporting_evidence_ids = ["fabricated-only"]
+    result, _, _ = _run(ScriptedProvider([diagnosis]))
+    combined = " ".join(
+        [
+            result["conclusion"].summary,
+            result["recommendation"].description,
+            result["recommendation"].rationale,
+        ]
+    )
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
+    assert combined.startswith("Available evidence is insufficient") or (
+        "Available evidence is insufficient" in result["conclusion"].summary
+    )
+    assert "did not establish a reliable root cause" in result["recommendation"].rationale

@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { MiniTimelineStrip } from "@/components/equipment/MiniTimelineStrip"
 import { InvestigationEvidence, InvestigationUncertainty } from "./InvestigationResultView"
 import { AiBlock, Fact, Section } from "./InvestigationLayout"
-import { CONFIDENCE_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
+import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
 import { SEVERITY_CONFIG } from "@/lib/status"
 import { cn } from "@/lib/utils"
 import { newestAlertsFirst, operationalAlertTime } from "@/lib/alerts/order"
@@ -47,7 +47,10 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
   const equipment = ops.equipment.find((e) => e.id === selected?.equipmentId)
   const selectedZone = ops.zones.find((z) => z.id === selected?.zoneId)
   const confidence = conclusion ? CONFIDENCE_LABEL[conclusion.confidence] : "Non évalué"
-  const cause = conclusion?.root_cause ?? conclusion?.summary ?? "Non évalué — analyse IA non disponible."
+  const diagnosisLabel = conclusion ? DIAGNOSIS_STATUS_LABEL[conclusion.diagnosis_status] : "Non évalué"
+  const cause = conclusion?.root_cause
+    ?? (conclusion?.diagnosis_status === "INCONCLUSIVE" ? conclusion.summary : null)
+    ?? "Non évalué — analyse IA non disponible."
   const busy = entry?.phase === "running" || entry?.phase === "loading"
   const failure = entry?.error ?? investigationFailure(result?.error)
   const segs = useMemo(() => selected?.equipmentId
@@ -111,8 +114,9 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
       {selected ? <div className="mx-auto max-w-2xl space-y-4">
         <header><div className="mb-1 flex flex-wrap gap-1.5"><Badge className={cn(SEVERITY_CONFIG[selected.severity].bg, SEVERITY_CONFIG[selected.severity].color, "border-transparent")}>{SEVERITY_CONFIG[selected.severity].label}</Badge><Badge variant="outline">{selected.category}</Badge><Badge variant="outline">En cours</Badge>{result && <Badge variant="outline">{automaticInvestigation ? "Monitoring automatique" : "Investigation manuelle"}</Badge>}</div><h2 className="text-[16px] font-semibold text-foreground">{selected.title}</h2></header>
         <Section title="Résumé"><p className="text-[12px] leading-relaxed text-muted">{selected.description}</p><dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]"><Fact label="Où" value={selectedZone?.name ?? selected.location ?? "—"} /><Fact label="Détecté à" value={new Date(operationalAlertTime(selected)).toLocaleString("fr-FR")} /><Fact label="Équipement" value={equipment?.code ?? "—"} mono /><Fact label="Confiance" value={confidence} /></dl></Section>
-        <Section title="Pourquoi"><p className="text-[12px] font-medium text-foreground">{conclusion?.summary ?? `${investigationStatus(entry)} — cause non évaluée.`}</p>
-          {conclusion && !conclusion.reliable_root_cause && <p className="mt-2 text-[11px] text-muted">Conclusion non fiable : aucune cause racine établie.</p>}
+        <Section title="Pourquoi"><p className="text-[12px] font-medium text-foreground">{conclusion ? `${diagnosisLabel}. ${conclusion.summary}` : `${investigationStatus(entry)} — cause non évaluée.`}</p>
+          {conclusion?.diagnosis_status === "PROBABLE" && conclusion.root_cause && <p className="mt-2 text-[11px] text-muted">Cause probable : {conclusion.root_cause}</p>}
+          {conclusion?.diagnosis_status === "CONFIRMED" && conclusion.root_cause && <p className="mt-2 text-[11px] text-muted">Cause confirmée : {conclusion.root_cause}</p>}
           {result?.hypotheses.map((h) => <div key={h.hypothesis_id} className="mt-2 text-[11px]"><p>Hypothèse · {CONFIDENCE_LABEL[h.confidence]} : {h.statement}</p><p className="text-muted">{h.rationale}</p><p className="text-muted-2">Appuis : {h.supporting_evidence_ids.join(", ") || "Aucun"}</p>{h.contradictory_evidence_ids.length > 0 && <p className="text-muted-2">Contradictions : {h.contradictory_evidence_ids.join(", ")}</p>}</div>)}
           {result && <InvestigationUncertainty result={result} />}
         </Section>
@@ -126,7 +130,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
     <aside aria-label="Panel IA" className="flex w-[28%] min-w-[240px] max-w-[340px] flex-col overflow-y-auto bg-surface p-4">
       {selected ? <><h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Panel IA</h3><p role="status" aria-live="polite" className="mt-2 text-[11px] text-muted">{investigationStatus(entry)}</p>
         {failure && <p role="alert" className="mt-2 text-xs text-danger">{failure}</p>}
-        <div className="mt-3 space-y-3"><AiBlock label="Cause probable" value={cause} /><AiBlock label="Confiance" value={confidence} /><AiBlock label="Impact estimé" value="Impact non quantifié" /><AiBlock label="Action immédiate suggérée" value={recommendation?.description ?? "Non évalué"} /></div>
+        <div className="mt-3 space-y-3"><AiBlock label={diagnosisLabel} value={cause} /><AiBlock label="Confiance" value={confidence} /><AiBlock label="Impact estimé" value="Impact non quantifié" /><AiBlock label="Action immédiate suggérée" value={recommendation?.description ?? "Non évalué"} /></div>
         {recommendation ? <Button className="mt-4 w-full gap-1.5" onClick={() => openWorkspace({ type: "actions", context, investigationId: result!.investigation_id })}><Sparkles className="size-3.5" />Ouvrir Actions IA</Button>
           : <Button className="mt-4 w-full gap-1.5" disabled={!scope || !!result || busy || entry?.creationUncertain || !!ops.apiPollError} onClick={investigate}><Sparkles className="size-3.5" />{entry?.phase === "running" ? "Analyse IA en cours" : "Investiguer"}</Button>}
         <Button className="mt-2 w-full" size="sm" variant="outline" disabled={!scope || busy} onClick={() => scope && void lookup(scope, true)}>Actualiser le résultat</Button>

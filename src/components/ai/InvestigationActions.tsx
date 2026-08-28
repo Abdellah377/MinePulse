@@ -6,7 +6,7 @@ import { useOpsStore } from "@/lib/store/useOpsStore"
 import type { WorkspacePanelProps } from "@/components/workspace/WorkspaceHost"
 import { InvestigationResultView } from "./InvestigationResultView"
 import { Chip } from "./InvestigationLayout"
-import { CONFIDENCE_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
+import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
@@ -43,7 +43,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   return <div className="flex h-full flex-col overflow-hidden">
     <header className="shrink-0 border-b border-border bg-surface px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-2">Actions IA · contexte hérité</p><h1 className="mt-0.5 text-[15px] font-semibold text-foreground">{alert?.title ?? "Plan d’action"}</h1><p className="mt-1 max-w-2xl text-[12px] text-muted">{result?.conclusion?.summary ?? investigationStatus(entry)}</p></div><Badge variant="outline" className="shrink-0">Confiance {confidence}</Badge></div>
-      <div className="mt-3 flex flex-wrap gap-1.5"><Chip>Pourquoi : {result?.conclusion?.root_cause ?? "Cause racine non établie"}</Chip><Chip>{investigationStatus(entry)}</Chip><Chip>Investigation {id}</Chip></div>
+      <div className="mt-3 flex flex-wrap gap-1.5"><Chip>Pourquoi : {result?.conclusion ? `${DIAGNOSIS_STATUS_LABEL[result.conclusion.diagnosis_status]}${result.conclusion.root_cause ? ` — ${result.conclusion.root_cause}` : ""}` : "Cause non déterminée"}</Chip><Chip>{investigationStatus(entry)}</Chip><Chip>Investigation {id}</Chip></div>
       <div className="mt-2 flex gap-2"><Button size="sm" variant="outline" onClick={backToAlert}>Retour aux alertes</Button><Button size="sm" variant="outline" disabled={entry?.phase === "loading"} onClick={() => void retrieve(id, true)}>Actualiser</Button></div>
       {failure && <p role="alert" className="mt-2 text-xs text-danger">{failure}</p>}
     </header>
