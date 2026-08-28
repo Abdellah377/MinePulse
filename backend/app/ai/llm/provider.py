@@ -68,25 +68,41 @@ _DIAGNOSIS_PROMPT = _COMMON_POLICY + """
 
 Diagnose the trigger. Request only evidence types present in the supplied
 approved request catalog. Set can_conclude false only when another approved
-request can still discriminate between hypotheses. Remaining causal uncertainty
+request can still discriminate between hypotheses; do not request evidence that
+cannot change the diagnosis. Remaining causal uncertainty
 belongs in later diagnosis_status, not in blocking a conclusion. If no useful
 approved request exists, return an empty request list and set can_conclude true
 when a ranked diagnosis can be written. Do not treat hypotheses as evidence.
+First identify the observed condition, then test explanations at least one causal
+step deeper: cause -> operational mechanism -> observed effect. Set each
+hypothesis causal_depth to 0 for a symptom restatement, 1 for an immediate
+mechanism, or 2 for an underlying contributor. Waiting is not caused by waiting;
+low production is not caused by low production; high fuel use is not caused by
+high fuel use; and a stop is not caused by a stop. If only depth 0 is supported,
+remain inconclusive. For queue and production cases, use bounded related-loader,
+assignment, cycle-stage, and peer-equipment context when supplied. For fuel,
+compare fuel rate with load, payload, speed, cycles, or productive output.
 Compare symptom timestamps with the incident time. Prefer patterns observed
 before the incident when assessing possible causes; a post-incident warning is
 not proof of the original cause. Consider competing hypotheses and preserve
 contradictory evidence when the supplied trends cannot discriminate between them.
 Rank hypotheses by valid support, independent signals, temporal relevance, and
-contradictions; do not invent numeric probabilities.
+contradictions; distinguish correlation from a supported mechanism and do not
+invent numeric probabilities. Confidence is confidence in the proposed cause,
+not confidence that the observed symptom exists.
 """
 
 _CONCLUSION_PROMPT = _COMMON_POLICY + """
 
 Build a conclusion that explicitly separates observed facts, derived metrics,
-supported hypotheses, and unresolved uncertainty. Set diagnosis_status to
+supported hypotheses, contributing factors, and unresolved uncertainty. Populate
+observed_condition with what happened, root_cause with the deeper mechanism, and
+causal_depth consistently with the selected hypothesis. Contributing factors must
+cite supplied evidence and must not duplicate the root cause. Set diagnosis_status to
 CONFIRMED only when evidence directly and authoritatively supports the cause,
 PROBABLE when one valid, temporally plausible hypothesis is clearly better
 supported but not proven, and INCONCLUSIVE when evidence cannot discriminate.
+Depth 0 or a restatement of the trigger is always INCONCLUSIVE.
 PROBABLE must keep reliable_root_cause false and must not use confirmed or
 reliable language. Set reliable_root_cause true only for CONFIRMED. Reserve
 "Available evidence is insufficient to determine a reliable root cause" for
@@ -101,7 +117,11 @@ Do not invent numeric impact improvements. Reassignment may only be suggested
 for consideration if operationally allowed. Always require human validation.
 Match the conclusion diagnosis_status: confirmed language only for CONFIRMED,
 probable/best-supported language for PROBABLE, and verification or monitoring
-for INCONCLUSIVE. Never mix insufficient-evidence wording with confirmation.
+for INCONCLUSIVE. Tie the action to the diagnosed mechanism: state what should
+be checked and why. For an inconclusive result, request the evidence that would
+best discriminate the remaining hypotheses. Avoid generic "check the truck"
+wording when a specific signal, loader, queue, assignment, or operational
+condition is available. Never mix insufficient-evidence wording with confirmation.
 """
 
 

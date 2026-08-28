@@ -105,6 +105,7 @@ class EvidenceRequestType(str, Enum):
     SITE_ALERTS = "SITE_ALERTS"
     ASSIGNMENTS = "ASSIGNMENTS"
     EQUIPMENT_TIMELINE = "EQUIPMENT_TIMELINE"
+    LOADING_CONTEXT = "LOADING_CONTEXT"
     ZONE_CONTEXT = "ZONE_CONTEXT"
     OEM_CONNECTIVITY = "OEM_CONNECTIVITY"
     OEM_DIAGNOSTICS = "OEM_DIAGNOSTICS"
@@ -256,6 +257,9 @@ class Hypothesis(ContractModel):
     supporting_evidence_ids: list[str] = Field(default_factory=list)
     contradictory_evidence_ids: list[str] = Field(default_factory=list)
     confidence: ConfidenceLevel
+    # Depth 0 is the observed symptom, 1 an immediate mechanism, and 2 an
+    # underlying contributor.  The graph validates this claim independently.
+    causal_depth: int = Field(default=0, ge=0, le=2)
     rationale: str = Field(min_length=1, max_length=1600)
 
 
@@ -274,11 +278,19 @@ class DiagnosisResult(ContractModel):
     reasoning_summary: str = Field(min_length=1, max_length=2400)
 
 
+class ContributingFactor(ContractModel):
+    statement: str = Field(min_length=1, max_length=1000)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
 class InvestigationConclusion(ContractModel):
     summary: str = Field(min_length=1, max_length=2400)
     diagnosis_status: DiagnosisStatus = DiagnosisStatus.INCONCLUSIVE
+    observed_condition: str | None = Field(default=None, max_length=1200)
     root_cause: str | None = Field(default=None, max_length=1200)
     reliable_root_cause: bool = False
+    causal_depth: int = Field(default=0, ge=0, le=2)
+    contributing_factors: list[ContributingFactor] = Field(default_factory=list, max_length=6)
     observed_fact_evidence_ids: list[str] = Field(default_factory=list)
     derived_metric_evidence_ids: list[str] = Field(default_factory=list)
     supported_hypothesis_ids: list[str] = Field(default_factory=list)

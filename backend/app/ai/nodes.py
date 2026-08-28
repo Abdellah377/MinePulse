@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.contracts import (
     ConfidenceLevel,
+    ContributingFactor,
     Contradiction,
     DiagnosisStatus,
     DiagnosisResult,
@@ -32,6 +33,7 @@ from app.ai.contracts import (
     ResolvedOperationalContext,
     TelemetryMetricGroup,
 )
+from app.ai.causality import trigger_observation, validated_causal_depth
 from app.ai.llm.provider import LLMProvider
 from app.ai.persistence import InvestigationPersistenceError, persist_investigation
 from app.ai.state import InvestigationState
@@ -108,7 +110,7 @@ def _contains_preincident_timestamp(value, incident_at: datetime) -> bool:
     for key, item in value.items():
         if key in _TEMPORAL_KEYS:
             timestamp = _as_aware_timestamp(item)
-            if timestamp is not None and timestamp <= incident_at:
+            if timestamp is not None and timestamp < incident_at:
                 return True
         if isinstance(item, (dict, list)) and _contains_preincident_timestamp(item, incident_at):
             return True
@@ -464,19 +466,30 @@ class InvestigationNodes:
             contradictory = [
                 item for item in hypothesis.contradictory_evidence_ids if item in evidence_by_id
             ]
-            confidence = hypothesis.confidence if supporting else ConfidenceLevel.LOW
+            causal_depth = validated_causal_depth(
+                hypothesis.statement,
+                hypothesis.causal_depth,
+                state["trigger"],
+            )
+            confidence = (
+                hypothesis.confidence
+                if supporting and causal_depth >= 1
+                else ConfidenceLevel.LOW
+            )
             hypotheses.append(
                 hypothesis.model_copy(
                     update={
                         "supporting_evidence_ids": supporting,
                         "contradictory_evidence_ids": contradictory,
                         "confidence": confidence,
+                        "causal_depth": causal_depth,
                     }
                 )
             )
         hypotheses.sort(
             key=lambda hypothesis: (
                 bool(hypothesis.supporting_evidence_ids),
+                hypothesis.causal_depth,
                 not bool(hypothesis.contradictory_evidence_ids),
                 len(
                     {
@@ -519,11 +532,12 @@ class InvestigationNodes:
         backed_hypotheses = [
             item
             for item in state["hypotheses"]
-            if item.supporting_evidence_ids
+            if item.supporting_evidence_ids and item.causal_depth >= 1
         ]
         backed_hypotheses.sort(
             key=lambda hypothesis: (
                 not bool(hypothesis.contradictory_evidence_ids),
+                hypothesis.causal_depth,
                 len(
                     {
                         evidence_by_id[evidence_id].source_tool
@@ -541,6 +555,7 @@ class InvestigationNodes:
         }
         hypothesis_ids = {item.hypothesis_id for item in state["hypotheses"]}
         updates = {
+            "observed_condition": trigger_observation(state["trigger"]),
             "observed_fact_evidence_ids": [
                 item for item in conclusion.observed_fact_evidence_ids if item in fact_ids
             ],
@@ -552,7 +567,14 @@ class InvestigationNodes:
                 for item in conclusion.supported_hypothesis_ids
                 if item in hypothesis_ids and item in evidence_backed_hypotheses
             ],
+            "contributing_factors": [],
         }
+        sanitized_factors: list[ContributingFactor] = []
+        for factor in conclusion.contributing_factors:
+            ids = list(dict.fromkeys(item for item in factor.evidence_ids if item in evidence_by_id))
+            if ids:
+                sanitized_factors.append(factor.model_copy(update={"evidence_ids": ids}))
+        updates["contributing_factors"] = sanitized_factors
         top = backed_hypotheses[0] if backed_hypotheses else None
         global_contradiction_ids = {
             evidence_id
@@ -570,6 +592,7 @@ class InvestigationNodes:
         second_rank = None
         if top is not None:
             top_rank = (
+                top.causal_depth,
                 len({evidence_by_id[item].source_tool for item in top.supporting_evidence_ids}),
                 len(top.supporting_evidence_ids),
                 _CONFIDENCE_RANK[top.confidence],
@@ -577,6 +600,7 @@ class InvestigationNodes:
         if len(backed_hypotheses) > 1:
             second = backed_hypotheses[1]
             second_rank = (
+                second.causal_depth,
                 len({evidence_by_id[item].source_tool for item in second.supporting_evidence_ids}),
                 len(second.supporting_evidence_ids),
                 _CONFIDENCE_RANK[second.confidence],
@@ -589,10 +613,11 @@ class InvestigationNodes:
             if evidence is None:
                 return False
             return bool(
-                evidence.metadata.get("preIncidentSampleCount", 0) > 0
+                evidence.metadata.get("causalConfirmation") is True
+                or evidence.metadata.get("preIncidentSampleCount", 0) > 0
                 or (
                     evidence.observed_at is not None
-                    and evidence.observed_at.astimezone(timezone.utc) <= incident_at
+                    and _as_aware_timestamp(evidence.observed_at) < incident_at
                 )
                 or _contains_preincident_timestamp(evidence.value, incident_at)
                 or _contains_preincident_timestamp(evidence.metadata, incident_at)
@@ -601,8 +626,12 @@ class InvestigationNodes:
         temporal_support = bool(
             top and any(_temporal_support(item) for item in top.supporting_evidence_ids)
         )
+        diagnosis = state.get("diagnosis")
         probable_eligible = bool(
             top is not None
+            and diagnosis is not None
+            and diagnosis.can_conclude
+            and top.causal_depth >= 1
             and top.confidence != ConfidenceLevel.LOW
             and not top_conflicted
             and clearly_dominant
@@ -658,6 +687,12 @@ class InvestigationNodes:
                 [top.hypothesis_id],
                 set(evidence_backed_hypotheses),
             )
+            updates["causal_depth"] = top.causal_depth
+            updates["contributing_factors"] = [
+                factor
+                for factor in sanitized_factors
+                if factor.statement.casefold() != root_cause.casefold()
+            ]
             if gathering_reason:
                 uncertainties.append(gathering_reason)
             if confirmed:
@@ -676,6 +711,14 @@ class InvestigationNodes:
                 )
             else:
                 uncertainties.append(_PROBABLE_COMPONENT_UNCERTAINTY)
+                conclusion_confidence = (
+                    top.confidence
+                    if conclusion.confidence == ConfidenceLevel.LOW
+                    else min(
+                        (top.confidence, conclusion.confidence),
+                        key=lambda item: _CONFIDENCE_RANK[item],
+                    )
+                )
                 updates.update(
                     {
                         "diagnosis_status": DiagnosisStatus.PROBABLE,
@@ -685,16 +728,20 @@ class InvestigationNodes:
                         ),
                         "root_cause": root_cause,
                         "reliable_root_cause": False,
-                        "confidence": (
-                            top.confidence
-                            if conclusion.confidence == ConfidenceLevel.LOW
-                            else conclusion.confidence
-                        ),
+                        "confidence": conclusion_confidence,
                         "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
                     }
                 )
         else:
-            if top_conflicted or (len(backed_hypotheses) > 1 and not clearly_dominant):
+            depth_zero_supported = any(
+                item.supporting_evidence_ids and item.causal_depth == 0
+                for item in state["hypotheses"]
+            )
+            if depth_zero_supported:
+                reason = "The proposed explanation restates the observed symptom without a deeper causal mechanism."
+            elif diagnosis is not None and not diagnosis.can_conclude:
+                reason = "The diagnosis explicitly states that available evidence cannot support a conclusion."
+            elif top_conflicted or (len(backed_hypotheses) > 1 and not clearly_dominant):
                 reason = "Evidence cannot discriminate between competing hypotheses."
             elif top is None or top.confidence == ConfidenceLevel.LOW:
                 reason = "No evidence-backed hypothesis supports a probable cause."
@@ -703,12 +750,16 @@ class InvestigationNodes:
             else:
                 reason = "Available evidence cannot support a probable or confirmed cause."
             uncertainties.append(reason)
+            if gathering_reason and gathering_reason != reason:
+                uncertainties.append(gathering_reason)
             updates.update(
                 {
                     "diagnosis_status": DiagnosisStatus.INCONCLUSIVE,
                     "summary": _INSUFFICIENT_EVIDENCE_SUMMARY,
                     "root_cause": None,
                     "reliable_root_cause": False,
+                    "causal_depth": 0,
+                    "contributing_factors": [],
                     "confidence": ConfidenceLevel.LOW,
                     "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
                 }

@@ -29,6 +29,7 @@ from app.ai.contracts import (
     InvestigationTrigger,
     RecommendationAction,
     TriggerSource,
+    TriggerType,
 )
 from app.ai.llm.provider import ProviderResponseError
 
@@ -110,6 +111,7 @@ def _result(
         statement=statement,
         supporting_evidence_ids=[citation],
         confidence=ConfidenceLevel.HIGH if has_cause else ConfidenceLevel.LOW,
+        causal_depth=1 if has_cause else 0,
         rationale="Evaluation fixture rationale.",
     )
     conclusion = InvestigationConclusion(
@@ -117,6 +119,7 @@ def _result(
         diagnosis_status=status_value,
         root_cause=statement if has_cause else None,
         reliable_root_cause=reliable,
+        causal_depth=1 if has_cause else 0,
         observed_fact_evidence_ids=[citation],
         supported_hypothesis_ids=["hyp-1"],
         unresolved_uncertainties=[] if has_cause else ["Cause is not established."],
@@ -212,6 +215,43 @@ def test_contradictions_are_reported_with_real_provenance():
     assert next(
         c for c in checks if c.check_id == "contradictions_preserve_valid_provenance"
     ).passed
+
+
+@pytest.mark.ai_eval
+def test_rca_metrics_reject_symptom_restatement_and_depth_zero():
+    result = _result(
+        statement="Mechanical stop was caused by the mechanical stop.",
+        diagnosis_status=DiagnosisStatus.PROBABLE,
+    )
+    checks, _, _ = evaluate_result(get_case("clear_equipment_failure"), result)
+
+    assert not next(c for c in checks if c.check_id == "symptom_restatement").passed
+    assert not next(c for c in checks if c.check_id == "causal_depth").passed
+
+
+@pytest.mark.ai_eval
+def test_rca_metrics_detect_bounded_cross_asset_context():
+    result = _result()
+    result.trigger = result.trigger.model_copy(
+        update={
+            "trigger_type": TriggerType.CONGESTION_RISK,
+            "payload": {"reason": "TRK-004 remained in WAITING_LOADING for 25 minutes."},
+        }
+    )
+    result.evidence.append(
+        EvidenceItem(
+            evidence_id="ev-loading",
+            kind=EvidenceKind.DERIVED_METRIC,
+            source_tool="loading_context",
+            source_service="app.services.operational.loading.loading_service_context",
+            metric="loading_queue_and_service_context",
+            value={"loaders": [{"loaderId": 20, "waitingTruckCount": 5}]},
+        )
+    )
+
+    checks, _, _ = evaluate_result(get_case("causal_loader_bottleneck"), result)
+
+    assert next(c for c in checks if c.check_id == "cross_asset_reasoning_context").passed
 
 
 @pytest.mark.ai_eval
@@ -477,4 +517,5 @@ def test_case_catalog_contains_three_control_conditions():
         "causal_communication_degradation",
         "causal_loader_bottleneck",
         "causal_fuel_efficiency_degradation",
+        "production_operational_bottleneck",
     }.issubset(EVALUATION_CASES)

@@ -62,6 +62,7 @@ class DeterministicEvaluationProvider:
             EvidenceRequestType.OEM_DIAGNOSTICS: "oem_diagnostics",
             EvidenceRequestType.OEM_ERRORS: "oem_errors",
             EvidenceRequestType.ASSIGNMENTS: "assignments",
+            EvidenceRequestType.LOADING_CONTEXT: "loading_context",
         }.get(self.request_type)
         if preferred_tool:
             preferred = [item for item in evidence if item.get("source_tool") == preferred_tool]
@@ -114,6 +115,7 @@ class DeterministicEvaluationProvider:
                     statement=statement,
                     supporting_evidence_ids=support,
                     confidence=ConfidenceLevel.LOW if inconclusive else ConfidenceLevel.HIGH,
+                    causal_depth=0 if inconclusive else 1,
                     rationale="Deterministic schema and evidence-link evaluation.",
                 )
             ],
@@ -150,6 +152,7 @@ class DeterministicEvaluationProvider:
             ),
             root_cause=self.concept if can_conclude else None,
             reliable_root_cause=False,
+            causal_depth=1 if can_conclude else 0,
             observed_fact_evidence_ids=fact_ids,
             derived_metric_evidence_ids=metric_ids,
             supported_hypothesis_ids=[hypothesis_id] if hypothesis_id else [],

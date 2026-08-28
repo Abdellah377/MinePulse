@@ -11,6 +11,7 @@ from app.services.operational import assignments as assignment_service
 from app.services.operational import cycles as cycle_service
 from app.services.operational import downtime as downtime_service
 from app.services.operational import equipment as equipment_service
+from app.services.operational import loading as loading_service
 from app.services.operational import production as production_service
 from app.services.operational import timeline as timeline_service
 from app.services.operational import zones as zone_service
@@ -307,6 +308,40 @@ def equipment_timeline(
         value=rows,
         equipment_id=equipment_id,
         source_record_ids=[str(row["id"]) for row in rows],
+    )
+
+
+def loading_context(
+    session: Session,
+    ctx: OperationalContext,
+    *,
+    equipment_id: int | None = None,
+    zone_id: int | None = None,
+) -> EvidenceItem:
+    result = loading_service.loading_service_context(
+        session,
+        ctx,
+        equipment_id=equipment_id,
+        zone_id=zone_id,
+    )
+    value = {key: item for key, item in result.items() if key != "sourceRecordIds"}
+    return _evidence(
+        ctx,
+        kind=EvidenceKind.DERIVED_METRIC,
+        tool="loading_context",
+        service="app.services.operational.loading.loading_service_context",
+        metric="loading_queue_and_service_context",
+        value=value,
+        equipment_id=equipment_id,
+        zone_id=zone_id,
+        source_record_ids=result["sourceRecordIds"],
+        metadata={
+            "windowStart": ctx.shift_window_start,
+            "windowEnd": ctx.sim_now,
+            "loaderCount": len(result["loaders"]),
+            "bounds": result["bounds"],
+        },
+        notes="Observed assignments, queues, states, and loading stages; no causal inference.",
     )
 
 

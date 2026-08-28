@@ -99,14 +99,21 @@ def test_investigation_conclusion_includes_three_state_diagnosis_status():
     probable = InvestigationConclusion(
         summary="Best-supported lubrication-related degradation.",
         diagnosis_status=DiagnosisStatus.PROBABLE,
+        observed_condition="The truck stopped mechanically.",
         root_cause="Mechanical degradation consistent with a lubrication-related issue.",
         reliable_root_cause=False,
+        causal_depth=2,
+        contributing_factors=[
+            {"statement": "Engine temperature increased before the stop.", "evidence_ids": ["ev-1"]}
+        ],
         confidence=ConfidenceLevel.MEDIUM,
         unresolved_uncertainties=["Exact failed component is not confirmed."],
     )
     payload = probable.model_dump(mode="json")
     assert payload["diagnosis_status"] == "PROBABLE"
     assert payload["reliable_root_cause"] is False
+    assert payload["causal_depth"] == 2
+    assert payload["contributing_factors"][0]["evidence_ids"] == ["ev-1"]
     restored = InvestigationConclusion.model_validate(payload)
     assert restored.diagnosis_status is DiagnosisStatus.PROBABLE
     assert restored.reliable_root_cause is False

@@ -12,14 +12,16 @@ export function InvestigationResultView({ result }: { result: InvestigationResul
   return <div className="space-y-4 text-[12px]">
     <section><h3 className="mb-1 font-semibold">Conclusion</h3>
       {diagnosisLabel && <p className="font-medium">{diagnosisLabel}</p>}
+      {conclusion?.observed_condition && <p className="mt-1"><span className="font-medium">Condition observée :</span> {conclusion.observed_condition}</p>}
       <p>{conclusion?.summary ?? "Non évalué"}</p>
       {conclusion?.root_cause && <p className="mt-2">{diagnosisLabel} : {conclusion.root_cause}</p>}
+      {conclusion?.contributing_factors.length ? <div className="mt-2"><p className="font-medium">Facteurs contributifs</p><ul className="list-inside list-disc">{conclusion.contributing_factors.map((factor, index) => <li key={index}>{factor.statement}</li>)}</ul></div> : null}
       <p className="mt-2 text-muted">Confiance : {conclusion ? CONFIDENCE_LABEL[conclusion.confidence] : "Non évalué"}</p>
       <p className="text-muted">Impact non quantifié</p>
     </section>
     {result.error && <p role="alert" className="text-danger">{investigationFailure(result.error)}</p>}
     {result.hypotheses.map((h) => <section key={h.hypothesis_id} className="rounded-xl border border-border p-3">
-      <h3 className="font-semibold">Hypothèse · {CONFIDENCE_LABEL[h.confidence]}</h3><p>{h.statement}</p><p className="mt-1 text-muted">{h.rationale}</p>
+      <h3 className="font-semibold">Hypothèse · {CONFIDENCE_LABEL[h.confidence]} · profondeur causale {h.causal_depth}</h3><p>{h.statement}</p><p className="mt-1 text-muted">{h.rationale}</p>
       <p className="mt-1 text-[10px] text-muted">Appuis : {h.supporting_evidence_ids.join(", ") || "Aucun"}</p>
       {h.contradictory_evidence_ids.length > 0 && <p className="text-[10px] text-muted">Contradictions : {h.contradictory_evidence_ids.join(", ")}</p>}
     </section>)}

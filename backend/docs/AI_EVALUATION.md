@@ -22,6 +22,8 @@ runtime isolation assertion before LangGraph is called.
 - `causal_loader_bottleneck` evaluates a non-mechanical cross-fleet loading bottleneck.
 - `causal_fuel_efficiency_degradation` evaluates a rising fuel-rate trend with
   related performance and cycle evidence.
+- `production_operational_bottleneck` rejects a circular shortfall explanation and expects a
+  fleet, cycle, loading, waiting, availability, or downtime mechanism.
 
 The equipment codes are setup locators only. The graph receives resolved normal
 database IDs and does not know a simulator scenario name.
@@ -75,6 +77,17 @@ Reports expose three distinct quality levels:
 Mocked-provider runs score Level 1 only. Levels 2 and 3 are reported as
 `NOT_SCORED`, even when scripted checks pass. See `CAUSAL_SCENARIOS.md` for data
 preparation and demo commands.
+
+RCA scoring also checks symptom restatement, causal depth, temporal support,
+valid evidence links, contradiction handling, root-cause confidence, and—for
+congestion cases—the availability of bounded shared-loader/queue context. A
+PROBABLE or CONFIRMED result must identify a mechanism deeper than the trigger;
+otherwise the production graph deterministically downgrades it to INCONCLUSIVE.
+
+The `loading_context` evidence source is built by the operational service from
+persisted assignments, equipment-state intervals, cycles, and loading stages.
+It is bounded to 6 loaders, 8 waiting trucks per loader, and 8 representative
+loading-stage samples per loader. It contains no scenario name or hidden cause.
 
 Reports distinguish provider failures, application/integration failures,
 missing operational data, contradictory/data-quality warnings, and reasoning

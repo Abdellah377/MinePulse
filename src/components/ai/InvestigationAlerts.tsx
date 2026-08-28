@@ -117,6 +117,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
         <Section title="Pourquoi"><p className="text-[12px] font-medium text-foreground">{conclusion ? `${diagnosisLabel}. ${conclusion.summary}` : `${investigationStatus(entry)} — cause non évaluée.`}</p>
           {conclusion?.diagnosis_status === "PROBABLE" && conclusion.root_cause && <p className="mt-2 text-[11px] text-muted">Cause probable : {conclusion.root_cause}</p>}
           {conclusion?.diagnosis_status === "CONFIRMED" && conclusion.root_cause && <p className="mt-2 text-[11px] text-muted">Cause confirmée : {conclusion.root_cause}</p>}
+          {conclusion?.contributing_factors.length ? <div className="mt-2 text-[11px] text-muted"><p className="font-medium text-foreground">Facteurs contributifs</p><ul className="list-inside list-disc">{conclusion.contributing_factors.map((factor, index) => <li key={index}>{factor.statement}</li>)}</ul></div> : null}
           {result?.hypotheses.map((h) => <div key={h.hypothesis_id} className="mt-2 text-[11px]"><p>Hypothèse · {CONFIDENCE_LABEL[h.confidence]} : {h.statement}</p><p className="text-muted">{h.rationale}</p><p className="text-muted-2">Appuis : {h.supporting_evidence_ids.join(", ") || "Aucun"}</p>{h.contradictory_evidence_ids.length > 0 && <p className="text-muted-2">Contradictions : {h.contradictory_evidence_ids.join(", ")}</p>}</div>)}
           {result && <InvestigationUncertainty result={result} />}
         </Section>

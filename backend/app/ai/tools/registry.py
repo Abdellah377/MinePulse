@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 import logging
 from uuid import uuid4
 
@@ -33,6 +34,13 @@ class EvidenceToolRegistry:
         ctx: OperationalContext,
         trigger: InvestigationTrigger,
     ) -> list[EvidenceItem]:
+        trigger_text = json.dumps(trigger.payload, ensure_ascii=False).casefold()
+        congestion_related = trigger.trigger_type == TriggerType.CONGESTION_RISK or any(
+            term in trigger_text for term in ("wait", "attente", "congestion", "idle", "queue")
+        )
+        production_related = trigger.trigger_type == TriggerType.PRODUCTION_DEVIATION or any(
+            term in trigger_text for term in ("production", "tonnage", "shortfall")
+        )
         tools: list[tuple[str, Callable[[], EvidenceItem]]] = [
             ("operational_context", lambda: operational.context_evidence(ctx)),
             ("shift_production", lambda: operational.shift_production(self.session, ctx)),
@@ -53,12 +61,38 @@ class EvidenceToolRegistry:
             ("downtime", lambda: operational.downtime(self.session, ctx)),
             ("site_alerts", lambda: operational.site_alerts(self.session, ctx)),
         ]
-        if trigger.equipment_id is not None:
-            group = (
-                TelemetryMetricGroup.CONNECTIVITY
-                if trigger.trigger_type == TriggerType.CONNECTIVITY_ISSUE
-                else TelemetryMetricGroup.EQUIPMENT
+        if congestion_related or production_related:
+            tools.append(
+                (
+                    "loading_context",
+                    lambda: operational.loading_context(
+                        self.session,
+                        ctx,
+                        equipment_id=trigger.equipment_id,
+                        zone_id=trigger.zone_id,
+                    ),
+                )
             )
+        if congestion_related and trigger.equipment_id is not None:
+            tools.append(
+                (
+                    "equipment_timeline",
+                    lambda: operational.equipment_timeline(
+                        self.session, ctx, equipment_id=trigger.equipment_id
+                    ),
+                )
+            )
+        if trigger.equipment_id is not None:
+            if trigger.trigger_type == TriggerType.CONNECTIVITY_ISSUE or any(
+                term in trigger_text for term in ("communication", "connectivity", "telemetry")
+            ):
+                group = TelemetryMetricGroup.CONNECTIVITY
+            elif any(term in trigger_text for term in ("fuel", "carburant", "consommation")):
+                group = TelemetryMetricGroup.FUEL
+            elif trigger.trigger_type in {TriggerType.EQUIPMENT_ANOMALY, TriggerType.MAINTENANCE_RISK}:
+                group = TelemetryMetricGroup.MECHANICAL
+            else:
+                group = TelemetryMetricGroup.EQUIPMENT
             trend_request = EvidenceRequest(
                 request_type=EvidenceRequestType.EQUIPMENT_TELEMETRY_TRENDS,
                 equipment_id=trigger.equipment_id,
@@ -100,6 +134,12 @@ class EvidenceToolRegistry:
             ),
             EvidenceRequestType.EQUIPMENT_TIMELINE.value: lambda: operational.equipment_timeline(
                 self.session, ctx, equipment_id=request.equipment_id
+            ),
+            EvidenceRequestType.LOADING_CONTEXT.value: lambda: operational.loading_context(
+                self.session,
+                ctx,
+                equipment_id=request.equipment_id,
+                zone_id=request.zone_id,
             ),
             EvidenceRequestType.ZONE_CONTEXT.value: lambda: operational.zone_context(
                 self.session, ctx, zone_id=request.zone_id

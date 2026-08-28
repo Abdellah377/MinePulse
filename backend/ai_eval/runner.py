@@ -81,6 +81,7 @@ def default_mock_provider(case: EvaluationCase) -> DeterministicEvaluationProvid
     else:
         profile = MockProfile.REQUEST_MORE_EVIDENCE
         concepts = {
+            "MECHANICAL_FAILURE": "mechanical condition documented by a maintenance diagnostic",
             "CONNECTIVITY_LOSS": "communication loss",
             "COMMUNICATION_DEGRADATION": "communication degradation",
             "FUEL_EFFICIENCY_DEGRADATION": "fuel-efficiency degradation",
@@ -88,6 +89,7 @@ def default_mock_provider(case: EvaluationCase) -> DeterministicEvaluationProvid
             "COOLING_DEGRADATION": "cooling degradation and overheating",
             "TYRE_DEGRADATION": "progressive tyre pressure degradation",
             "OPERATIONAL_BOTTLENECK": "loader queue bottleneck",
+            "PRODUCTION_BOTTLENECK": "loading and cycle bottleneck",
         }
         concept = concepts.get(case.ground_truth.label.value, "mechanical failure")
     return DeterministicEvaluationProvider(
@@ -116,12 +118,12 @@ def report_from_result(
         item
         for item in checks
         if item.category.value
-        in {"EVIDENCE", "ROOT_CAUSE_SAFETY", "CONTRADICTIONS", "UNCERTAINTY", "RECOMMENDATION_SAFETY", "PROVENANCE"}
+        in {"EVIDENCE", "ROOT_CAUSE_SAFETY", "CAUSAL_REASONING", "CONTRADICTIONS", "UNCERTAINTY", "RECOMMENDATION_SAFETY", "PROVENANCE"}
     ]
     level_three_checks = [
         item
         for item in checks
-        if item.category.value in {"GROUND_TRUTH_ALIGNMENT", "UNCERTAINTY", "DATA_QUALITY"}
+        if item.category.value in {"GROUND_TRUTH_ALIGNMENT", "CAUSAL_REASONING", "UNCERTAINTY", "DATA_QUALITY"}
     ]
     quality_levels = {
         "LEVEL_1_INTEGRATION": bool(persisted_ok and result.error is None),

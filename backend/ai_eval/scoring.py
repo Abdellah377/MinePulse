@@ -6,7 +6,14 @@ from datetime import datetime, timedelta, timezone
 import re
 import unicodedata
 
-from app.ai.contracts import EvidenceStatus, InvestigationResult, InvestigationStatus
+from app.ai.causality import is_symptom_restatement
+from app.ai.contracts import (
+    ConfidenceLevel,
+    DiagnosisStatus,
+    EvidenceStatus,
+    InvestigationResult,
+    InvestigationStatus,
+)
 
 from ai_eval.contracts import (
     CheckCategory,
@@ -155,6 +162,8 @@ def cited_evidence_ids(result: InvestigationResult) -> set[str]:
     if result.conclusion:
         ids.update(result.conclusion.observed_fact_evidence_ids)
         ids.update(result.conclusion.derived_metric_evidence_ids)
+        for factor in result.conclusion.contributing_factors:
+            ids.update(factor.evidence_ids)
     if result.recommendation:
         ids.update(result.recommendation.evidence_ids)
     return ids
@@ -363,6 +372,42 @@ def evaluate_result(
             f"expected {getattr(case.expected_diagnosis_status, 'value', None)}.",
         )
     )
+    causal_status = status in {DiagnosisStatus.PROBABLE, DiagnosisStatus.CONFIRMED}
+    circular = bool(
+        causal_status
+        and conclusion
+        and conclusion.root_cause
+        and is_symptom_restatement(conclusion.root_cause, result.trigger)
+    )
+    causal_depth_ok = bool(
+        not causal_status
+        or (
+            conclusion
+            and conclusion.root_cause
+            and conclusion.causal_depth >= 1
+            and not circular
+        )
+    )
+    checks.append(
+        _check(
+            "symptom_restatement",
+            CheckCategory.CAUSAL_REASONING,
+            not circular,
+            "The proposed cause is distinct from the observed symptom."
+            if not circular
+            else "The proposed root cause merely restates the trigger symptom.",
+        )
+    )
+    checks.append(
+        _check(
+            "causal_depth",
+            CheckCategory.CAUSAL_REASONING,
+            causal_depth_ok,
+            "Any probable or confirmed result identifies a mechanism beyond depth 0."
+            if causal_depth_ok
+            else "A probable or confirmed result lacks a deeper causal mechanism.",
+        )
+    )
     confidence = conclusion.confidence if conclusion else None
     confidence_ok = case.expected_confidence is None or confidence == case.expected_confidence
     checks.append(
@@ -374,6 +419,50 @@ def evaluate_result(
             f"expected {getattr(case.expected_confidence, 'value', None)}.",
         )
     )
+    confidence_rank = {ConfidenceLevel.LOW: 0, ConfidenceLevel.MEDIUM: 1, ConfidenceLevel.HIGH: 2}
+    selected = [
+        hypotheses[item]
+        for item in (conclusion.supported_hypothesis_ids if conclusion else [])
+        if item in hypotheses
+    ]
+    cause_confidence_ok = bool(
+        not causal_status
+        or (
+            confidence is not None
+            and selected
+            and confidence_rank[confidence] <= max(confidence_rank[item.confidence] for item in selected)
+        )
+    )
+    checks.append(
+        _check(
+            "root_cause_confidence_not_symptom_confidence",
+            CheckCategory.CAUSAL_REASONING,
+            cause_confidence_ok,
+            "Conclusion confidence does not exceed its selected causal hypothesis."
+            if cause_confidence_ok
+            else "Conclusion confidence exceeds the supported causal explanation.",
+        )
+    )
+    trigger_type = getattr(result.trigger.trigger_type, "value", result.trigger.trigger_type)
+    if trigger_type == "CONGESTION_RISK":
+        loading_evidence = [
+            item for item in result.evidence
+            if item.available and item.source_tool == "loading_context" and isinstance(item.value, dict)
+        ]
+        cross_asset_ok = bool(
+            loading_evidence
+            and any(item.value.get("loaders") for item in loading_evidence)
+        )
+        checks.append(
+            _check(
+                "cross_asset_reasoning_context",
+                CheckCategory.CAUSAL_REASONING,
+                cross_asset_ok,
+                "Bounded shared loader/queue context was available."
+                if cross_asset_ok
+                else "No usable shared loader/queue context was supplied.",
+            )
+        )
 
     diagnosis_text = " ".join(
         [

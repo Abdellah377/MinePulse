@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -53,6 +53,16 @@ TREND_METRIC_GROUPS: dict[str, tuple[str, ...]] = {
         "speed_kmh",
     ),
 }
+
+
+def _utc_timestamp(value: str | datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
 
 
 def _trend_window(ctx: OperationalContext, request: EvidenceRequest):
@@ -121,11 +131,16 @@ def telemetry_trends(
             },
             notes="No observed telemetry samples were available in the bounded incident window.",
         )
+    incident_utc = _utc_timestamp(until)
+    metric_timestamps = (
+        (_utc_timestamp(item.get("lastObservedAt")), item["sampleCount"])
+        for item in result.get("metrics", [])
+    )
     pre_incident_count = max(
         (
-            item["sampleCount"]
-            for item in result.get("metrics", [])
-            if item.get("lastObservedAt") and item["lastObservedAt"] <= until.isoformat()
+            sample_count
+            for timestamp, sample_count in metric_timestamps
+            if timestamp is not None and incident_utc is not None and timestamp <= incident_utc
         ),
         default=0,
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from uuid import UUID
 
 import pytest
@@ -14,7 +15,7 @@ from app.ai.contracts import EvidenceRequest, EvidenceRequestType
 from app.ai.persistence import get_investigation
 from app.ai.tools import oem as ai_oem_tools
 from app.db.database import SessionLocal
-from app.db.models import Equipment, EquipmentTelemetry
+from app.db.models import Equipment, EquipmentTelemetry, Site
 from app.oem import queries as oem_queries
 from app.services.operational.context import get_operational_context
 from simulator.apply_commands import _apply_command
@@ -54,7 +55,8 @@ def test_mocked_provider_runs_real_persisted_operational_stack(case_id):
         )
         serialized_trigger = report.trigger.model_dump_json().casefold()
         ground_truth = EVALUATION_CASES[case_id].ground_truth
-        assert ground_truth.scenario_name not in serialized_trigger
+        if ground_truth.scenario_name:
+            assert ground_truth.scenario_name not in serialized_trigger
         assert ground_truth.label.value.casefold() not in serialized_trigger
 
 
@@ -125,9 +127,13 @@ def test_causal_scenario_persists_observable_evidence_before_evaluation():
         assert oil_trend["direction"] == "falling"
         assert 3 <= oil_trend["sampleCount"]
         assert len(oil_trend["representativeSamples"]) <= 8
-        assert oil_trend["firstObservedAt"] < oil_trend["lastObservedAt"] <= run.incident_at.isoformat()
+        first_observed = datetime.fromisoformat(oil_trend["firstObservedAt"])
+        last_observed = datetime.fromisoformat(oil_trend["lastObservedAt"])
+        assert first_observed < last_observed <= run.incident_at
 
-        ctx = get_operational_context(session, site_id=equipment.site_id)
+        site = session.get(Site, equipment.site_id)
+        assert site is not None
+        ctx = get_operational_context(session, site_code=site.code)
         trend_evidence = ai_oem_tools.telemetry_trends(
             session,
             ctx,

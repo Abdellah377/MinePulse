@@ -67,7 +67,11 @@ def _evidence(evidence_id="ev-production", metric="shift_production_summary"):
         source_tool="shift_production",
         source_service="app.services.operational.production.production_summary",
         metric=metric,
-        value={"tonnage": 80, "target": 100},
+        value={
+            "tonnage": 80,
+            "target": 100,
+            "windowStart": "2026-08-24T09:00:00+00:00",
+        },
         site_id=1,
         shift_id=2,
         observed_at=_ctx().sim_now,
@@ -151,6 +155,7 @@ def _diagnosis(*, requests=None, can_conclude=True):
                 supporting_evidence_ids=["ev-production", "invented-id"],
                 contradictory_evidence_ids=[],
                 confidence=ConfidenceLevel.MEDIUM,
+                causal_depth=1,
                 rationale="Production evidence indicates a gap.",
             )
         ],
@@ -309,10 +314,10 @@ def test_iteration_limit_forces_explicit_uncertainty_and_no_root_cause():
     assert tools.request_calls == 1
     assert result["iteration_limit_reached"] is True
     assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
-    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
     assert result["conclusion"].reliable_root_cause is False
-    assert result["conclusion"].root_cause is not None
-    assert not result["conclusion"].summary.startswith("Available evidence is insufficient")
+    assert result["conclusion"].root_cause is None
+    assert result["conclusion"].summary.startswith("Available evidence is insufficient")
     assert any("iteration" in item.casefold() for item in result["conclusion"].unresolved_uncertainties)
 
 
@@ -368,9 +373,9 @@ def test_cannot_conclude_without_requests_finishes_inconclusively():
     assert tools.request_calls == 0
     assert result["iteration_count"] == 1
     assert result["evidence_expansion_exhausted"] is True
-    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
     assert result["conclusion"].reliable_root_cause is False
-    assert result["conclusion"].root_cause is not None
+    assert result["conclusion"].root_cause is None
     assert result["status"] == InvestigationStatus.COMPLETED_WITH_UNCERTAINTY
 
 
@@ -407,13 +412,12 @@ def test_uncertain_result_cannot_repeat_provider_confirmation_language():
             result["recommendation"].rationale,
         ]
     ).casefold()
-    assert result["conclusion"].diagnosis_status == DiagnosisStatus.PROBABLE
+    assert result["conclusion"].diagnosis_status == DiagnosisStatus.INCONCLUSIVE
     assert result["conclusion"].reliable_root_cause is False
-    assert result["conclusion"].root_cause is not None
+    assert result["conclusion"].root_cause is None
     assert "confirming" not in combined
     assert "confirmed diagnosis" not in combined
-    assert "did not establish a reliable root cause" not in combined
-    assert "probable" in combined
+    assert "did not establish a reliable root cause" in combined
 
 
 def test_repeated_unavailable_request_stops_before_iteration_limit():
@@ -508,6 +512,7 @@ class ConfirmedProvider(ScriptedProvider):
                     supporting_evidence_ids=["ev-fault"],
                     contradictory_evidence_ids=[],
                     confidence=ConfidenceLevel.HIGH,
+                    causal_depth=2,
                     rationale="OEM diagnostic confirmation is present.",
                 )
             ],
@@ -638,6 +643,7 @@ def test_equal_competing_hypotheses_are_inconclusive():
                 supporting_evidence_ids=["ev-production"],
                 contradictory_evidence_ids=[],
                 confidence=ConfidenceLevel.MEDIUM,
+                causal_depth=1,
                 rationale="Production evidence indicates a gap.",
             ),
             Hypothesis(
@@ -646,6 +652,7 @@ def test_equal_competing_hypotheses_are_inconclusive():
                 supporting_evidence_ids=["ev-production"],
                 contradictory_evidence_ids=[],
                 confidence=ConfidenceLevel.MEDIUM,
+                causal_depth=1,
                 rationale="The same evidence also fits an operational delay.",
             ),
         ],

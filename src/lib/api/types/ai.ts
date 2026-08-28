@@ -7,6 +7,11 @@ export type Contradiction = {
   evidence_ids: Array<string>
 }
 
+export type ContributingFactor = {
+  statement: string
+  evidence_ids: Array<string>
+}
+
 export type DiagnosisStatus = "CONFIRMED" | "PROBABLE" | "INCONCLUSIVE"
 
 export type EvidenceItem = {
@@ -52,7 +57,7 @@ export type EvidenceRequestAttempt = {
 
 export type EvidenceRequestOutcome = "AVAILABLE" | "UNAVAILABLE" | "UNSUPPORTED" | "ERROR" | "DUPLICATE_SKIPPED" | "ITERATION_LIMIT_REACHED"
 
-export type EvidenceRequestType = "SHIFT_PRODUCTION" | "FLEET_SNAPSHOT" | "CYCLE_PERFORMANCE" | "DOWNTIME" | "SITE_ALERTS" | "ASSIGNMENTS" | "EQUIPMENT_TIMELINE" | "ZONE_CONTEXT" | "OEM_CONNECTIVITY" | "OEM_DIAGNOSTICS" | "OEM_ERRORS" | "OEM_MAINTENANCE_INDICATORS" | "EQUIPMENT_TELEMETRY_TRENDS"
+export type EvidenceRequestType = "SHIFT_PRODUCTION" | "FLEET_SNAPSHOT" | "CYCLE_PERFORMANCE" | "DOWNTIME" | "SITE_ALERTS" | "ASSIGNMENTS" | "EQUIPMENT_TIMELINE" | "LOADING_CONTEXT" | "ZONE_CONTEXT" | "OEM_CONNECTIVITY" | "OEM_DIAGNOSTICS" | "OEM_ERRORS" | "OEM_MAINTENANCE_INDICATORS" | "EQUIPMENT_TELEMETRY_TRENDS"
 
 export type EvidenceStatus = "AVAILABLE" | "UNAVAILABLE" | "UNSUPPORTED" | "ERROR"
 
@@ -62,14 +67,18 @@ export type Hypothesis = {
   supporting_evidence_ids: Array<string>
   contradictory_evidence_ids: Array<string>
   confidence: ConfidenceLevel
+  causal_depth: number
   rationale: string
 }
 
 export type InvestigationConclusion = {
   summary: string
   diagnosis_status: DiagnosisStatus
+  observed_condition: string | null
   root_cause: string | null
   reliable_root_cause: boolean
+  causal_depth: number
+  contributing_factors: Array<ContributingFactor>
   observed_fact_evidence_ids: Array<string>
   derived_metric_evidence_ids: Array<string>
   supported_hypothesis_ids: Array<string>

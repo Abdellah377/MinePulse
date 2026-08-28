@@ -15,6 +15,7 @@ from app.ai.tools import oem, operational
 from app.ai.tools.registry import EvidenceToolRegistry
 from app.db.models import Shift, Site
 from app.services.operational.context import OperationalContext
+from app.services.operational.loading import summarize_loading_durations
 
 
 def _context() -> OperationalContext:
@@ -70,6 +71,50 @@ def test_downtime_adapter_calls_authoritative_service(monkeypatch):
 
     assert evidence.value == [{"reason": "Maintenance", "hours": 1.5}]
     assert evidence.source_service == "app.services.operational.downtime.downtime_reasons"
+
+
+def test_loading_context_adapter_calls_authoritative_service_and_preserves_bounds(monkeypatch):
+    captured = []
+
+    def fake_context(session, ctx, *, equipment_id=None, zone_id=None):
+        captured.append((session, ctx, equipment_id, zone_id))
+        return {
+            "siteId": ctx.site_id,
+            "shiftId": ctx.shift_id,
+            "windowStart": ctx.shift_window_start,
+            "windowEnd": ctx.sim_now,
+            "targetEquipmentId": equipment_id,
+            "targetZoneId": zone_id,
+            "loaders": [{"loaderId": 10, "waitingTruckCount": 3}],
+            "bounds": {"maxLoaders": 6, "maxWaitingTrucksPerLoader": 8},
+            "sourceRecordIds": ["assignment:1", "state:2"],
+        }
+
+    monkeypatch.setattr(operational.loading_service, "loading_service_context", fake_context)
+    evidence = operational.loading_context(object(), _context(), equipment_id=7, zone_id=3)
+
+    assert captured and captured[0][2:] == (7, 3)
+    assert evidence.source_service == "app.services.operational.loading.loading_service_context"
+    assert evidence.value["loaders"][0]["waitingTruckCount"] == 3
+    assert evidence.source_record_ids == ["assignment:1", "state:2"]
+    assert "scenario" not in evidence.model_dump_json().casefold()
+
+
+def test_loading_duration_summary_is_bounded_and_null_aware():
+    samples = [
+        {
+            "endTime": f"2026-08-24T09:{index:02d}:00+00:00",
+            "durationMinutes": float(index),
+        }
+        for index in range(1, 16)
+    ]
+    summary = summarize_loading_durations(samples)
+
+    assert summary["recentSampleCount"] == 3
+    assert summary["baselineSampleCount"] == 8
+    assert summary["recentAverageLoadingMinutes"] == 14.0
+    assert summary["baselineAverageLoadingMinutes"] == 8.5
+    assert summarize_loading_durations([])["loadingDurationChangePct"] is None
 
 
 def test_unsupported_request_is_unavailable_and_never_executed():
@@ -261,6 +306,37 @@ def test_ai_telemetry_trend_adapter_has_bounded_incident_provenance_and_no_hidde
     assert "root_cause" not in evidence.model_dump_json().casefold()
 
 
+def test_preincident_count_compares_timezone_offsets_as_datetimes(monkeypatch):
+    monkeypatch.setattr(oem, "_equipment_code", lambda session, ctx, equipment_id: "TRK-001")
+    monkeypatch.setattr(
+        oem.queries,
+        "get_equipment_signal_trends",
+        lambda *args, **kwargs: {
+            "code": "TRK-001",
+            "metrics": [
+                {
+                    "metric": "oil_pressure_kpa",
+                    "sampleCount": 5,
+                    "lastObservedAt": "2026-08-24T10:00:00+01:00",
+                }
+            ],
+            "sourcePointCount": 5,
+            "empty": False,
+        },
+    )
+    request = EvidenceRequest(
+        request_type=EvidenceRequestType.EQUIPMENT_TELEMETRY_TRENDS,
+        equipment_id=7,
+        end_time=datetime(2026, 8, 24, 9, 0, tzinfo=timezone.utc),
+        parameters=["mechanical"],
+        reason="Verify timezone-normalized temporal support.",
+    )
+
+    evidence = oem.telemetry_trends(object(), _context(), request)
+
+    assert evidence.metadata["preIncidentSampleCount"] == 5
+
+
 def test_equipment_investigation_initial_evidence_includes_telemetry_trends(monkeypatch):
     captured = []
 
@@ -305,3 +381,73 @@ def test_equipment_investigation_initial_evidence_includes_telemetry_trends(monk
     trend = next(item for item in evidence if item.source_tool == "equipment_telemetry_trends")
     assert "equipment_telemetry_trends" in captured
     assert datetime.fromisoformat(trend.metadata["incidentTime"].replace("Z", "+00:00")) == incident
+
+
+def test_congestion_initial_evidence_includes_cross_asset_loading_context(monkeypatch):
+    captured = []
+
+    def fake_safe(self, ctx, name, call, **kwargs):
+        captured.append(name)
+        return EvidenceItem(
+            kind=EvidenceKind.FACT,
+            source_tool=name,
+            source_service="test",
+            metric=name,
+            value={},
+        )
+
+    monkeypatch.setattr(EvidenceToolRegistry, "_safe_call", fake_safe)
+    trigger = InvestigationTrigger(
+        trigger_type=TriggerType.OPERATIONAL_EVENT,
+        trigger_source=TriggerSource.USER_INVESTIGATE,
+        site_id=1,
+        shift_id=2,
+        equipment_id=7,
+        occurred_at=_context().sim_now,
+        payload={"reason": "TRK-007 waits for loading."},
+    )
+
+    EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
+
+    assert "loading_context" in captured
+    assert "equipment_timeline" in captured
+
+
+def test_fuel_trigger_selects_bounded_fuel_metric_group(monkeypatch):
+    requests = []
+
+    def fake_safe(self, ctx, name, call, **kwargs):
+        if name == "equipment_telemetry_trends":
+            return call()
+        return EvidenceItem(
+            kind=EvidenceKind.FACT,
+            source_tool=name,
+            source_service="test",
+            metric=name,
+            value={},
+        )
+
+    monkeypatch.setattr(EvidenceToolRegistry, "_safe_call", fake_safe)
+    monkeypatch.setattr(
+        oem,
+        "telemetry_trends",
+        lambda session, ctx, request: requests.append(request) or EvidenceItem(
+            kind=EvidenceKind.DERIVED_METRIC,
+            source_tool="equipment_telemetry_trends",
+            source_service="test",
+            metric="equipment_telemetry_trends",
+            value={},
+        ),
+    )
+    trigger = InvestigationTrigger(
+        trigger_type=TriggerType.EQUIPMENT_ANOMALY,
+        trigger_source=TriggerSource.EXISTING_ALERT,
+        site_id=1,
+        equipment_id=7,
+        occurred_at=_context().sim_now,
+        payload={"title": "Fuel Rate High"},
+    )
+
+    EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
+
+    assert requests[0].parameters == ["fuel"]
