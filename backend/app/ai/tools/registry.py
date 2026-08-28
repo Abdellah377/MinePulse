@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import json
 import logging
+from time import monotonic
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,7 @@ from app.ai.contracts import (
     TelemetryMetricGroup,
     TriggerType,
 )
+from app.ai.debug import DebugEventType, InvestigationDebugSink, NullDebugRecorder
 from app.ai.tools import oem, operational
 from app.services.operational.context import OperationalContext
 
@@ -26,8 +28,9 @@ logger = logging.getLogger(__name__)
 
 
 class EvidenceToolRegistry:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, debug: InvestigationDebugSink | None = None):
         self.session = session
+        self.debug = debug or NullDebugRecorder()
 
     def gather_initial(
         self,
@@ -187,9 +190,12 @@ class EvidenceToolRegistry:
         *,
         request_id: str | None = None,
     ) -> EvidenceItem:
+        started = monotonic()
         try:
-            return call()
+            item = call()
         except Exception as exc:
+            duration_ms = int((monotonic() - started) * 1000)
+            self._record_tool(tool_name, None, duration_ms, request_id=request_id, outcome="error")
             error_reference = f"ai-tool-{uuid4()}"
             logger.exception(
                 "AI evidence service failed",
@@ -219,3 +225,43 @@ class EvidenceToolRegistry:
                 },
                 notes="Approved evidence lookup failed; value is unavailable.",
             )
+        duration_ms = int((monotonic() - started) * 1000)
+        status = getattr(item.status, "value", item.status)
+        outcome = "available" if item.available else (status or "unavailable")
+        self._record_tool(
+            tool_name,
+            item,
+            duration_ms,
+            request_id=request_id,
+            outcome=str(outcome),
+        )
+        return item
+
+    def _record_tool(
+        self,
+        tool_name: str,
+        item: EvidenceItem | None,
+        duration_ms: int,
+        *,
+        request_id: str | None,
+        outcome: str,
+    ) -> None:
+        try:
+            self.debug.add_evidence_duration(duration_ms)
+            self.debug.record(
+                DebugEventType.TOOL_COMPLETED,
+                stage="evidence",
+                summary=f"Tool {tool_name}: {outcome}",
+                duration_ms=duration_ms,
+                metadata={
+                    "tool_name": tool_name,
+                    "outcome": outcome,
+                    "available": bool(item.available) if item is not None else False,
+                    "evidence_id": item.evidence_id if item is not None else None,
+                    "request_id": request_id,
+                    "source_tool": item.source_tool if item is not None else tool_name,
+                    "status": getattr(item.status, "value", item.status) if item is not None else "ERROR",
+                },
+            )
+        except Exception:
+            logger.exception("Investigation debug tool record failed")

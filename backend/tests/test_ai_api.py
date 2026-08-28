@@ -26,6 +26,7 @@ def test_investigation_api_routes_are_registered():
     paths = {route.path for route in app.routes}
     assert "/api/ai/investigations" in paths
     assert "/api/ai/investigations/{investigation_id}" in paths
+    assert "/api/ai/investigations/{investigation_id}/debug" in paths
 
 
 def test_missing_migration_returns_storage_error_not_provider_error(monkeypatch):
@@ -108,5 +109,44 @@ def test_investigation_api_serializes_diagnosis_status(monkeypatch):
         assert payload["diagnosis_status"] == "PROBABLE"
         assert payload["reliable_root_cause"] is False
         assert payload["root_cause"] == "lubrication degradation"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_debug_endpoint_forbidden_when_disabled(monkeypatch):
+    monkeypatch.setattr(ai, "get_settings", lambda: type("S", (), {"ai_debug_mode": False})())
+    session = MagicMock()
+    app.dependency_overrides[get_db] = lambda: session
+    try:
+        response = TestClient(app).get(f"/api/ai/investigations/{uuid4()}/debug")
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "AI_DEBUG_DISABLED"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_debug_endpoint_returns_trace_when_enabled(monkeypatch):
+    monkeypatch.setattr(ai, "get_settings", lambda: type("S", (), {"ai_debug_mode": True})())
+    row = MagicMock()
+    row.debug_trace = {"investigation_id": "x", "events": [], "stop_reason": "PROBABLE_CAUSE"}
+    monkeypatch.setattr(ai, "get_investigation", lambda session, investigation_id: row)
+    session = MagicMock()
+    app.dependency_overrides[get_db] = lambda: session
+    try:
+        response = TestClient(app).get(f"/api/ai/investigations/{uuid4()}/debug")
+        assert response.status_code == 200
+        assert response.json()["stop_reason"] == "PROBABLE_CAUSE"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_debug_endpoint_missing_trace_is_not_found(monkeypatch):
+    monkeypatch.setattr(ai, "get_settings", lambda: type("S", (), {"ai_debug_mode": True})())
+    monkeypatch.setattr(ai, "get_investigation", lambda session, investigation_id: None)
+    session = MagicMock()
+    app.dependency_overrides[get_db] = lambda: session
+    try:
+        response = TestClient(app).get(f"/api/ai/investigations/{uuid4()}/debug")
+        assert response.status_code == 404
     finally:
         app.dependency_overrides.pop(get_db, None)

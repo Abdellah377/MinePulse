@@ -5,6 +5,7 @@ import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 import type { WorkspacePanelProps } from "@/components/workspace/WorkspaceHost"
 import { InvestigationResultView } from "./InvestigationResultView"
+import { InvestigationDebugPanel } from "./InvestigationDebugPanel"
 import { Chip } from "./InvestigationLayout"
 import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
 import { Button } from "@/components/ui/button"
@@ -57,7 +58,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
           <p className="mt-2 text-[11px] text-muted">Preuves : {rec.evidence_ids.join(", ") || "Aucune"}</p><p className="mt-2 text-[11px] text-muted">Impact non quantifié</p>
           <div className="mt-2.5 flex flex-wrap gap-1.5"><Button size="sm" variant="outline" disabled title="Simulation d’impact non disponible en V1">Simuler</Button><Button size="sm" variant="outline" onClick={() => mark("prepared")}><Flag className="size-3.5" />Préparer</Button><Button size="sm" variant="outline" onClick={() => mark("marked")}><Bookmark className="size-3.5" />Marquer</Button><Button size="sm" variant="ghost" onClick={() => mark(decision === "dismissed" ? "pending" : "dismissed")}>{decision === "dismissed" ? "Rétablir" : "Ignorer"}</Button></div>
         </article> : <p className="py-8 text-center text-xs text-muted">Recommandation non évaluée ou indisponible.</p>}
-        {result && <details className="rounded-md border border-border bg-surface p-3"><summary className="cursor-pointer text-[12px] font-semibold">Conclusion / preuves de l’investigation</summary><div className="mt-3"><InvestigationResultView result={result} /></div></details>}
+        {result && <details className="rounded-md border border-border bg-surface p-3"><summary className="cursor-pointer text-[12px] font-semibold">Conclusion / preuves de l’investigation</summary><div className="mt-3"><InvestigationResultView result={result} /><InvestigationDebugPanel investigationId={result.investigation_id} /></div></details>}
       </main>
       <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto lg:col-span-5">
         <div className="rounded-md border border-border bg-surface p-3"><h3 className="text-[12px] font-semibold text-foreground">Simulation / comparaison</h3><p className="mt-2 flex items-start gap-2 text-[11px] text-muted"><AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-muted-2" />Simulation d’impact non disponible en V1</p><p className="mt-2 text-[11px] text-muted">Gain de production, réduction d’attente, amélioration de cycle : non évalués.</p></div>

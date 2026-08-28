@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     ai_provider_timeout_seconds: float = Field(default=45, ge=5, le=60)
     # Cumulative provider budget per invocation; frontend allows 180s including DB overhead.
     ai_investigation_llm_budget_seconds: float = Field(default=150, ge=10, le=150)
+    # Developer-only investigation trace. Default off; never required for operators.
+    ai_debug_mode: bool = False
 
     # Deterministic operational monitoring. Disabled by default so a developer
     # cannot accidentally create paid investigations without opting in.

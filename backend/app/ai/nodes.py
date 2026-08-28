@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import logging
+from time import monotonic
 import traceback
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -34,10 +36,23 @@ from app.ai.contracts import (
     TelemetryMetricGroup,
 )
 from app.ai.causality import trigger_observation, validated_causal_depth
+from app.ai.debug import (
+    DebugEventType,
+    InvestigationDebugSink,
+    NullDebugRecorder,
+    ValidationCheck,
+    compact_conclusion,
+    compact_diagnosis,
+    compact_evidence,
+    compact_preview,
+    consume_provider_metrics,
+)
 from app.ai.llm.provider import LLMProvider
 from app.ai.persistence import InvestigationPersistenceError, persist_investigation
+from app.ai.routers import route_after_analysis
 from app.ai.state import InvestigationState
 from app.ai.tools import EvidenceToolRegistry
+from app.db.models import AiInvestigation
 from app.services.operational.context import OperationalContext
 
 
@@ -49,6 +64,7 @@ class InvestigationRuntime:
     context_resolver: Callable[[Session, InvestigationTrigger], OperationalContext]
     context_reconstructor: Callable[[Session, ResolvedOperationalContext], OperationalContext]
     persister: Callable[[Session, InvestigationState], object] = persist_investigation
+    debug: InvestigationDebugSink = field(default_factory=NullDebugRecorder)
 
 
 logger = logging.getLogger(__name__)
@@ -131,10 +147,25 @@ def _merge_ids(existing: list[str], extra: list[str], allowed: set[str]) -> list
     return list(dict.fromkeys(item for item in [*existing, *extra] if item in allowed))
 
 
-def _error(stage: str, exc: Exception, investigation_id: str) -> dict:
+def _error(stage: str, exc: Exception, investigation_id: str, debug: InvestigationDebugSink | None = None) -> dict:
     # Stack locations aid debugging; arbitrary exception bodies never enter durable results.
     logger.error("Investigation %s failed stage=%s type=%s\n%s", investigation_id,
         stage, type(exc).__name__, "".join(traceback.format_tb(exc.__traceback__)))
+    if debug is not None:
+        event = (
+            DebugEventType.PROVIDER_FAILURE
+            if stage in {"analyze", "build_conclusion", "build_recommendation"}
+            else DebugEventType.INVESTIGATION_FAILED
+        )
+        debug.record(
+            event,
+            stage=stage,
+            summary=f"Investigation failed at {stage} ({type(exc).__name__})",
+            metadata={
+                "error_type": type(exc).__name__,
+                "request_id": getattr(exc, "request_id", None),
+            },
+        )
     return {
         "status": InvestigationStatus.FAILED,
         "error": InvestigationError(
@@ -157,6 +188,31 @@ class InvestigationNodes:
     def __init__(self, runtime: InvestigationRuntime):
         self.runtime = runtime
 
+    def _fail(self, stage: str, exc: Exception, investigation_id: str) -> dict:
+        return _error(stage, exc, investigation_id, self.runtime.debug)
+
+    def _llm(self, stage: str, call, compact_meta) -> object:
+        started = monotonic()
+        try:
+            result = call()
+        except Exception:
+            self.runtime.debug.add_llm_metrics(consume_provider_metrics(self.runtime.provider))
+            raise
+        metrics = consume_provider_metrics(self.runtime.provider)
+        duration = int(metrics["duration_ms"]) if metrics and isinstance(metrics.get("duration_ms"), int) else int(
+            (monotonic() - started) * 1000
+        )
+        self.runtime.debug.add_llm_metrics(metrics or {"duration_ms": duration, "model": self.runtime.provider.model_name})
+        metadata = compact_meta(result) if callable(compact_meta) else compact_meta
+        self.runtime.debug.record(
+            DebugEventType.LLM_CALL,
+            stage=stage,
+            summary=f"Structured LLM call ({stage})",
+            duration_ms=duration,
+            metadata=metadata if isinstance(metadata, dict) else {},
+        )
+        return result
+
     def resolve_context(self, state: InvestigationState) -> dict:
         try:
             ctx = self.runtime.context_resolver(self.runtime.session, state["trigger"])
@@ -170,19 +226,44 @@ class InvestigationNodes:
                 window_start=ctx.shift_window_start,
                 window_end=ctx.shift_window_end,
             )
+            self.runtime.debug.record(
+                DebugEventType.CONTEXT_RESOLVED,
+                stage="resolve_context",
+                summary=f"Resolved {resolved.site_code} / shift {resolved.shift_id}",
+                metadata={
+                    "site_id": resolved.site_id,
+                    "site_code": resolved.site_code,
+                    "shift_id": resolved.shift_id,
+                    "window_start": resolved.window_start.isoformat() if resolved.window_start else None,
+                    "window_end": resolved.window_end.isoformat() if resolved.window_end else None,
+                },
+            )
             return {
                 "operational_context": resolved,
                 "status": InvestigationStatus.GATHERING_EVIDENCE,
             }
         except Exception as exc:
-            return _error("resolve_context", exc, state["investigation_id"])
+            return self._fail("resolve_context", exc, state["investigation_id"])
 
     def gather_initial_evidence(self, state: InvestigationState) -> dict:
         try:
             ctx = self._reconstruct_context(state)
             evidence = self.runtime.tools.gather_initial(ctx, state["trigger"])
         except Exception as exc:
-            return _error("gather_initial_evidence", exc, state["investigation_id"])
+            return self._fail("gather_initial_evidence", exc, state["investigation_id"])
+        self.runtime.debug.mark_initial_count(len(evidence))
+        self.runtime.debug.record(
+            DebugEventType.INITIAL_EVIDENCE_GATHERED,
+            stage="gather_initial_evidence",
+            summary=f"Gathered {len(evidence)} initial evidence item(s)",
+            metadata={
+                "count": len(evidence),
+                "ids": [item.evidence_id for item in evidence],
+                "kinds": [getattr(item.kind, "value", item.kind) for item in evidence],
+                "tools": [item.source_tool for item in evidence],
+                "items": [compact_evidence(item) for item in evidence],
+            },
+        )
         return {
             "evidence": evidence,
             "status": InvestigationStatus.ANALYZING,
@@ -200,10 +281,10 @@ class InvestigationNodes:
             "approvedTelemetryMetricGroups": [item.value for item in TelemetryMetricGroup],
         }
         try:
-            diagnosis = self.runtime.provider.diagnose(payload)
-            diagnosis = self._sanitize_diagnosis(diagnosis, state)
+            diagnosis = self._llm("analyze", lambda: self.runtime.provider.diagnose(payload), compact_diagnosis)
+            diagnosis = self._sanitize_diagnosis(diagnosis, state, self.runtime.debug)
         except Exception as exc:
-            return {"iteration_count": next_iteration, **_error("analyze", exc, state["investigation_id"])}
+            return {"iteration_count": next_iteration, **self._fail("analyze", exc, state["investigation_id"])}
         useful_requests, skipped_attempts = self._new_requests(
             diagnosis.requested_information,
             state,
@@ -229,6 +310,39 @@ class InvestigationNodes:
         contradictions = self._merge_contradictions(
             state["contradictions"], diagnosis.contradictions
         )
+        if useful_requests:
+            self.runtime.debug.record(
+                DebugEventType.ADDITIONAL_EVIDENCE_REQUESTED,
+                stage="analyze",
+                summary=f"Requested {len(useful_requests)} additional evidence type(s)",
+                metadata={
+                    "types": [request.request_type.value for request in useful_requests],
+                    "reasons": [compact_preview(request.reason) for request in useful_requests],
+                },
+            )
+        preview = {
+            **state,
+            "diagnosis": diagnosis,
+            "requested_information": useful_requests,
+            "iteration_count": next_iteration,
+            "iteration_limit_reached": limit_reached,
+            "evidence_expansion_exhausted": expansion_exhausted,
+            "status": InvestigationStatus.ANALYZING,
+        }
+        next_node = route_after_analysis(preview)
+        self.runtime.debug.record(
+            DebugEventType.ROUTER_DECISION,
+            stage="analyze",
+            summary=f"Route to {next_node}",
+            metadata={
+                "can_conclude": diagnosis.can_conclude,
+                "request_count": len(useful_requests),
+                "iteration_count": next_iteration,
+                "max_iterations": state["max_iterations"],
+                "evidence_expansion_exhausted": expansion_exhausted,
+                "next_node": next_node,
+            },
+        )
         return {
             "diagnosis": diagnosis,
             "hypotheses": hypotheses,
@@ -249,7 +363,7 @@ class InvestigationNodes:
             ctx = self._reconstruct_context(state)
             additional = self.runtime.tools.gather_requested(ctx, state["requested_information"])
         except Exception as exc:
-            return _error("gather_requested_evidence", exc, state["investigation_id"])
+            return self._fail("gather_requested_evidence", exc, state["investigation_id"])
         attempts = []
         for request, evidence in zip(state["requested_information"], additional, strict=False):
             outcome = {
@@ -276,10 +390,22 @@ class InvestigationNodes:
             "evidenceExpansionExhausted": state["evidence_expansion_exhausted"],
         }
         try:
-            conclusion = self.runtime.provider.build_conclusion(payload)
-            conclusion = self._sanitize_conclusion(conclusion, state)
-        except Exception as exc:
-            return _error("build_conclusion", exc, state["investigation_id"])
+            conclusion = self._llm(
+                "build_conclusion",
+                lambda: self.runtime.provider.build_conclusion(payload),
+                lambda item: compact_conclusion(item).model_dump() if compact_conclusion(item) else {},
+            )
+            self.runtime.debug.set_proposed_conclusion(conclusion)
+            conclusion = self._sanitize_conclusion(conclusion, state, self.runtime.debug)
+            snapshot = compact_conclusion(conclusion)
+            self.runtime.debug.record(
+                DebugEventType.CONCLUSION_BUILT,
+                stage="build_conclusion",
+                summary=f"Backend conclusion {getattr(conclusion.diagnosis_status, 'value', conclusion.diagnosis_status)}",
+                metadata=snapshot.model_dump() if snapshot else {},
+            )
+        except Exception as extra:
+            return self._fail("build_conclusion", extra, state["investigation_id"])
         return {
             "conclusion": conclusion,
             "status": InvestigationStatus.BUILDING_RECOMMENDATION,
@@ -301,7 +427,16 @@ class InvestigationNodes:
             ],
         }
         try:
-            recommendation = self.runtime.provider.build_recommendation(payload)
+            proposed = self._llm(
+                "build_recommendation",
+                lambda: self.runtime.provider.build_recommendation(payload),
+                lambda item: {
+                    "action_type": getattr(item.action_type, "value", item.action_type),
+                    "description": compact_preview(item.description),
+                    "evidence_ids": list(item.evidence_ids),
+                },
+            )
+            recommendation = proposed
             valid_evidence = {
                 item.evidence_id for item in state["evidence"] if item.available
             }
@@ -325,7 +460,7 @@ class InvestigationNodes:
                 }
             )
         except Exception as exc:
-            return _error("build_recommendation", exc, state["investigation_id"])
+            return self._fail("build_recommendation", exc, state["investigation_id"])
         conclusion = state["conclusion"]
         status = (
             conclusion.diagnosis_status if conclusion is not None else DiagnosisStatus.INCONCLUSIVE
@@ -358,6 +493,32 @@ class InvestigationNodes:
                     ),
                 }
             )
+        rewritten = (
+            proposed.description != recommendation.description
+            or proposed.rationale != recommendation.rationale
+            or list(proposed.evidence_ids) != list(recommendation.evidence_ids)
+            or proposed.target_equipment_id != recommendation.target_equipment_id
+            or proposed.target_zone_id != recommendation.target_zone_id
+            or proposed.human_validation_required != recommendation.human_validation_required
+        )
+        if rewritten:
+            self.runtime.debug.record(
+                DebugEventType.VALIDATION_CHECK,
+                stage="build_recommendation",
+                summary="Recommendation text or citations were rewritten",
+                metadata={"check_id": "RECOMMENDATION_SANITIZED", "passed": False},
+            )
+        self.runtime.debug.record(
+            DebugEventType.RECOMMENDATION_BUILT,
+            stage="build_recommendation",
+            summary=getattr(recommendation.action_type, "value", str(recommendation.action_type)),
+            metadata={
+                "proposed_description": compact_preview(proposed.description),
+                "final_description": compact_preview(recommendation.description),
+                "evidence_ids": list(recommendation.evidence_ids),
+                "sanitized": rewritten,
+            },
+        )
         return {
             "recommendation": recommendation,
             "status": (
@@ -372,12 +533,35 @@ class InvestigationNodes:
         completed_at = state["completed_at"] or datetime.now(timezone.utc)
         final_state = {**state, "completed_at": completed_at}
         try:
-            self.runtime.persister(self.runtime.session, final_state)
+            row = self.runtime.persister(self.runtime.session, final_state)
         except Exception as exc:
-            _error("persist", exc, state["investigation_id"])
+            _error("persist", exc, state["investigation_id"], self.runtime.debug)
             self.runtime.session.rollback()
             raise InvestigationPersistenceError("Investigation result could not be saved") from exc
+        self._store_debug_trace(row, final_state)
         return {"completed_at": completed_at}
+
+    def _store_debug_trace(self, row, state: InvestigationState) -> None:
+        try:
+            dump = self.runtime.debug.finish(state)
+            if dump is None:
+                return
+            target = row if row is not None and not isinstance(row, dict) else None
+            if target is None:
+                getter = getattr(self.runtime.session, "get", None)
+                if callable(getter):
+                    try:
+                        target = getter(AiInvestigation, UUID(state["investigation_id"]))
+                    except Exception:
+                        target = None
+            if target is None:
+                return
+            target.debug_trace = dump
+            commit = getattr(self.runtime.session, "commit", None)
+            if callable(commit):
+                commit()
+        except Exception:
+            logger.exception("Investigation debug trace persist failed")
 
     def _reconstruct_context(self, state: InvestigationState) -> OperationalContext:
         serialized = state["operational_context"]
@@ -454,7 +638,10 @@ class InvestigationNodes:
     def _sanitize_diagnosis(
         diagnosis: DiagnosisResult,
         state: InvestigationState,
+        debug: InvestigationDebugSink | None = None,
     ) -> DiagnosisResult:
+        sink = debug or NullDebugRecorder()
+        originals = {item.hypothesis_id: item for item in diagnosis.hypotheses}
         evidence_by_id = {
             item.evidence_id: item for item in state["evidence"] if item.available
         }
@@ -509,6 +696,39 @@ class InvestigationNodes:
             )
             if ids:
                 contradictions.append(contradiction.model_copy(update={"evidence_ids": ids}))
+        top_id = hypotheses[0].hypothesis_id if hypotheses else None
+        for hypothesis in hypotheses:
+            original = originals.get(hypothesis.hypothesis_id)
+            reasons = []
+            if hypothesis.causal_depth < 1:
+                reasons.append("CAUSAL_DEPTH_TOO_LOW")
+            if not hypothesis.supporting_evidence_ids:
+                reasons.append("NO_VALID_SUPPORTING_EVIDENCE")
+            fabricated = []
+            if original is not None:
+                fabricated = [
+                    item
+                    for item in [*original.supporting_evidence_ids, *original.contradictory_evidence_ids]
+                    if item not in evidence_by_id
+                ]
+            if fabricated:
+                reasons.append("FABRICATED_EVIDENCE_ID")
+            sink.record(
+                DebugEventType.HYPOTHESIS_EVALUATED,
+                stage="analyze",
+                summary=hypothesis.statement[:200],
+                metadata={
+                    "hypothesis_id": hypothesis.hypothesis_id,
+                    "statement": hypothesis.statement,
+                    "confidence": getattr(hypothesis.confidence, "value", hypothesis.confidence),
+                    "causal_depth": hypothesis.causal_depth,
+                    "supporting_evidence_ids": list(hypothesis.supporting_evidence_ids),
+                    "contradictory_evidence_ids": list(hypothesis.contradictory_evidence_ids),
+                    "survived": bool(hypothesis.supporting_evidence_ids and hypothesis.causal_depth >= 1),
+                    "is_top": hypothesis.hypothesis_id == top_id,
+                    "reason_codes": reasons,
+                },
+            )
         return diagnosis.model_copy(
             update={"hypotheses": hypotheses, "contradictions": contradictions}
         )
@@ -517,7 +737,9 @@ class InvestigationNodes:
     def _sanitize_conclusion(
         conclusion: InvestigationConclusion,
         state: InvestigationState,
+        debug: InvestigationDebugSink | None = None,
     ) -> InvestigationConclusion:
+        sink = debug or NullDebugRecorder()
         evidence_by_id = {
             item.evidence_id: item for item in state["evidence"] if item.available
         }
@@ -764,7 +986,111 @@ class InvestigationNodes:
                     "unresolved_uncertainties": list(dict.fromkeys(uncertainties)),
                 }
             )
-        return conclusion.model_copy(update=updates)
+        depth_zero_supported = any(
+            item.supporting_evidence_ids and item.causal_depth == 0
+            for item in state["hypotheses"]
+        )
+        original_ids = set(conclusion.observed_fact_evidence_ids) | set(
+            conclusion.derived_metric_evidence_ids
+        )
+        for hyp in state["hypotheses"]:
+            original_ids.update(hyp.supporting_evidence_ids)
+            original_ids.update(hyp.contradictory_evidence_ids)
+        fabricated = sorted(item for item in original_ids if item not in evidence_by_id)
+        checks = [
+            ValidationCheck(
+                check_id="FABRICATED_EVIDENCE_ID",
+                passed=not fabricated,
+                detail=(("Dropped IDs: " + ", ".join(fabricated))[:400] if fabricated else "No fabricated evidence IDs"),
+            ),
+            ValidationCheck(
+                check_id="CAUSAL_DEPTH_TOO_LOW",
+                passed=not any(
+                    item.supporting_evidence_ids and item.causal_depth < 1
+                    for item in state["hypotheses"]
+                ),
+                detail="A supported hypothesis has causal_depth < 1"
+                if any(item.supporting_evidence_ids and item.causal_depth < 1 for item in state["hypotheses"])
+                else "Causal depth gate did not exclude supported hypotheses",
+            ),
+            ValidationCheck(
+                check_id="SYMPTOM_RESTATEMENT",
+                passed=not depth_zero_supported,
+                detail="At least one hypothesis restates the observed symptom"
+                if depth_zero_supported
+                else "No symptom-restatement hypothesis",
+            ),
+            ValidationCheck(
+                check_id="DIAGNOSIS_CANNOT_CONCLUDE",
+                passed=diagnosis is None or diagnosis.can_conclude,
+                detail="diagnosis.can_conclude is required for probable_eligible",
+            ),
+            ValidationCheck(
+                check_id="STRONG_CONTRADICTION",
+                passed=not top_conflicted,
+                detail="Top hypothesis is conflicted" if top_conflicted else "No strong contradiction on top hypothesis",
+            ),
+            ValidationCheck(
+                check_id="NO_CLEARLY_DOMINANT_HYPOTHESIS",
+                passed=clearly_dominant,
+                detail="No clearly dominant backed hypothesis" if not clearly_dominant else "Top hypothesis is dominant",
+            ),
+            ValidationCheck(
+                check_id="TEMPORAL_SUPPORT_MISSING",
+                passed=bool(temporal_support),
+                detail="Top hypothesis lacks pre-incident temporal support"
+                if not temporal_support
+                else "Temporal support present",
+            ),
+            ValidationCheck(
+                check_id="NO_VALID_SUPPORTING_EVIDENCE",
+                passed=top is not None,
+                detail="No evidence-backed hypothesis with causal_depth >= 1"
+                if top is None
+                else "Backed hypothesis present",
+            ),
+            ValidationCheck(
+                check_id="CONFIRMED_WITHOUT_AUTHORITATIVE_EVIDENCE",
+                passed=not (
+                    conclusion.diagnosis_status == DiagnosisStatus.CONFIRMED
+                    and not authoritative_confirmation
+                ),
+                detail="LLM proposed CONFIRMED without causalConfirmation evidence"
+                if conclusion.diagnosis_status == DiagnosisStatus.CONFIRMED and not authoritative_confirmation
+                else "Confirmed status is consistent with authoritative evidence",
+            ),
+        ]
+        sanitized = conclusion.model_copy(update=updates)
+        try:
+            for check in checks:
+                sink.record(
+                    DebugEventType.VALIDATION_CHECK,
+                    stage="build_conclusion",
+                    summary=f"{check.check_id} {'passed' if check.passed else 'failed'}",
+                    metadata={"check_id": check.check_id, "passed": check.passed, "detail": check.detail},
+                )
+            sink.set_validation(checks)
+            if (
+                conclusion.diagnosis_status != sanitized.diagnosis_status
+                or conclusion.reliable_root_cause != sanitized.reliable_root_cause
+            ):
+                sink.record(
+                    DebugEventType.STATUS_DOWNGRADED,
+                    stage="build_conclusion",
+                    summary=(
+                        f"{getattr(conclusion.diagnosis_status, 'value', conclusion.diagnosis_status)}"
+                        f" -> {getattr(sanitized.diagnosis_status, 'value', sanitized.diagnosis_status)}"
+                    ),
+                    metadata={
+                        "llm_diagnosis_status": getattr(conclusion.diagnosis_status, "value", conclusion.diagnosis_status),
+                        "final_diagnosis_status": getattr(sanitized.diagnosis_status, "value", sanitized.diagnosis_status),
+                        "llm_reliable_root_cause": conclusion.reliable_root_cause,
+                        "final_reliable_root_cause": sanitized.reliable_root_cause,
+                    },
+                )
+        except Exception:
+            logger.exception("Investigation debug validation record failed")
+        return sanitized
 
     @staticmethod
     def _evidence_entity_ids(state: InvestigationState) -> tuple[set[int], set[int]]:

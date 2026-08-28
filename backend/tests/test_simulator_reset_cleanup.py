@@ -90,6 +90,7 @@ def _investigation(site_id: int, source_record_id: str, *, source: TriggerSource
         recommendation=None,
         error=None,
         metadata_={},
+        debug_trace={"events": [{"event_type": "INVESTIGATION_COMPLETED"}], "stop_reason": "PROBABLE_CAUSE"},
     )
 
 

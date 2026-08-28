@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { MiniTimelineStrip } from "@/components/equipment/MiniTimelineStrip"
 import { InvestigationEvidence, InvestigationUncertainty } from "./InvestigationResultView"
+import { InvestigationDebugPanel } from "./InvestigationDebugPanel"
 import { AiBlock, Fact, Section } from "./InvestigationLayout"
 import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
 import { SEVERITY_CONFIG } from "@/lib/status"
@@ -126,6 +127,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
         </Section>
         <Section title="Impact"><p className="text-[12px] text-muted">Impact non quantifié</p><p className="mt-1 text-[11px] text-muted-2">Conséquences si ignoré : non évaluées.</p></Section>
         <Section title="Liens utiles"><div className="flex flex-col gap-1.5"><Button size="sm" variant="outline" className="justify-start" onClick={() => openWorkspace({ type: "map", context })}><Map className="size-3.5" />Ouvrir la Carte</Button><Button size="sm" variant="outline" className="justify-start" disabled={!equipment} onClick={() => openWorkspace({ type: "timeline", context })}><Film className="size-3.5" />Ouvrir le Film</Button><Button size="sm" variant="outline" className="justify-start" disabled={!equipment} onClick={() => equipment && openEquipmentDrawer(equipment.id)}><Truck className="size-3.5" />Ouvrir l’équipement</Button></div></Section>
+        <InvestigationDebugPanel investigationId={result?.investigation_id} />
       </div> : <p className="text-xs text-muted">Sélectionnez une alerte.</p>}
     </main>
     <aside aria-label="Panel IA" className="flex w-[28%] min-w-[240px] max-w-[340px] flex-col overflow-y-auto bg-surface p-4">

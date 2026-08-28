@@ -104,6 +104,8 @@ def test_diagnosis_status_survives_persistence_round_trip():
     assert result.conclusion.diagnosis_status == DiagnosisStatus.PROBABLE
     assert result.conclusion.reliable_root_cause is False
     assert result.conclusion.root_cause == "lubrication degradation"
+    assert "debug_trace" not in result.model_dump()
+    assert row.debug_trace is None
 
     legacy = dict(row.conclusion)
     legacy.pop("diagnosis_status")

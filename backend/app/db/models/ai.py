@@ -102,3 +102,4 @@ class AiInvestigation(Base):
     recommendation: Mapped[dict | None] = mapped_column(JSONB)
     error: Mapped[dict | None] = mapped_column(JSONB)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    debug_trace: Mapped[dict | None] = mapped_column(JSONB)

@@ -168,9 +168,12 @@ def _diagnosis(*, requests=None, can_conclude=True):
     )
 
 
-def _run(provider, *, max_iterations=3, tools=None, trigger=None):
+def _run(provider, *, max_iterations=3, tools=None, trigger=None, debug=None):
     tools = tools or FakeTools()
     persisted = []
+    runtime_kwargs = {}
+    if debug is not None:
+        runtime_kwargs["debug"] = debug
     runtime = InvestigationRuntime(
         session=object(),
         provider=provider,
@@ -178,6 +181,7 @@ def _run(provider, *, max_iterations=3, tools=None, trigger=None):
         context_resolver=lambda session, trigger: _ctx(),
         context_reconstructor=lambda session, serialized: _ctx(),
         persister=lambda session, state: persisted.append(state),
+        **runtime_kwargs,
     )
     graph = build_investigation_graph(runtime)
     result = graph.invoke(

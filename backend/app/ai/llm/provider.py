@@ -143,11 +143,13 @@ class OpenAILLMProvider:
         self._timeout_seconds = timeout_seconds
         self._remaining_seconds = budget_seconds
         self._client = OpenAI(api_key=api_key, timeout=timeout_seconds, max_retries=0)
+        self.last_call_metrics: dict | None = None
 
     def _structured(self, schema: type[_T], system_prompt: str, payload: dict) -> _T:
         if self._remaining_seconds <= 0:
             raise ProviderTimeoutError("Investigation provider budget exceeded")
         started = monotonic()
+        response = None
         try:
             response = self._client.responses.parse(
                 model=self.model_name,
@@ -175,7 +177,17 @@ class OpenAILLMProvider:
                 raise ProviderModelError("AI provider rejected the model or structured request") from exc
             raise LLMProviderError("AI provider structured response failed") from exc
         finally:
-            self._remaining_seconds -= monotonic() - started
+            elapsed = monotonic() - started
+            self._remaining_seconds -= elapsed
+            usage = getattr(response, "usage", None) if response is not None else None
+            self.last_call_metrics = {
+                "model": self.model_name,
+                "schema": schema.__name__,
+                "duration_ms": int(elapsed * 1000),
+                "input_tokens": getattr(usage, "input_tokens", None),
+                "output_tokens": getattr(usage, "output_tokens", None),
+                "total_tokens": getattr(usage, "total_tokens", None),
+            }
         if parsed is None:
             raise ProviderResponseError("OpenAI returned no structured output")
         try:

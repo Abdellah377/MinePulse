@@ -11,6 +11,7 @@ from app.ai.contracts import (
     InvestigationTrigger,
     ResolvedOperationalContext,
 )
+from app.ai.debug import DebugEventType, create_debug_recorder
 from app.ai.graph import build_investigation_graph, initial_state
 from app.ai.llm.provider import LLMProvider, create_llm_provider
 from app.ai.nodes import InvestigationRuntime
@@ -98,20 +99,38 @@ def run_investigation(
     # Validate before graph creation so invalid foreign-key scope cannot produce
     # an unpersistable failed investigation record.
     validate_trigger_scope(session, trigger)
-    runtime = InvestigationRuntime(
-        session=session,
-        provider=llm,
-        tools=EvidenceToolRegistry(session),
-        context_resolver=resolve_trigger_context,
-        context_reconstructor=reconstruct_operational_context,
-    )
-    graph = build_investigation_graph(runtime)
     state = initial_state(
         trigger,
         max_iterations=rounds,
         provider=llm.provider_name,
         model=llm.model_name,
     )
+    debug = create_debug_recorder(
+        enabled=settings.ai_debug_mode,
+        investigation_id=state["investigation_id"],
+        model=llm.model_name,
+    )
+    debug.record(
+        DebugEventType.INVESTIGATION_STARTED,
+        stage="run_investigation",
+        summary="Investigation started",
+        metadata={
+            "trigger_type": trigger.trigger_type.value,
+            "trigger_source": trigger.trigger_source.value,
+            "max_iterations": rounds,
+            "provider": llm.provider_name,
+            "model": llm.model_name,
+        },
+    )
+    runtime = InvestigationRuntime(
+        session=session,
+        provider=llm,
+        tools=EvidenceToolRegistry(session, debug=debug),
+        context_resolver=resolve_trigger_context,
+        context_reconstructor=reconstruct_operational_context,
+        debug=debug,
+    )
+    graph = build_investigation_graph(runtime)
     result: InvestigationState = graph.invoke(
         state,
         config={"recursion_limit": max(25, rounds * 4 + 10)},

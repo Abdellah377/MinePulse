@@ -12,6 +12,7 @@ from app.ai.llm.provider import ProviderConfigurationError
 from app.ai.persistence import InvestigationPersistenceError, find_investigations, get_investigation, record_to_result
 from app.ai.service import run_investigation
 from app.api.deps import DbSession
+from app.config import get_settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -67,3 +68,14 @@ def retrieve_investigation(investigation_id: UUID, session: DbSession):
         if row is None:
             raise HTTPException(status_code=404, detail="Investigation not found")
         return record_to_result(row)
+
+
+@router.get("/investigations/{investigation_id}/debug")
+def retrieve_investigation_debug(investigation_id: UUID, session: DbSession):
+    if not get_settings().ai_debug_mode:
+        raise HTTPException(status_code=403, detail={"code": "AI_DEBUG_DISABLED"})
+    with investigation_errors(session, "debug"):
+        row = get_investigation(session, investigation_id)
+        if row is None or row.debug_trace is None:
+            raise HTTPException(status_code=404, detail="Investigation debug trace not found")
+        return row.debug_trace
