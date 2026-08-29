@@ -8,6 +8,7 @@ import { InvestigationResultView } from "./InvestigationResultView"
 import { InvestigationDebugPanel } from "./InvestigationDebugPanel"
 import { Chip } from "./InvestigationLayout"
 import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
+import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
@@ -43,8 +44,8 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   </div>
   return <div className="flex h-full flex-col overflow-hidden">
     <header className="shrink-0 border-b border-border bg-surface px-4 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-2">Actions IA · contexte hérité</p><h1 className="mt-0.5 text-[15px] font-semibold text-foreground">{alert?.title ?? "Plan d’action"}</h1><p className="mt-1 max-w-2xl text-[12px] text-muted">{result?.conclusion?.summary ?? investigationStatus(entry)}</p></div><Badge variant="outline" className="shrink-0">Confiance {confidence}</Badge></div>
-      <div className="mt-3 flex flex-wrap gap-1.5"><Chip>Pourquoi : {result?.conclusion ? `${DIAGNOSIS_STATUS_LABEL[result.conclusion.diagnosis_status]}${result.conclusion.root_cause ? ` — ${result.conclusion.root_cause}` : ""}` : "Cause non déterminée"}</Chip><Chip>{investigationStatus(entry)}</Chip><Chip>Investigation {id}</Chip></div>
+      <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-2">Actions IA · contexte hérité</p><h1 className="mt-0.5 text-[15px] font-semibold text-foreground">{alert?.title ?? "Plan d’action"}</h1><p className="mt-1 max-w-2xl text-[12px] text-muted">{result?.conclusion?.summary ? operatorText(result.conclusion.summary) : investigationStatus(entry)}</p></div><Badge variant="outline" className="shrink-0">Confiance {confidence}</Badge></div>
+      <div className="mt-3 flex flex-wrap gap-1.5"><Chip>Pourquoi : {result?.conclusion ? `${DIAGNOSIS_STATUS_LABEL[result.conclusion.diagnosis_status]}${result.conclusion.root_cause ? ` — ${compactOperatorText(result.conclusion.root_cause, 80)}` : ""}` : "Cause non déterminée"}</Chip><Chip>{investigationStatus(entry)}</Chip><Chip>Investigation {id}</Chip></div>
       <div className="mt-2 flex gap-2"><Button size="sm" variant="outline" onClick={backToAlert}>Retour aux alertes</Button><Button size="sm" variant="outline" disabled={entry?.phase === "loading"} onClick={() => void retrieve(id, true)}>Actualiser</Button></div>
       {failure && <p role="alert" className="mt-2 text-xs text-danger">{failure}</p>}
     </header>
@@ -53,8 +54,8 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
         <h2 className="text-[12px] font-semibold text-foreground">Recommandations ({rec ? 1 : 0})</h2>
         {rec ? <article className={cn("rounded-md border px-3.5 py-3", decision === "prepared" || decision === "marked" ? "border-success/30 bg-success/5" : "border-border bg-surface")}>
           <div className="flex flex-wrap items-center gap-1.5"><Badge variant="outline" className="text-[10px]">Recommandation consultative</Badge>{decision !== "pending" && <Badge variant="outline">{decision === "prepared" ? "Préparé" : decision === "marked" ? "Marqué" : "Ignoré"} · local</Badge>}<span className="ml-auto text-[10px] text-muted-2">Confiance {confidence}</span></div>
-          <h3 className="mt-1.5 text-[13px] font-semibold text-foreground">{rec.description}</h3><p className="mt-1 text-[11px] text-muted">{rec.rationale}</p>
-          <ul className="mt-2 list-inside list-disc text-[11px] text-muted">{rec.operational_constraints.map((c, i) => <li key={i}>{c}</li>)}</ul>
+          <h3 className="mt-1.5 text-[13px] font-semibold text-foreground">{operatorText(rec.description)}</h3><p className="mt-1 text-[11px] text-muted"><span className="font-medium text-foreground">Pourquoi :</span> {operatorText(rec.rationale)}</p>
+          <ul className="mt-2 list-inside list-disc text-[11px] text-muted">{rec.operational_constraints.map((c, i) => <li key={i}>{operatorText(c)}</li>)}</ul>
           <p className="mt-2 text-[11px] text-muted">Preuves : {rec.evidence_ids.join(", ") || "Aucune"}</p><p className="mt-2 text-[11px] text-muted">Impact non quantifié</p>
           <div className="mt-2.5 flex flex-wrap gap-1.5"><Button size="sm" variant="outline" disabled title="Simulation d’impact non disponible en V1">Simuler</Button><Button size="sm" variant="outline" onClick={() => mark("prepared")}><Flag className="size-3.5" />Préparer</Button><Button size="sm" variant="outline" onClick={() => mark("marked")}><Bookmark className="size-3.5" />Marquer</Button><Button size="sm" variant="ghost" onClick={() => mark(decision === "dismissed" ? "pending" : "dismissed")}>{decision === "dismissed" ? "Rétablir" : "Ignorer"}</Button></div>
         </article> : <p className="py-8 text-center text-xs text-muted">Recommandation non évaluée ou indisponible.</p>}

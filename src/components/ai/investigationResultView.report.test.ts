@@ -130,9 +130,12 @@ describe("InvestigationResultView operator report", () => {
     for (const id of ["hypotheses-detail", "uncertainty-detail", "technical-evidence"]) expect(html).toContain(`data-testid="${id}"`)
     expect(html).not.toMatch(/<details[^>]*\sopen(?:=|\s|>)/)
     expect(html).toContain("Hypothèses examinées")
+    expect(html).toContain("Ce qui empêche une confirmation complète")
     expect(html).toContain("Signaux contradictoires")
     expect(html).toContain("Processus d’investigation")
     expect(html).toContain("Données structurées et identifiants")
+    expect(html).not.toContain("BEST_SUPPORTED")
+    expect(html).not.toContain("CONTRADICTED")
   })
 
   it("presents recommendation, uncertainty, causal story, and human validation prominently", () => {
@@ -140,9 +143,13 @@ describe("InvestigationResultView operator report", () => {
     expect(html).toContain("Ce qui semble s’être passé")
     expect(html).toContain("Action recommandée")
     expect(html).toContain("Inspecter le circuit de refroidissement")
+    expect(html).toContain("Pourquoi :")
+    expect(html).toContain("Meilleure hypothèse")
     expect(html).toContain("Le mécanisme causal exact ou le composant défaillant n’est pas confirmé")
     expect(html).toContain("Validation humaine requise")
     expect(html).toContain("aucune action automatique")
+    expect(html).not.toContain("Inspect TRK")
+    expect(html).not.toContain("The exact causal")
   })
 
   it("renders FAILED as execution failure with a safe refresh action, not as inconclusive", () => {
@@ -154,6 +161,63 @@ describe("InvestigationResultView operator report", () => {
     expect(html).toContain("Actualiser l’investigation")
     expect(html).not.toContain("Cause non déterminée")
     expect(html).not.toContain("secret provider payload")
+  })
+
+  it("highlights OEM electrical evidence and missing battery measurements without promoting engine telemetry", () => {
+    const battery: InvestigationResult = {
+      ...mechanicalResult(),
+      trigger: { ...mechanicalResult().trigger, payload: { title: "TRK-010 tension batterie basse", category: "BATTERY_VOLTAGE_LOW" } },
+      evidence: [
+        mechanicalResult().evidence[0],
+        {
+          ...mechanicalResult().evidence[1],
+          value: [{ errorCode: "SIM-BATT-VOLT-LOW", description: "Tension batterie basse", lastOccurrence: "2026-08-26T07:05:00Z" }],
+        },
+      ],
+      hypotheses: [{
+        hypothesis_id: "hyp-batt",
+        statement: "Anomalie probable de la batterie ou du système de charge",
+        supporting_evidence_ids: ["ev-oem"],
+        contradictory_evidence_ids: [],
+        confidence: "MEDIUM",
+        causal_depth: 1,
+        rationale: "Le code OEM électrique précède l’alerte.",
+      }],
+      conclusion: {
+        ...mechanicalResult().conclusion!,
+        summary: "Anomalie électrique basse tension affectant probablement la batterie ou le système de charge.",
+        diagnosis_status: "PROBABLE",
+        observed_condition: "TRK-010 — tension batterie sous le seuil attendu.",
+        root_cause: "Anomalie probable de la batterie ou du système de charge",
+        reliable_root_cause: false,
+        causal_depth: 1,
+        contributing_factors: [],
+        observed_fact_evidence_ids: ["ev-oem"],
+        derived_metric_evidence_ids: ["ev-trends"],
+        supported_hypothesis_ids: ["hyp-batt"],
+        unresolved_uncertainties: ["The exact causal mechanism or failed component is not confirmed."],
+        confidence: "MEDIUM",
+      },
+      recommendation: {
+        ...mechanicalResult().recommendation!,
+        description: "Inspecter la batterie et le circuit de charge de TRK-010 avant remise en service.",
+        rationale: "Le code OEM SIM-BATT-VOLT-LOW indique une anomalie électrique au moment de l’incident.",
+        evidence_ids: ["ev-oem"],
+        target_equipment_id: 10,
+      },
+    }
+    const html = renderToStaticMarkup(createElement(InvestigationResultView, { result: battery }))
+    const keyStart = html.indexOf("data-testid=\"key-evidence\"")
+    const keyHtml = html.slice(keyStart, html.indexOf("data-testid=\"causal-story\""))
+    expect(keyHtml).toContain("SIM-BATT-VOLT-LOW")
+    expect(keyHtml).toContain("Mesure électrique directe")
+    expect(keyHtml).not.toContain("Température moteur")
+    expect(html).toContain("Cause probable")
+    expect(html).toContain("Confirmation incomplète")
+    expect(html).toContain("Moyenne")
+    expect(html).toContain("Inspecter la batterie")
+    expect(html).toContain("batterie ou du système de charge")
+    expect(html).not.toMatch(/<details[^>]*\sopen(?:=|\s|>)/)
   })
 
   it("keeps null operational values unavailable instead of displaying zero", () => {

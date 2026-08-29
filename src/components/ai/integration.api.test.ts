@@ -39,6 +39,14 @@ it("API Alertes IA renders backend LangGraph output and qualitative confidence",
   for (const section of ["Incident", "Pourquoi MinePulse pense cela", "Ce qui semble s’être passé", "Action recommandée", "Impact", "Liens utiles", "Panel IA", "Cause non déterminée", "Confiance causale", "Ouvrir l’équipement"]) expect(html).toContain(section)
   expect(html).toContain("max-w-[360px]")
   expect(html).toContain("max-w-[340px]")
+  const panel = html.split("data-testid=\"panel-ia\"")[1]?.split("</aside>")[0] ?? ""
+  expect(panel).toContain("Cause non déterminée")
+  expect(panel).toContain("Confiance causale")
+  expect(panel).toContain("Ouvrir Actions IA")
+  expect(panel).toContain("Actualiser le résultat")
+  expect(panel).toContain("line-clamp-2")
+  expect(panel).not.toContain("Impact non quantifié")
+  expect(panel).not.toContain(result.investigation_id)
 })
 it("labels persisted automatic monitoring results without starting a frontend investigation", () => {
   mocks.entry = {
@@ -92,7 +100,7 @@ it("failure leaves the live panel unavailable, not populated with pseudo-AI", ()
 it("renders all lifecycle states distinctly and null evidence as unavailable", () => {
   expect(investigationStatus({ phase: "running" })).toBe("Analyse IA en cours")
   expect(investigationStatus({ phase: "ready", result })).toContain("non déterminée")
-  expect(investigationStatus({ phase: "ready", result: { ...result, status: "FAILED" } })).toContain("échouée")
+  expect(investigationStatus({ phase: "ready", result: { ...result, status: "FAILED" } })).toContain("Analyse indisponible")
   expect(investigationStatus({ phase: "ready", result: { ...result, status: "PENDING" } })).toContain("en attente")
   const html = renderToStaticMarkup(createElement(InvestigationResultView, { result }))
   expect(html).toContain("Indisponible (UNAVAILABLE)")
@@ -117,6 +125,7 @@ it("renders CONFIRMED, PROBABLE, and INCONCLUSIVE labels without false confidenc
   expect(html).toContain("Cause probable")
   expect(html).toContain("Dégradation liée à la lubrification")
   expect(html).toContain("n’est pas confirmé")
+  expect(html).toContain("Confirmation incomplète")
   expect(html).not.toContain("Cause confirmée")
   expect(html).not.toContain("Conclusion non fiable")
   expect(html).not.toContain("Cause étayée")

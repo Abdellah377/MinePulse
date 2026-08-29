@@ -16,7 +16,7 @@ import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure, investi
 import { SEVERITY_CONFIG } from "@/lib/status"
 import { cn } from "@/lib/utils"
 import { newestAlertsFirst, operationalAlertTime } from "@/lib/alerts/order"
-import { operatorText } from "@/lib/ai/investigationReport"
+import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
 
 /** Original three-column workspace; live data never passes through demo intelligence. */
 export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
@@ -53,7 +53,8 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
   const rawCause = conclusion?.root_cause
     ?? (conclusion?.diagnosis_status === "INCONCLUSIVE" ? conclusion.summary : null)
     ?? (result?.status === "FAILED" ? "L’investigation n’a pas pu produire de diagnostic." : "Non évalué — analyse IA non disponible.")
-  const cause = operatorText(rawCause)
+  const panelCause = compactOperatorText(rawCause, 140)
+  const panelAction = recommendation ? compactOperatorText(recommendation.description, 180) : "Non évaluée"
   const busy = entry?.phase === "running" || entry?.phase === "loading"
   const failure = entry?.error ?? investigationFailure(result?.error)
   const segs = useMemo(() => selected?.equipmentId
@@ -116,7 +117,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
       {ops.apiPollError && <p role="alert" className="mb-3 text-xs text-danger">Données opérationnelles non actualisées.</p>}
       {selected ? <div className="mx-auto max-w-2xl space-y-4">
         <header><div className="mb-1 flex flex-wrap gap-1.5"><Badge className={cn(SEVERITY_CONFIG[selected.severity].bg, SEVERITY_CONFIG[selected.severity].color, "border-transparent")}>{SEVERITY_CONFIG[selected.severity].label}</Badge><Badge variant="outline">{selected.category}</Badge><Badge variant="outline">En cours</Badge>{result && <Badge variant="outline">{automaticInvestigation ? "Détecté automatiquement" : "Investigation demandée"}</Badge>}</div><h2 className="text-[16px] font-semibold text-foreground">{equipment?.code ? `${equipment.code} — ` : ""}{selected.title}</h2></header>
-        <Section title="Incident"><p className="text-[12px] leading-relaxed text-muted">{selected.description}</p><dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]"><Fact label="Où" value={selectedZone?.name ?? selected.location ?? "—"} /><Fact label="Détecté à" value={new Date(operationalAlertTime(selected)).toLocaleString("fr-FR")} /><Fact label="Équipement" value={equipment?.code ?? "—"} mono /><Fact label="Source" value={result ? automaticInvestigation ? "Monitoring automatique" : "Demande opérateur" : "Aucune investigation"} /></dl></Section>
+        <Section title="Incident"><p className="text-[12px] leading-relaxed text-muted">{operatorText(selected.description)}</p><dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]"><Fact label="Où" value={selectedZone?.name ?? selected.location ?? "—"} /><Fact label="Détecté à" value={new Date(operationalAlertTime(selected)).toLocaleString("fr-FR")} /><Fact label="Équipement" value={equipment?.code ?? "—"} mono /><Fact label="Source" value={result ? automaticInvestigation ? "Monitoring automatique" : "Demande opérateur" : "Aucune investigation"} /></dl></Section>
         {result ? <InvestigationResultView result={result} onRetry={() => scope && void lookup(scope, true)} /> : <Section title="Rapport d’investigation"><p className="text-[12px] font-medium text-foreground">{investigationStatus(entry)}</p><p className="mt-1 text-[11px] text-muted">La cause, la confiance et les preuves seront affichées ici après l’investigation.</p></Section>}
         {segs.length > 0 && <Section title="Film récent"><MiniTimelineStrip segments={segs} rangeStart={segs[0].start} rangeEnd={ops.simNowIso ? new Date(ops.simNowIso).getTime() : segs[segs.length - 1].end ?? segs[segs.length - 1].start} /></Section>}
         <Section title="Liens utiles"><div className="flex flex-col gap-1.5"><Button size="sm" variant="outline" className="justify-start" onClick={() => openWorkspace({ type: "map", context })}><Map className="size-3.5" />Ouvrir la Carte</Button><Button size="sm" variant="outline" className="justify-start" disabled={!equipment} onClick={() => openWorkspace({ type: "timeline", context })}><Film className="size-3.5" />Ouvrir le Film</Button><Button size="sm" variant="outline" className="justify-start" disabled={!equipment} onClick={() => equipment && openEquipmentDrawer(equipment.id)}><Truck className="size-3.5" />Ouvrir l’équipement</Button></div></Section>
@@ -124,16 +125,19 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
       </div> : <p className="text-xs text-muted">Sélectionnez une alerte.</p>}
     </main>
     <aside aria-label="Panel IA" className="flex w-[28%] min-w-[240px] max-w-[340px] flex-col overflow-y-auto bg-surface p-4">
-      {selected ? <><h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Panel IA</h3><p role="status" aria-live="polite" className="mt-2 text-[11px] text-muted">{investigationStatus(entry)}</p>
-        {failure && <p role="alert" className="mt-2 text-xs text-danger">{failure}</p>}
-        <div className="mt-3 space-y-3"><AiBlock label={diagnosisLabel} value={cause} /><AiBlock label="Confiance causale" value={confidence} /><AiBlock label="Impact" value="Impact non quantifié" /><AiBlock label="Action recommandée" value={recommendation ? operatorText(recommendation.description) : "Non évaluée"} /></div>
-        {recommendation ? <Button className="mt-4 w-full gap-1.5" onClick={() => openWorkspace({ type: "actions", context, investigationId: result!.investigation_id })}><Sparkles className="size-3.5" />Ouvrir Actions IA</Button>
-          : <Button className="mt-4 w-full gap-1.5" disabled={!scope || !!result || busy || entry?.creationUncertain || !!ops.apiPollError} onClick={investigate}><Sparkles className="size-3.5" />{entry?.phase === "running" ? "Analyse IA en cours" : "Investiguer"}</Button>}
-        <Button className="mt-2 w-full" size="sm" variant="outline" disabled={!scope || busy} onClick={() => scope && void lookup(scope, true)}>Actualiser le résultat</Button>
-        {!scope && <p className="mt-2 text-xs text-muted">Identité opérationnelle indisponible.</p>}
-        <p className="mt-2 text-[10px] leading-relaxed text-muted-2">Validation humaine requise. Aucune application automatique aux équipements ou aux affectations.</p>
-        {result && <p className="mt-3 break-all text-[10px] text-muted-2">Investigation {result.investigation_id}<br />{result.provider} / {result.model}</p>}
-      </> : <p className="text-xs text-muted">Sélectionnez une alerte pour l’analyse IA.</p>}
+      {selected ? <div data-testid="panel-ia" className="sticky top-0 space-y-3"><h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Panel IA</h3>
+        {(!result || busy || entry?.phase === "error") && <p role="status" aria-live="polite" className="text-[11px] text-muted">{investigationStatus(entry)}</p>}
+        {failure && <p role="alert" className="text-xs text-danger">{failure}</p>}
+        <AiBlock label={diagnosisLabel} value={panelCause} compact />
+        <AiBlock label="Confiance causale" value={confidence} />
+        {conclusion?.diagnosis_status === "PROBABLE" && <p className="text-[10px] text-muted-2">Confirmation incomplète</p>}
+        <AiBlock label="Action recommandée" value={panelAction} compact />
+        {recommendation ? <Button className="w-full gap-1.5" onClick={() => openWorkspace({ type: "actions", context, investigationId: result!.investigation_id })}><Sparkles className="size-3.5" />Ouvrir Actions IA</Button>
+          : <Button className="w-full gap-1.5" disabled={!scope || !!result || busy || entry?.creationUncertain || !!ops.apiPollError} onClick={investigate}><Sparkles className="size-3.5" />{entry?.phase === "running" ? "Analyse IA en cours" : "Investiguer"}</Button>}
+        <Button className="w-full" size="sm" variant="outline" disabled={!scope || busy} onClick={() => scope && void lookup(scope, true)}>Actualiser le résultat</Button>
+        {!scope && <p className="text-xs text-muted">Identité opérationnelle indisponible.</p>}
+        <p className="text-[10px] leading-relaxed text-muted-2">Validation humaine requise. Aucune application automatique.</p>
+      </div> : <p className="text-xs text-muted">Sélectionnez une alerte pour l’analyse IA.</p>}
     </aside>
   </div>
 }

@@ -14,7 +14,7 @@ export function investigationStatus(entry?: InvestigationEntry): string {
   if (entry.phase === "loading") return "Recherche d’une investigation existante…"
   if (entry.phase === "running") return "Analyse IA en cours"
   if (entry.phase === "error") return "Analyse indisponible"
-  if (entry.result?.status === "FAILED") return "Investigation échouée"
+  if (entry.result?.status === "FAILED") return "Analyse indisponible"
   if (entry.result?.status === "PENDING") return "Investigation en attente"
   const diagnosis = entry.result?.conclusion?.diagnosis_status
   if (diagnosis === "CONFIRMED") return "Cause confirmée"

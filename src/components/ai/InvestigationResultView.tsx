@@ -20,11 +20,13 @@ import type { ReactNode } from "react"
 
 import type { EvidenceItem, InvestigationResult } from "@/lib/api/types/ai"
 import {
+  causalStorySteps,
   formatInvestigationTime,
   hypothesisRank,
   keyEvidence,
   metricLabel,
   operatorText,
+  uniqueDisplayStrings,
 } from "@/lib/ai/investigationReport"
 import {
   CONFIDENCE_LABEL,
@@ -42,8 +44,10 @@ const DIAGNOSIS_VISUAL = {
 }
 
 const HYPOTHESIS_LABEL = {
-  BEST_SUPPORTED: "Mieux étayée",
+  BEST_SUPPORTED: "Meilleure hypothèse",
   ALTERNATIVE: "Alternative",
+  STRONG: "Support fort",
+  MEDIUM: "Support moyen",
   WEAK: "Support faible",
   CONTRADICTED: "Contredite",
 }
@@ -109,6 +113,7 @@ function KeyEvidence({ result }: { result: InvestigationResult }) {
         <p className={cn("mt-0.5 text-[13px] font-semibold tabular-nums", !item.available && "text-muted")}>{item.value}</p>
         {item.meaning && <p className="mt-0.5 text-[10px] text-muted">{item.meaning}</p>}
         {item.timestamp && <time className="mt-1 block text-[10px] tabular-nums text-muted-2" dateTime={item.timestamp}>{formatInvestigationTime(item.timestamp)}</time>}
+        {item.why && <p className="mt-1 text-[10px] text-foreground/80">→ {item.why}</p>}
       </div></div></article>)}
     </div>}
   </section>
@@ -117,10 +122,9 @@ function KeyEvidence({ result }: { result: InvestigationResult }) {
 function CausalStory({ result }: { result: InvestigationResult }) {
   const conclusion = result.conclusion
   if (!conclusion) return null
-  const observed = conclusion.observed_condition ? operatorText(conclusion.observed_condition) : "Condition opérationnelle signalée"
-  const hasCausalMechanism = conclusion.causal_depth > 0 && conclusion.root_cause
-  const steps = hasCausalMechanism ? [operatorText(conclusion.root_cause!), observed] : [observed, "Mécanisme causal non établi", "Vérification complémentaire requise"]
-  return <section><ReportHeading>Ce qui semble s’être passé</ReportHeading><div className="rounded-md border border-border bg-surface px-3 py-3">
+  const hasCausalMechanism = conclusion.causal_depth > 0 && Boolean(conclusion.root_cause)
+  const steps = causalStorySteps(result)
+  return <section data-testid="causal-story"><ReportHeading>Ce qui semble s’être passé</ReportHeading><div className="rounded-md border border-border bg-surface px-3 py-3">
     <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">{steps.map((step, index) => <div key={`${step}-${index}`} className="contents">
       <div className={cn("min-w-0 flex-1 rounded-md px-2.5 py-2 text-[11px] font-medium", index === 0 && hasCausalMechanism ? "bg-accent-soft text-accent-strong" : "bg-surface-2 text-foreground")}>{step}</div>
       {index < steps.length - 1 && <ArrowRight aria-hidden="true" className="mx-auto size-3.5 shrink-0 rotate-90 text-muted-2 sm:rotate-0" />}
@@ -132,7 +136,7 @@ function CausalStory({ result }: { result: InvestigationResult }) {
 function Recommendation({ result }: { result: InvestigationResult }) {
   const recommendation = result.recommendation
   return <section><ReportHeading>Action recommandée</ReportHeading><div className="rounded-md border border-accent/25 bg-accent-soft/35 px-3.5 py-3">
-    {recommendation ? <><p className="text-[13px] font-semibold leading-relaxed text-foreground">{operatorText(recommendation.description)}</p><p className="mt-1 text-[11px] leading-relaxed text-muted">{operatorText(recommendation.rationale)}</p>
+    {recommendation ? <><p className="text-[13px] font-semibold leading-relaxed text-foreground">{operatorText(recommendation.description)}</p><p className="mt-2 text-[11px] leading-relaxed text-muted"><span className="font-medium text-foreground">Pourquoi :</span> {operatorText(recommendation.rationale)}</p>
       {recommendation.operational_constraints.length > 0 && <ul className="mt-2 list-inside list-disc text-[10px] text-muted">{recommendation.operational_constraints.map((constraint) => <li key={constraint}>{operatorText(constraint)}</li>)}</ul>}
     </> : <p className="text-[12px] text-muted">Aucune action recommandée disponible.</p>}
     <div className="mt-2 flex items-center gap-1.5 border-t border-accent/15 pt-2 text-[10px] font-medium text-foreground"><UserCheck className="size-3.5 text-accent" />Validation humaine requise · aucune action automatique</div>
@@ -173,13 +177,15 @@ function Hypotheses({ result }: { result: InvestigationResult }) {
 }
 
 export function InvestigationUncertainty({ result }: { result: InvestigationResult }) {
-  const uncertainties = result.conclusion?.unresolved_uncertainties ?? []
-  const total = uncertainties.length + result.requested_information.length + result.contradictions.length
+  const uncertainties = uniqueDisplayStrings(result.conclusion?.unresolved_uncertainties ?? [])
+  const contradictions = uniqueDisplayStrings(result.contradictions.map((item) => item.description))
+  const requested = uniqueDisplayStrings(result.requested_information.map((item) => item.reason))
+  const total = uncertainties.length + requested.length + contradictions.length
   if (!total) return null
   return <details data-testid="uncertainty-detail" className="rounded-md border border-border bg-surface"><summary className="cursor-pointer select-none px-3 py-2.5 text-[11px] font-semibold">Incertitudes et contradictions ({total})</summary><div className="space-y-3 border-t border-border px-3 py-2.5 text-[11px]">
-    {uncertainties.length > 0 && <section><p className="font-medium">Ce qui empêche une confirmation complète</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{uncertainties.map((item, index) => <li key={index}>{operatorText(item)}</li>)}</ul></section>}
-    {result.contradictions.length > 0 && <section><p className="font-medium">Signaux contradictoires</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{result.contradictions.map((item, index) => <li key={index}>{operatorText(item.description)}</li>)}</ul></section>}
-    {result.requested_information.length > 0 && <section><p className="font-medium">Informations encore recherchées</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{result.requested_information.map((item) => <li key={item.request_id}>{operatorText(item.reason)}</li>)}</ul></section>}
+    {uncertainties.length > 0 && <section><p className="font-medium">Ce qui empêche une confirmation complète</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{uncertainties.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+    {contradictions.length > 0 && <section><p className="font-medium">Signaux contradictoires</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{contradictions.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+    {requested.length > 0 && <section><p className="font-medium">Informations encore recherchées</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{requested.map((item) => <li key={item}>{item}</li>)}</ul></section>}
   </div></details>
 }
 

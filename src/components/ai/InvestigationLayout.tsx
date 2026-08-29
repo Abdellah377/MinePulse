@@ -13,10 +13,10 @@ export function Fact({ label, value, mono }: { label: string; value: string; mon
   return <div><dt className="text-muted-2">{label}</dt><dd className={cn("text-foreground/90", mono && "font-mono font-medium")}>{value}</dd></div>
 }
 
-export function AiBlock({ label, value }: { label: string; value: string }) {
+export function AiBlock({ label, value, compact }: { label: string; value: string; compact?: boolean }) {
   return <div className="rounded-md border border-border bg-background px-3 py-2">
     <p className="text-[10px] font-semibold uppercase text-muted-2">{label}</p>
-    <p className="mt-0.5 text-[12px] text-foreground/90">{value}</p>
+    <p className={cn("mt-0.5 text-[12px] text-foreground/90", compact && "line-clamp-2")}>{value}</p>
   </div>
 }
 
