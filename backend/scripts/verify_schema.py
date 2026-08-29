@@ -13,7 +13,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from sqlalchemy import text
 
 from app.db.database import engine
-from scripts import EXPECTED_ENUMS, EXPECTED_TABLES
+from scripts import EXPECTED_COLUMNS, EXPECTED_ENUMS, EXPECTED_TABLES
 
 
 def main() -> int:
@@ -43,6 +43,24 @@ def main() -> int:
         missing_tables = sorted(EXPECTED_TABLES - tables)
         extra_tables = sorted(tables - EXPECTED_TABLES - {"spatial_ref_sys"})
         missing_enums = sorted(EXPECTED_ENUMS - enums)
+        columns_by_table = {
+            table: {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = :table"
+                    ),
+                    {"table": table},
+                )
+            }
+            for table in EXPECTED_COLUMNS
+        }
+        missing_columns = {
+            table: sorted(expected - columns_by_table[table])
+            for table, expected in EXPECTED_COLUMNS.items()
+            if expected - columns_by_table[table]
+        }
 
         print("=== Schema verification ===")
         print(f"Expected tables: {len(EXPECTED_TABLES)} | Found: {len(tables & EXPECTED_TABLES)}")
@@ -58,6 +76,13 @@ def main() -> int:
             print(f"MISSING enums ({len(missing_enums)}): {', '.join(missing_enums)}")
         else:
             print("All expected enums present.")
+
+        if missing_columns:
+            exit_code = 1
+            for table, columns in sorted(missing_columns.items()):
+                print(f"MISSING columns in {table}: {', '.join(columns)}")
+        else:
+            print("All expected incremental columns present.")
 
         if extra_tables:
             print(f"Extra tables (not in plan): {', '.join(extra_tables)}")

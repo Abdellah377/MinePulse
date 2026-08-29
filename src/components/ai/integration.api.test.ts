@@ -33,9 +33,10 @@ it("API Alertes IA renders backend LangGraph output and qualitative confidence",
   expect(html).toContain("Faible")
   expect(html).toContain("Impact non quantifié")
   expect(html).toContain(alert.title)
+  expect(html).toContain("Investigation demandée")
   expect(html).not.toContain("0%")
   expect(mocks.demo).not.toHaveBeenCalled()
-  for (const section of ["Résumé", "Pourquoi", "Preuves / signaux", "Impact", "Liens utiles", "Panel IA", "Cause non déterminée", "Action immédiate suggérée", "Ouvrir l’équipement"]) expect(html).toContain(section)
+  for (const section of ["Incident", "Pourquoi MinePulse pense cela", "Ce qui semble s’être passé", "Action recommandée", "Impact", "Liens utiles", "Panel IA", "Cause non déterminée", "Confiance causale", "Ouvrir l’équipement"]) expect(html).toContain(section)
   expect(html).toContain("max-w-[360px]")
   expect(html).toContain("max-w-[340px]")
 })
@@ -45,7 +46,7 @@ it("labels persisted automatic monitoring results without starting a frontend in
     result: { ...result, trigger: { ...result.trigger, trigger_source: "AUTOMATIC_MONITORING" } },
   }
   const html = renderToStaticMarkup(createElement(AlertesIA))
-  expect(html).toContain("Monitoring automatique")
+  expect(html).toContain("Détecté automatiquement")
   expect(mocks.start).not.toHaveBeenCalled()
   expect(mocks.demo).not.toHaveBeenCalled()
 })
@@ -96,7 +97,7 @@ it("renders all lifecycle states distinctly and null evidence as unavailable", (
   const html = renderToStaticMarkup(createElement(InvestigationResultView, { result }))
   expect(html).toContain("Indisponible (UNAVAILABLE)")
   expect(html).toContain("Cause non déterminée")
-  expect(html).not.toContain("0 t")
+  expect(html).not.toMatch(/>0(?:&nbsp;|\s)*t</)
 })
 
 it("renders CONFIRMED, PROBABLE, and INCONCLUSIVE labels without false confidence", () => {
@@ -115,7 +116,7 @@ it("renders CONFIRMED, PROBABLE, and INCONCLUSIVE labels without false confidenc
   let html = renderToStaticMarkup(createElement(AlertesIA))
   expect(html).toContain("Cause probable")
   expect(html).toContain("Dégradation liée à la lubrification")
-  expect(html).toContain("not confirmed")
+  expect(html).toContain("n’est pas confirmé")
   expect(html).not.toContain("Cause confirmée")
   expect(html).not.toContain("Conclusion non fiable")
   expect(html).not.toContain("Cause étayée")

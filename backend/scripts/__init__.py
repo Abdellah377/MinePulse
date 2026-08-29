@@ -42,3 +42,11 @@ EXPECTED_ENUMS = frozenset(
         "recommendation_status",
     }
 )
+
+# Incremental columns whose absence lets the API start but causes runtime ORM
+# failures. Keep this deliberately small; the SQL dump remains the full schema
+# source of truth.
+EXPECTED_COLUMNS = {
+    "alerts": frozenset({"site_id", "occurred_at"}),
+    "ai_investigations": frozenset({"debug_trace"}),
+}

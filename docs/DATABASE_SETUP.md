@@ -39,6 +39,10 @@ when their target table already exists; the following data migration separates
 the operational trigger type from the mechanism that started older
 investigations. They never create the full MinePulse schema.
 
+The development launchers (`npm run dev:all` and `npm run dev:api`) apply these
+incremental migrations before starting FastAPI. If migration fails, startup
+stops instead of allowing monitoring to repeatedly query a stale schema.
+
 ## Tests
 
 Integration tests skip when PostgreSQL is unreachable. Set connection settings
@@ -56,4 +60,5 @@ Round-trip tests that mutate alerts delete their own rows.
 cd backend && python scripts/verify_schema.py
 ```
 
-Expected tables are listed in `backend/scripts/__init__.py` (`EXPECTED_TABLES`).
+Expected tables and critical incremental columns are listed in
+`backend/scripts/__init__.py` (`EXPECTED_TABLES` and `EXPECTED_COLUMNS`).

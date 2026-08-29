@@ -3,13 +3,14 @@
  * Starts FastAPI (with embedded simulator) + Vite UI.
  * Ctrl+C stops both.
  */
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const backend = path.join(root, "backend")
 const isWin = process.platform === "win32"
+const py = isWin ? "python" : "python3"
 
 /** @type {import('node:child_process').ChildProcess[]} */
 const children = []
@@ -108,7 +109,18 @@ MinePulse — one terminal
 Press Ctrl+C to stop everything.
 `)
 
-const py = isWin ? "python" : "python3"
+console.log(`${prefix("db", "33")} applying pending database migrations…`)
+const migration = spawnSync(py, ["-m", "alembic", "upgrade", "head"], {
+  cwd: backend,
+  env: { ...process.env, PYTHONUNBUFFERED: "1" },
+  stdio: "inherit",
+})
+if (migration.error || migration.status !== 0) {
+  console.error(`${prefix("db", "33")} migration failed; API and UI were not started.`)
+  process.exit(migration.status ?? 1)
+}
+console.log(`${prefix("db", "33")} database schema is current.`)
+
 start(
   "api",
   "36",

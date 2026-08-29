@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:all": "node scripts/dev-all.mjs",
-    "dev:api": "cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir app --reload-dir simulator --reload-exclude *.json --reload-exclude *.jsonl",
+    "dev:api": "cd backend && python -m alembic upgrade head && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir app --reload-dir simulator --reload-exclude *.json --reload-exclude *.jsonl",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "lint": "oxlint",

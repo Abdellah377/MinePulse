@@ -408,7 +408,8 @@ CREATE TABLE IF NOT EXISTS ai_investigations (
   conclusion JSONB,
   recommendation JSONB,
   error JSONB,
-  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  debug_trace JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_positions_equipment_ts ON equipment_positions(equipment_id,ts DESC);
