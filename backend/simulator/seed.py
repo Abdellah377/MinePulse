@@ -38,16 +38,18 @@ ZONE_SPECS = [
     ("PARKING", "Parking", ZoneType.PARKING, (-6.672, 32.658), 8, "#00843D"),
 ]
 
-ROAD_PAIRS = [
-    ("BANC_A", "CRUSHER", "RD-BA-CR"),
-    ("BANC_B", "CRUSHER", "RD-BB-CR"),
-    ("BANC_A", "DUMP_N", "RD-BA-DN"),
-    ("BANC_B", "DUMP_S", "RD-BB-DS"),
-    ("CRUSHER", "PARKING", "RD-CR-PK"),
-    ("BANC_A", "FUEL", "RD-BA-FU"),
-    ("BANC_B", "FUEL", "RD-BB-FU"),
-    ("BANC_A", "WORKSHOP", "RD-BA-WS"),
-    ("BANC_B", "WORKSHOP", "RD-BB-WS"),
+# Catalog distance represents the driven haul road (not straight-line geometry).
+# road_quality is a documented simulator score from 0 (poor) to 100 (excellent).
+ROAD_SPECS = [
+    ("BANC_A", "CRUSHER", "RD-BA-CR", 4.2, 40, 4.0, 88),
+    ("BANC_B", "CRUSHER", "RD-BB-CR", 5.6, 36, 6.5, 76),
+    ("BANC_A", "DUMP_N", "RD-BA-DN", 7.4, 42, 3.0, 84),
+    ("BANC_B", "DUMP_S", "RD-BB-DS", 4.8, 38, 5.0, 80),
+    ("CRUSHER", "PARKING", "RD-CR-PK", 3.2, 35, 2.0, 90),
+    ("BANC_A", "FUEL", "RD-BA-FU", 3.6, 35, 3.0, 86),
+    ("BANC_B", "FUEL", "RD-BB-FU", 3.9, 34, 4.5, 78),
+    ("BANC_A", "WORKSHOP", "RD-BA-WS", 4.1, 32, 3.5, 82),
+    ("BANC_B", "WORKSHOP", "RD-BB-WS", 4.3, 32, 5.0, 74),
 ]
 
 
@@ -62,17 +64,6 @@ def _box_polygon(lng: float, lat: float, d: float = 0.0018) -> WKTElement:
 def _line(lng1: float, lat1: float, lng2: float, lat2: float) -> WKTElement:
     wkt = f"LINESTRING({lng1} {lat1}, {lng2} {lat2})"
     return WKTElement(wkt, srid=4326)
-
-
-def _dist_km(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
-    # rough haversine approximation for prototype
-    import math
-
-    r = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlng = math.radians(lng2 - lng1)
-    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
-    return round(2 * r * math.asin(math.sqrt(a)), 3)
 
 
 def seed_static_world(session: Session) -> dict[str, int]:
@@ -140,15 +131,19 @@ def seed_static_world(session: Session) -> dict[str, int]:
         zone_coords[code] = (lng, lat)
         log.info("Created zone %s", code)
 
-    for from_code, to_code, road_code in ROAD_PAIRS:
+    for from_code, to_code, road_code, distance_km, speed_limit, grade_pct, quality in ROAD_SPECS:
         existing = session.scalar(
             select(HaulRoad).where(HaulRoad.site_id == site.site_id, HaulRoad.code == road_code)
         )
         if existing:
+            existing.distance_km = Decimal(str(distance_km))
+            existing.speed_limit_kmh = Decimal(str(speed_limit))
+            existing.road_grade_pct = Decimal(str(grade_pct))
+            existing.road_quality = Decimal(str(quality))
+            existing.metadata_ = {**(existing.metadata_ or {}), "simulated_catalog": True}
             continue
         lng1, lat1 = zone_coords[from_code]
         lng2, lat2 = zone_coords[to_code]
-        dist = _dist_km(lng1, lat1, lng2, lat2)
         session.add(
             HaulRoad(
                 site_id=site.site_id,
@@ -156,10 +151,13 @@ def seed_static_world(session: Session) -> dict[str, int]:
                 name=f"{from_code} → {to_code}",
                 from_zone_id=zone_ids[from_code],
                 to_zone_id=zone_ids[to_code],
-                distance_km=Decimal(str(dist)),
-                speed_limit_kmh=Decimal("40"),
+                distance_km=Decimal(str(distance_km)),
+                speed_limit_kmh=Decimal(str(speed_limit)),
+                road_grade_pct=Decimal(str(grade_pct)),
+                road_quality=Decimal(str(quality)),
                 status="OPEN",
                 geometry=_line(lng1, lat1, lng2, lat2),
+                metadata_={"simulated_catalog": True},
             )
         )
     session.flush()

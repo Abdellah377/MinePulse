@@ -109,11 +109,11 @@ def _inject_recover(world: SimWorld, sid: str) -> None:
         if trk:
             trk.comm_lost = False
             trk.phase = TruckPhase.WAITING_LOADING
-            trk.phase_ticks_left = 5
+            trk.reset_phase_timing()
     elif sid == "unexplained_stop":
         trk = world.trucks.get("TRK-012")
         if trk:
             trk.unexplained_hold = False
             trk.phase = trk.pre_stop_phase or TruckPhase.MOVING_EMPTY
             trk.pre_stop_phase = None
-            trk.phase_ticks_left = 5
+            trk.reset_phase_timing()

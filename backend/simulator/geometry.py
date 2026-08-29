@@ -30,6 +30,8 @@ class RoadGeom:
     to_zone_code: str
     distance_km: float
     speed_limit_kmh: float
+    grade_pct: float
+    quality_score: float
     line: LineString  # coords as (lng, lat)
 
 
@@ -65,6 +67,8 @@ def load_roads(
             to_zone_code=to_code,
             distance_km=dist,
             speed_limit_kmh=float(r.speed_limit_kmh or 40),
+            grade_pct=float(r.road_grade_pct) if r.road_grade_pct is not None else 0.0,
+            quality_score=float(r.road_quality) if r.road_quality is not None else 85.0,
             line=line,
         )
         out[r.code] = geom

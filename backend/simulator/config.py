@@ -1,12 +1,13 @@
 from app.config import get_settings
+from simulator.cycle_dynamics import CycleDynamicsConfig
 
 
 class SimConfig:
-    def __init__(self) -> None:
+    def __init__(self, *, random_seed: int | None = None) -> None:
         s = get_settings()
         self.speed = s.simulation_speed
         self.tick_seconds = s.simulation_tick_seconds
-        self.random_seed = s.simulation_random_seed
+        self.random_seed = s.simulation_random_seed if random_seed is None else random_seed
         self.fleet_truck_count = s.fleet_truck_count
         self.fuel_low_threshold = s.fuel_low_threshold
 
@@ -18,3 +19,5 @@ class SimConfig:
         self.dump_max_seconds = 180
         self.default_truck_payload = 175.0
         self.scenario = "normal"
+        self.cycle_dynamics = CycleDynamicsConfig()
+        self.persistence_sample_every_ticks = 1

@@ -62,5 +62,8 @@ class RoadRuntime:
     distance_km: float
     base_speed_limit: float
     speed_limit: float
+    grade_pct: float = 0.0
+    quality_score: float = 85.0
     closed: bool = False
     slow_traffic_factor: float = 1.0
+    operating_factor: float = 1.0

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from simulator.commands import append_event_log
 from simulator.control import RUNTIME_SNAPSHOT_PATH
+from simulator.cycle_dynamics import operating_conditions
 from simulator.loaders import LoaderRuntime
 from simulator.queues import RoadRuntime, ZoneRuntime
 from simulator.state_machine import TruckPhase, TruckRuntime
@@ -43,6 +44,7 @@ class SimulationWorld(SimWorld):
         self.mode: str = "MANUAL"
         self.wall_started_at: datetime | None = None
         self.wall_elapsed_sec: float = 0.0
+        self._operating_period_token: int | None = None
 
     def clear_scenario_memory(self) -> None:
         super().clear_scenario_memory()
@@ -53,6 +55,8 @@ class SimulationWorld(SimWorld):
             ldr.capacity_factor = 1.0
             ldr.mechanical_breakdown = False
             ldr.communication_lost = False
+            ldr.active_truck_code = None
+            ldr.waiting_queue.clear()
         for z in self.zones.values():
             z.capacity = z.base_capacity
             z.closed = False
@@ -62,6 +66,8 @@ class SimulationWorld(SimWorld):
             r.closed = False
             r.speed_limit = r.base_speed_limit
             r.slow_traffic_factor = 1.0
+            r.operating_factor = 1.0
+        self._operating_period_token = None
 
     def add_injection(self, inj: ActiveInjection) -> None:
         self.injections[inj.injection_id] = inj
@@ -100,12 +106,37 @@ class SimulationWorld(SimWorld):
 
     def truck_may_load(self, truck: TruckRuntime) -> bool:
         zone = self.zones.get(truck.origin_zone_code)
-        if zone and (zone.closed or not zone.can_enter()) and truck.code not in zone.occupants:
+        if zone and (zone.closed or truck.code not in zone.occupants):
             return False
         ldr = self.loader_for_truck(truck)
-        if ldr and ldr.effective_capacity() <= 0:
+        if ldr is None:
             return False
-        return True
+        return ldr.request_service(truck.code)
+
+    def refresh_operating_conditions(self, sim_now: datetime) -> None:
+        """Refresh bounded hourly conditions without exposing their hidden values."""
+
+        minutes = self.cfg.cycle_dynamics.operating_period_minutes
+        token = int(sim_now.timestamp()) // (max(1, minutes) * 60)
+        if token == self._operating_period_token:
+            return
+        self._operating_period_token = token
+        for road in self.roads.values():
+            conditions = operating_conditions(
+                seed=self.cfg.random_seed,
+                sim_now=sim_now,
+                asset_token=f"road:{road.code}",
+                period_minutes=minutes,
+            )
+            road.operating_factor = conditions.travel_factor
+        for loader in self.loaders.values():
+            conditions = operating_conditions(
+                seed=self.cfg.random_seed,
+                sim_now=sim_now,
+                asset_token=f"loader:{loader.code}",
+                period_minutes=minutes,
+            )
+            loader.operating_rate_factor = conditions.loader_rate_factor
 
     def effective_road(self, from_code: str, to_code: str) -> RoadRuntime | None:
         key = f"{from_code}->{to_code}"

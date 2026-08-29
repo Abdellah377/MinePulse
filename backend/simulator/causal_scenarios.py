@@ -687,7 +687,7 @@ class CausalScenarioManager:
         except ValueError:
             entity.phase = TruckPhase.WAITING_LOADING
         entity.speed_kmh = original["speed_kmh"]
-        entity.phase_ticks_left = 5
+        entity.reset_phase_timing()
 
 
 def validate_trace(run: ActiveCausalScenario) -> list[str]:

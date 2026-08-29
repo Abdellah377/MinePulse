@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import random
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -22,11 +23,9 @@ from app.db.models import (
     MaintenanceEvent,
     Material,
     Operator,
-    Shift,
     Site,
     Trip,
     TyreTelemetry,
-    Zone,
 )
 from app.oem.schema import ensure_oem_schema
 from simulator.apply_commands import CommandContext, process_equipment_commands, process_pending_commands
@@ -58,6 +57,7 @@ from simulator.state_machine import (
     TruckRuntime,
 )
 from simulator.world_model import SimulationWorld
+from simulator.world import stable_seed
 
 from simulator.transition_service import transition_loader, transition_truck, truck_db_state
 
@@ -74,7 +74,8 @@ class SimulationEngine:
         sim_now = datetime.fromisoformat(control["sim_now"])
         if sim_now.tzinfo is None:
             sim_now = sim_now.replace(tzinfo=timezone.utc)
-        self.clock = SimClock(float(control.get("speed", self.cfg.speed)), self.cfg.tick_seconds, sim_now)
+        initial_speed = self.cfg.speed if cfg is not None else control.get("speed", self.cfg.speed)
+        self.clock = SimClock(float(initial_speed), self.cfg.tick_seconds, sim_now)
         self.clock.status = control.get("status", "STOPPED")
         self.cfg.scenario = control.get("scenario", "normal")
         self.world.mode = control.get("mode", "MANUAL")
@@ -92,6 +93,8 @@ class SimulationEngine:
         self.open_trips: dict[str, int] = {}
         self._last_queue_log: dict[str, int] = {}
         self._tick_count = 0
+        self.completed_cycle_count = 0
+        self.startup_interrupted_cycles = 0
         self._boot()
 
     def _boot(self) -> None:
@@ -100,12 +103,26 @@ class SimulationEngine:
         if not site:
             raise RuntimeError("Site MP-SIM-01 not seeded. Run: python -m simulator seed")
         self.site_id = site.site_id
-        shift = self.session.scalar(
-            select(Shift).where(Shift.site_id == site.site_id).order_by(Shift.shift_id.desc())
+        from simulator.cycle_lifecycle import interrupt_active_simulation_cycles
+
+        lifecycle_counts = interrupt_active_simulation_cycles(
+            self.session,
+            site_id=site.site_id,
+            interrupted_at=self.clock.sim_now,
+            reason="SIMULATOR_ENGINE_RESTART",
         )
-        self.shift_id = shift.shift_id if shift else None
+        self.startup_interrupted_cycles += lifecycle_counts["cycles"]
         material = self.session.scalar(select(Material).where(Material.code == "PHOS_SIM"))
         self.material_id = material.material_id if material else None
+        from simulator.shifts import ensure_simulation_shift
+
+        shift = ensure_simulation_shift(
+            self.session,
+            site_id=site.site_id,
+            material_id=self.material_id,
+            sim_now=self.clock.sim_now,
+        )
+        self.shift_id = shift.shift_id
 
         self.zones_geom = load_zones(self.session, site.site_id)
         self.zone_id_by_code = {c: z.zone_id for c, z in self.zones_geom.items()}
@@ -179,6 +196,8 @@ class SimulationEngine:
                 distance_km=rg.distance_km,
                 base_speed_limit=rg.speed_limit_kmh,
                 speed_limit=rg.speed_limit_kmh,
+                grade_pct=rg.grade_pct,
+                quality_score=rg.quality_score,
             )
         # Loaders / excavators
         for e in all_equip:
@@ -189,8 +208,17 @@ class SimulationEngine:
                 zone = "BANC_A"
             elif e.code.endswith("002"):
                 zone = "BANC_B"
+            loader_rng_seed = stable_seed(self.cfg.random_seed, e.equipment_id, e.code)
+            loader_rng = random.Random(loader_rng_seed)
             self.world.loaders[e.code] = LoaderRuntime(
-                code=e.code, equipment_id=e.equipment_id, zone_code=zone
+                code=e.code,
+                equipment_id=e.equipment_id,
+                zone_code=zone,
+                baseline_service_factor=loader_rng.uniform(
+                    self.cfg.cycle_dynamics.loader_factor_min,
+                    self.cfg.cycle_dynamics.loader_factor_max,
+                ),
+                rng=loader_rng,
             )
 
     def _sync_control_from_disk(self) -> None:
@@ -225,10 +253,14 @@ class SimulationEngine:
             truck.active_road_code = road.code
             truck.road_reverse = reverse
             truck.road_distance_km = road.distance_km
+            truck.road_grade_pct = road.grade_pct
+            truck.road_quality_score = road.quality_score
             # Prefer live road runtime limits (injections)
             rr = self.world.roads.get(road.code)
             if rr and not rr.closed:
-                truck.road_speed_limit = rr.speed_limit * rr.slow_traffic_factor
+                truck.road_speed_limit = (
+                    rr.speed_limit * rr.slow_traffic_factor * rr.operating_factor
+                )
             elif rr and rr.closed:
                 # Find alternative to crusher/dest if closed
                 alt, alt_rev = find_road(self.roads_geom, fr, "CRUSHER")
@@ -310,7 +342,10 @@ class SimulationEngine:
             if asn:
                 if asn.operator_id is None:
                     asn.operator_id = op.operator_id
-                continue
+                if asn.shift_id == self.shift_id:
+                    continue
+                asn.status = "COMPLETED"
+                asn.completed_at = self.clock.sim_now
             self.session.add(
                 EquipmentAssignment(
                     shift_id=self.shift_id,
@@ -422,6 +457,7 @@ class SimulationEngine:
         # operational records are persisted below.
         causal_transitions = self.causal_scenarios.step(self.world, self.clock.sim_now)
         self._persist_causal_transitions(causal_transitions)
+        self.world.refresh_operating_conditions(self.clock.sim_now)
 
         # Auto scenarios only outside MANUAL mode
         if self.world.mode != "MANUAL":
@@ -447,9 +483,10 @@ class SimulationEngine:
             # Loader / excavator capacity
             ldr = self.world.loader_for_truck(truck)
             if ldr and ldr.effective_capacity() <= 0 and truck.phase == TruckPhase.LOADING:
+                ldr.release_service(truck.code, requeue=True)
                 truck.phase = TruckPhase.WAITING_LOADING
                 truck.speed_kmh = 0
-                truck.phase_ticks_left = max(truck.phase_ticks_left, 8)
+                truck.hold_for_next_tick(self.cfg)
                 self.world.log_sim(
                     self.clock.sim_now,
                     f"{truck.code} waiting — loader {truck.loader_code} unavailable",
@@ -473,11 +510,6 @@ class SimulationEngine:
                             )
                             self._last_queue_log[zone.code] = qlen
 
-            # Slow loading when reduced capacity
-            if truck.phase == TruckPhase.LOADING and ldr and 0 < ldr.effective_capacity() < 1.0:
-                if truck.phase_ticks_left > 0 and truck.rng.random() < (1.0 - ldr.effective_capacity()):
-                    truck.phase_ticks_left += 1
-
             # 1. Capture phase before any command mutation
             prev_phase = truck.phase
 
@@ -488,17 +520,35 @@ class SimulationEngine:
             # Block advance into LOADING if cannot load
             if (
                 truck.phase == TruckPhase.WAITING_LOADING
-                and truck.phase_ticks_left <= 1
                 and not self.world.truck_may_load(truck)
             ):
-                truck.phase_ticks_left = 5
-                truck.speed_kmh = 0
+                truck.hold_for_next_tick(self.cfg)
             else:
-                truck.advance_phase(self.cfg)
+                if (
+                    ldr
+                    and truck.phase == TruckPhase.WAITING_LOADING
+                    and truck.next_loading_duration_seconds is None
+                ):
+                    truck.next_loading_duration_seconds = ldr.sample_loading_seconds(
+                        self.cfg.cycle_dynamics
+                    )
+                truck.advance_phase(
+                    self.cfg,
+                    loading_rate=ldr.loading_rate() if ldr else 1.0,
+                    loading_duration_seconds=truck.next_loading_duration_seconds,
+                )
 
             phase_after_advance = truck.phase
 
-            if prev_phase == TruckPhase.LOADING and truck.phase != TruckPhase.LOADING:
+            left_loader_service = prev_phase == TruckPhase.LOADING and truck.phase != TruckPhase.LOADING
+            abandoned_loader_service = (
+                ldr is not None
+                and ldr.active_truck_code == truck.code
+                and truck.phase not in (TruckPhase.WAITING_LOADING, TruckPhase.LOADING)
+            )
+            if left_loader_service or abandoned_loader_service:
+                if ldr:
+                    ldr.release_service(truck.code)
                 zone = self.world.zones.get(truck.origin_zone_code)
                 if zone:
                     zone.leave(truck.code)
@@ -506,22 +556,34 @@ class SimulationEngine:
             if truck.phase != prev_phase and truck.is_moving():
                 self._bind_road(truck)
 
+            sample_due = (
+                self._tick_count % max(1, self.cfg.persistence_sample_every_ticks) == 0
+            )
             if not truck.comm_lost:
                 self._update_position(truck)
-                self._write_position(truck)
-                tel = build_telemetry(truck)
-                if tel:
-                    self._write_telemetry(truck, tel)
-                    self._write_tyres(truck)
-                    self._check_oem_anomalies(truck, tel)
-                if truck.speed_kmh > 0 or truck.phase != TruckPhase.NO_COMM:
-                    active_trucks += 1
+                if sample_due:
+                    self._write_position(truck)
+                    tel = build_telemetry(truck)
+                    if tel:
+                        self._write_telemetry(truck, tel)
+                        self._write_tyres(truck)
+                        self._check_oem_anomalies(truck, tel)
+            if not truck.comm_lost and (truck.speed_kmh > 0 or truck.phase != TruckPhase.NO_COMM):
+                active_trucks += 1
 
             if prev_phase == TruckPhase.REFUELING and truck.phase == TruckPhase.WAITING_LOADING:
                 self._record_fuel_event(truck)
 
             if truck.phase == TruckPhase.MOVING_LOADED and prev_phase != TruckPhase.MOVING_LOADED:
                 self._open_trip(truck)
+
+            dump_completed = (
+                prev_phase == TruckPhase.DUMPING
+                and truck.payload_t <= 0
+                and truck.phase != TruckPhase.DUMPING
+            )
+            if dump_completed:
+                self._complete_dump(truck, active_trucks, active_loaders)
 
             if PHASE_TO_DB.get(prev_phase) != PHASE_TO_DB.get(phase_after_advance):
                 transition_truck(
@@ -539,9 +601,6 @@ class SimulationEngine:
                         "EQUIPMENT",
                         truck.code,
                     )
-
-            if prev_phase == TruckPhase.DUMPING and truck.payload_t <= 0 and truck.phase != TruckPhase.DUMPING:
-                self._complete_dump(truck, active_trucks, active_loaders)
 
         for code, ldr in self.world.loaders.items():
             eid = self.equip_id_by_code.get(code)
@@ -775,8 +834,20 @@ class SimulationEngine:
         self._open_cycle_stage(truck, truck.db_state())
 
     def _start_cycle(self, truck: TruckRuntime) -> None:
+        from simulator.shifts import ensure_simulation_shift
+
+        previous_shift_id = self.shift_id
+        shift = ensure_simulation_shift(
+            self.session,
+            site_id=self.site_id or 0,
+            material_id=self.material_id,
+            sim_now=self.clock.sim_now,
+        )
+        self.shift_id = shift.shift_id
+        if previous_shift_id != self.shift_id:
+            self._ensure_assignments()
         c = Cycle(
-            shift_id=self.shift_id,
+            shift_id=shift.shift_id,
             truck_id=truck.equipment_id,
             loader_id=self.equip_id_by_code.get(truck.loader_code),
             origin_zone_id=self.zone_id_by_code.get(truck.origin_zone_code),
@@ -784,6 +855,7 @@ class SimulationEngine:
             material_id=self.material_id,
             started_at=self.clock.sim_now,
             status="ACTIVE",
+            metadata_={"source": "SIMULATOR"},
         )
         self.session.add(c)
         self.session.flush()
@@ -848,6 +920,7 @@ class SimulationEngine:
                 trip.payload_t = Decimal(str(payload))
                 trip.distance_km = dist
                 trip.status = "COMPLETED"
+        production_shift_id = self.shift_id
         if cid:
             cycle = self.session.get(Cycle, cid)
             if cycle:
@@ -856,9 +929,11 @@ class SimulationEngine:
                 cycle.distance_km = dist
                 cycle.status = "COMPLETED"
                 cycle.total_duration_sec = int((self.clock.sim_now - cycle.started_at).total_seconds())
+                self.completed_cycle_count += 1
+                production_shift_id = cycle.shift_id
         record_dump_production(
             self.session,
-            self.shift_id,
+            production_shift_id,
             self.clock.sim_now,
             payload,
             self.zone_id_by_code.get(truck.origin_zone_code),
@@ -922,6 +997,23 @@ class SimulationEngine:
         self.clock.resume()
         self._persist_control()
 
+    def interrupt_open_cycles(self, *, reason: str) -> dict[str, int]:
+        """Close unfinished synthetic work without turning it into an ML target."""
+
+        from simulator.cycle_lifecycle import interrupt_active_simulation_cycles
+
+        counts = interrupt_active_simulation_cycles(
+            self.session,
+            site_id=self.site_id or 0,
+            interrupted_at=self.clock.sim_now,
+            reason=reason,
+        )
+        self.open_cycles.clear()
+        self.open_cycle_stages.clear()
+        self.open_trips.clear()
+        self.session.commit()
+        return counts
+
     def reset(self) -> None:
         from app.monitoring.coordination import monitoring_reset_coordinator
 
@@ -936,6 +1028,9 @@ class SimulationEngine:
             self.open_cycle_stages.clear()
             self.open_trips.clear()
             self._last_queue_log.clear()
+            self._tick_count = 0
+            self.completed_cycle_count = 0
+            self.startup_interrupted_cycles = 0
             self.clock.reset()
             self._persist_control()
             self._boot()

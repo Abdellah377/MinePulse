@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import sys
 import time
@@ -15,8 +16,11 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.db.database import SessionLocal
+from sqlalchemy import func, select
+from app.db.models import Cycle, Equipment
 from simulator.clock import get_sim_logger
 from simulator.causal_scenarios import SCENARIO_SPECS, scenario_catalog, validate_trace
+from simulator.config import SimConfig
 from simulator.engine import SimulationEngine
 from simulator.seed import seed_static_world
 from simulator.world import SimWorld
@@ -61,6 +65,80 @@ def cmd_run(ticks: int | None) -> int:
             engine.pause()
             log.info("Simulator paused")
     return 0
+
+
+def cmd_generate_cycles(
+    target_cycles: int,
+    seed: int,
+    max_ticks: int | None,
+    sim_speed: float,
+    verbose: bool,
+    sample_every_ticks: int,
+) -> int:
+    """Generate a fresh, reproducible simulation-site dataset without wall sleeps."""
+
+    if target_cycles < 1:
+        raise ValueError("target_cycles must be positive")
+    if sim_speed <= 0:
+        raise ValueError("sim_speed must be positive")
+    if sample_every_ticks < 1:
+        raise ValueError("sample_every_ticks must be at least 1")
+    if not verbose:
+        log.setLevel(logging.WARNING)
+    with SessionLocal() as session:
+        seed_static_world(session)
+        cfg = SimConfig(random_seed=seed)
+        cfg.speed = sim_speed
+        cfg.persistence_sample_every_ticks = sample_every_ticks
+        engine = SimulationEngine(session, cfg=cfg)
+        engine.reset()
+        engine.start()
+        tick_limit = max_ticks or max(1_000, target_cycles * 12)
+        ticks = 0
+        while engine.completed_cycle_count < target_cycles and ticks < tick_limit:
+            engine.tick()
+            ticks += 1
+        engine.pause()
+        interruption = engine.interrupt_open_cycles(reason="DATASET_GENERATION_COMPLETE")
+        simulation_equipment_ids = select(Equipment.equipment_id).where(
+            Equipment.site_id == engine.site_id
+        )
+        completed = int(
+            session.scalar(
+                select(func.count())
+                .select_from(Cycle)
+                .where(
+                    Cycle.status == "COMPLETED",
+                    Cycle.truck_id.in_(simulation_equipment_ids),
+                )
+            )
+            or 0
+        )
+        active = int(
+            session.scalar(
+                select(func.count())
+                .select_from(Cycle)
+                .where(
+                    Cycle.status == "ACTIVE",
+                    Cycle.truck_id.in_(simulation_equipment_ids),
+                )
+            )
+            or 0
+        )
+        result = {
+            "seed": seed,
+            "sim_speed": sim_speed,
+            "persistence_sample_every_ticks": sample_every_ticks,
+            "target_completed_cycles": target_cycles,
+            "completed_cycles": completed,
+            "active_cycles": active,
+            "interrupted_at_generation_end": interruption["cycles"],
+            "ticks": ticks,
+            "sim_now": engine.clock.sim_now.isoformat(),
+            "reached_target": completed >= target_cycles,
+        }
+        print(json.dumps(result, indent=2))
+        return 0 if result["reached_target"] and active == 0 else 2
 
 
 def cmd_causal_list() -> int:
@@ -114,6 +192,26 @@ def main() -> int:
     sub.add_parser("reset", help="Clear dynamic data and reset clock")
     run_p = sub.add_parser("run", help="Run simulation loop")
     run_p.add_argument("--ticks", type=int, default=None, help="Max ticks (default: infinite)")
+    generate_p = sub.add_parser(
+        "generate-cycles",
+        help="Reset the simulation site and generate a reproducible cycle dataset",
+    )
+    generate_p.add_argument("--target-cycles", type=int, default=1000)
+    generate_p.add_argument("--seed", type=int, default=42)
+    generate_p.add_argument("--max-ticks", type=int, default=None)
+    generate_p.add_argument(
+        "--sim-speed",
+        type=float,
+        default=60.0,
+        help="simulated seconds per one-second engine tick (default: 60)",
+    )
+    generate_p.add_argument("--verbose", action="store_true", help="log every completed cycle")
+    generate_p.add_argument(
+        "--sample-every-ticks",
+        type=int,
+        default=2,
+        help="persist position/telemetry every N ticks during batch generation",
+    )
     sub.add_parser("causal-list", help="List causal diagnostic scenarios")
     causal_p = sub.add_parser(
         "causal-run",
@@ -139,6 +237,15 @@ def main() -> int:
         return cmd_reset()
     if args.cmd == "run":
         return cmd_run(args.ticks)
+    if args.cmd == "generate-cycles":
+        return cmd_generate_cycles(
+            args.target_cycles,
+            args.seed,
+            args.max_ticks,
+            args.sim_speed,
+            args.verbose,
+            args.sample_every_ticks,
+        )
     if args.cmd == "causal-list":
         return cmd_causal_list()
     if args.cmd == "causal-run":

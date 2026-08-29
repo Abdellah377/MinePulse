@@ -49,6 +49,21 @@ def _quantiles(values: list[float]) -> dict[str, float | None]:
     }
 
 
+def _pearson(pairs: list[tuple[float, float]]) -> float | None:
+    if len(pairs) < 3:
+        return None
+    xs = [pair[0] for pair in pairs]
+    ys = [pair[1] for pair in pairs]
+    mx = sum(xs) / len(xs)
+    my = sum(ys) / len(ys)
+    numerator = sum((x - mx) * (y - my) for x, y in pairs)
+    dx = sum((x - mx) ** 2 for x in xs)
+    dy = sum((y - my) ** 2 for y in ys)
+    if dx <= 0 or dy <= 0:
+        return None
+    return round(numerator / math.sqrt(dx * dy), 3)
+
+
 def main() -> int:
     report: dict = {"source": "MinePulse PostgreSQL (read-only)", "synthetic": True}
     with SessionLocal() as session:
@@ -61,6 +76,7 @@ def main() -> int:
             "cycles_total": int(scalar("SELECT COUNT(*) FROM cycles") or 0),
             "cycles_completed": int(scalar("SELECT COUNT(*) FROM cycles WHERE status = 'COMPLETED'") or 0),
             "cycles_active": int(scalar("SELECT COUNT(*) FROM cycles WHERE status = 'ACTIVE'") or 0),
+            "cycles_interrupted": int(scalar("SELECT COUNT(*) FROM cycles WHERE status = 'INTERRUPTED'") or 0),
             "cycles_other_status": int(scalar("SELECT COUNT(*) FROM cycles WHERE status NOT IN ('ACTIVE', 'COMPLETED')") or 0),
             "cycle_stages": int(scalar("SELECT COUNT(*) FROM cycle_stages") or 0),
             "trips": int(scalar("SELECT COUNT(*) FROM trips") or 0),
@@ -214,6 +230,121 @@ def main() -> int:
         report["status_counts"] = dict(
             session.execute(text("SELECT status, COUNT(*) FROM cycles GROUP BY status")).all()
         )
+
+        stage_rows = session.execute(
+            text(
+                """
+                SELECT cs.stage::text, cs.duration_sec / 60.0
+                FROM cycle_stages cs
+                JOIN cycles c ON c.cycle_id = cs.cycle_id
+                WHERE c.status = 'COMPLETED' AND cs.duration_sec IS NOT NULL
+                ORDER BY cs.stage, cs.duration_sec
+                """
+            )
+        ).all()
+        stage_values: dict[str, list[float]] = {}
+        for stage, value in stage_rows:
+            stage_values.setdefault(str(stage), []).append(float(value))
+        report["stage_duration_minutes"] = {
+            stage: _quantiles(values) for stage, values in sorted(stage_values.items())
+        }
+
+        report["route_stage_context"] = grouped(
+            """
+            SELECT o.code AS origin, d.code AS destination,
+                   ROUND(r.distance_km::numeric, 2) AS catalog_distance_km,
+                   COUNT(*) AS n,
+                   ROUND(AVG(c.total_duration_sec / 60.0)::numeric, 2) AS mean_cycle_min,
+                   ROUND(AVG(COALESCE(stage.travel_sec, 0) / 60.0)::numeric, 2) AS mean_travel_min,
+                   ROUND(AVG(COALESCE(stage.waiting_sec, 0) / 60.0)::numeric, 2) AS mean_waiting_min,
+                   ROUND(AVG(COALESCE(stage.loading_sec, 0) / 60.0)::numeric, 2) AS mean_loading_min
+            FROM cycles c
+            JOIN zones o ON o.zone_id = c.origin_zone_id
+            JOIN zones d ON d.zone_id = c.destination_zone_id
+            LEFT JOIN haul_roads r ON r.site_id = o.site_id
+                 AND r.from_zone_id = c.origin_zone_id AND r.to_zone_id = c.destination_zone_id
+            LEFT JOIN (
+                SELECT cycle_id,
+                       SUM(duration_sec) FILTER (WHERE stage::text IN ('MOVING_EMPTY','MOVING_LOADED')) AS travel_sec,
+                       SUM(duration_sec) FILTER (WHERE stage::text IN ('WAITING_LOADING','WAITING_DUMPING')) AS waiting_sec,
+                       SUM(duration_sec) FILTER (WHERE stage::text = 'LOADING') AS loading_sec
+                FROM cycle_stages GROUP BY cycle_id
+            ) stage ON stage.cycle_id = c.cycle_id
+            WHERE c.status = 'COMPLETED'
+            GROUP BY o.code, d.code, r.distance_km
+            ORDER BY catalog_distance_km
+            """
+        )
+
+        report["loader_service_context"] = grouped(
+            """
+            SELECT e.code AS loader, COUNT(*) AS n,
+                   ROUND(AVG(load_stage.duration_sec / 60.0)::numeric, 2) AS mean_loading_min,
+                   ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP
+                       (ORDER BY load_stage.duration_sec / 60.0)::numeric, 2) AS median_loading_min,
+                   ROUND(AVG(wait_stage.duration_sec / 60.0)::numeric, 2) AS mean_waiting_loading_min
+            FROM cycles c
+            JOIN equipment e ON e.equipment_id = c.loader_id
+            LEFT JOIN cycle_stages load_stage ON load_stage.cycle_id = c.cycle_id
+                 AND load_stage.stage::text = 'LOADING'
+            LEFT JOIN cycle_stages wait_stage ON wait_stage.cycle_id = c.cycle_id
+                 AND wait_stage.stage::text = 'WAITING_LOADING'
+            WHERE c.status = 'COMPLETED'
+            GROUP BY e.code ORDER BY e.code
+            """
+        )
+
+        from app.ml.cycle_time.dataset import load_snapshot, select_training_cycles
+        from app.ml.cycle_time.features import build_feature_rows
+
+        snapshot = load_snapshot(session)
+        training_cycles, _ = select_training_cycles(snapshot.cycles)
+        feature_rows = build_feature_rows(training_cycles, snapshot)
+        queue_values = [
+            float(row.values["loader_waiting_truck_count"])
+            for row in feature_rows
+            if row.values.get("loader_waiting_truck_count") is not None
+        ]
+        report["queue_at_cycle_start"] = _quantiles(queue_values)
+
+        travel_pairs = [
+            (float(distance), float(travel_minutes))
+            for distance, travel_minutes in session.execute(
+                text(
+                    """
+                    SELECT r.distance_km, SUM(cs.duration_sec) / 60.0
+                    FROM cycles c
+                    JOIN haul_roads r ON r.from_zone_id = c.origin_zone_id
+                         AND r.to_zone_id = c.destination_zone_id
+                    JOIN cycle_stages cs ON cs.cycle_id = c.cycle_id
+                         AND cs.stage::text IN ('MOVING_EMPTY','MOVING_LOADED')
+                    WHERE c.status = 'COMPLETED' AND cs.duration_sec IS NOT NULL
+                    GROUP BY c.cycle_id, r.distance_km
+                    """
+                )
+            ).all()
+        ]
+        report["relationships"] = {
+            "catalog_distance_vs_travel_minutes_pearson": _pearson(travel_pairs),
+            "queue_at_start_vs_cycle_minutes_pearson": _pearson(
+                [
+                    (float(row.values["loader_waiting_truck_count"]), float(row.target_minutes))
+                    for row in feature_rows
+                    if row.values.get("loader_waiting_truck_count") is not None
+                    and row.target_minutes is not None
+                ]
+            ),
+        }
+
+        by_truck_history: dict[int, list[float]] = {}
+        recent_pairs: list[tuple[float, float]] = []
+        for row in training_cycles:
+            history = by_truck_history.setdefault(int(row.truck_id), [])
+            duration = float(row.total_duration_sec) / 60.0
+            if len(history) >= 3:
+                recent_pairs.append((sum(history[-3:]) / 3.0, duration))
+            history.append(duration)
+        report["relationships"]["truck_recent3_vs_next_cycle_pearson"] = _pearson(recent_pairs)
 
         histogram = Counter()
         for value in minutes:

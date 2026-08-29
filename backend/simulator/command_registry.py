@@ -283,7 +283,7 @@ def _restore_truck(truck: TruckRuntime, orig: dict[str, Any], _world: Simulation
         truck.phase = TruckPhase.WAITING_LOADING
     truck.pre_stop_phase = None
     truck.speed_kmh = orig.get("speed_kmh", 0)
-    truck.phase_ticks_left = 5
+    truck.reset_phase_timing()
 
 
 def _restore_loader(ldr: LoaderRuntime, orig: dict[str, Any], world: SimulationWorld) -> None:

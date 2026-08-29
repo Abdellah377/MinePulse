@@ -42,11 +42,12 @@ class SimWorld:
             dest = "DUMP_N" if bench == "BANC_A" else "DUMP_S"
             if n % 3 == 0:
                 dest = "CRUSHER"
-            loader = f"EXC-{1 + (n % 3):03d}"
-            lng, lat = centroids.get(
-                bench,
-                (-6.682 if bench == "BANC_A" else -6.675, 32.668 if bench == "BANC_A" else 32.655),
-            )
+            if bench == "BANC_B":
+                loader = "EXC-002"
+            else:
+                loader = "EXC-001" if n % 4 == 1 else "EXC-003"
+            # A fresh cycle begins with the empty return leg at the dump point.
+            lng, lat = centroids.get(dest, centroids.get(bench, (-6.682, 32.668)))
             self.trucks[code] = TruckRuntime(
                 code=code,
                 equipment_id=eid,
@@ -54,12 +55,16 @@ class SimWorld:
                 dest_zone_code=dest,
                 haul_dest_zone_code=dest,
                 loader_code=loader,
-                phase=TruckPhase.WAITING_LOADING,
+                phase=TruckPhase.MOVING_EMPTY,
                 fuel_pct=rng.uniform(40, 95),
                 odometer_km=rng.uniform(18000, 92000),
                 engine_hours=rng.uniform(3500, 24000),
                 lng=lng,
                 lat=lat,
+                baseline_travel_factor=rng.uniform(
+                    self.cfg.cycle_dynamics.truck_factor_min,
+                    self.cfg.cycle_dynamics.truck_factor_max,
+                ),
                 rng=rng,
             )
 

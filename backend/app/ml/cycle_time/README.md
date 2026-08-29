@@ -15,6 +15,9 @@ python -m app.ml.cycle_time.train --eval-only
 
 Requires the configured PostgreSQL snapshot. Does not call an LLM.
 
+For the reproducible synthetic-data workflow and lifecycle semantics, see
+[`backend/docs/SYNTHETIC_CYCLE_REALISM.md`](../../../docs/SYNTHETIC_CYCLE_REALISM.md).
+
 ## Artifacts
 
 `backend/artifacts/cycle_time/` (gitignored except `.gitkeep`)
