@@ -26,6 +26,8 @@ backend/simulator/sim_commands.jsonl
 backend/simulator/sim_event_log.jsonl
 backend/artifacts/cycle_time/*.joblib
 backend/artifacts/cycle_time/*.metadata.json
+backend/artifacts/failure_risk/*.joblib
+backend/artifacts/failure_risk/*.metadata.json
 
 # Editor directories and files
 .vscode/*
