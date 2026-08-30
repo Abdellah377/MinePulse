@@ -55,16 +55,16 @@ def _with_note(data: dict) -> dict:
 def _heartbeat_status() -> dict:
     svc = get_simulation_service()
     hb = read_heartbeat()
-    if not hb or not hb.get("ts"):
+    if not hb or not hb.get("recorded_at"):
         return {
             "engine_alive": svc.running and svc.last_error is None,
             "last_heartbeat_age_sec": None,
         }
     try:
-        ts = datetime.fromisoformat(hb["ts"])
+        ts = datetime.fromisoformat(hb["recorded_at"])
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        age = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
         # Alive if recent heartbeat OR tick thread is up (paused still heartbeats)
         alive = (age < 10.0) or (svc.running and svc.last_error is None)
         return {"engine_alive": alive, "last_heartbeat_age_sec": round(age, 2)}

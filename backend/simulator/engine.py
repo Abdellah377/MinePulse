@@ -538,6 +538,13 @@ class SimulationEngine:
                 )
 
     def tick(self) -> None:
+        from simulator.commands import command_transaction
+        from simulator.control import control_transaction
+
+        with command_transaction(), control_transaction:
+            self._tick()
+
+    def _tick(self) -> None:
         if not self.cfg.batch_generation:
             self._sync_control_from_disk()
         self._tick_count += 1
@@ -545,10 +552,10 @@ class SimulationEngine:
             write_heartbeat(self.clock.sim_now, self._tick_count, self.clock.status)
 
         ctx = self._command_ctx()
-        all_cmds = self._load_commands()
-
         # Zone/road commands + expiry (always, including when paused)
         process_pending_commands(ctx)
+        # Never rewrite a snapshot captured before zone/loader status updates.
+        all_cmds = self._load_commands()
 
         if self.clock.status != "RUNNING":
             # Apply truck equipment commands even when paused (no motion advance)
@@ -1187,8 +1194,10 @@ class SimulationEngine:
 
     def reset(self) -> None:
         from app.monitoring.coordination import monitoring_reset_coordinator
+        from simulator.commands import command_transaction
+        from simulator.control import control_transaction
 
-        with monitoring_reset_coordinator.reset_guard():
+        with command_transaction(), control_transaction, monitoring_reset_coordinator.reset_guard():
             self.causal_scenarios.reset(self.world)
             self.failure_population.reset()
             self._clear_dynamic_data()

@@ -4,12 +4,24 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import threading
 
 from simulator.control import COMMANDS_PATH, EVENT_LOG_PATH
+from simulator.file_io import RuntimeFileError, atomic_write_text
+
+_command_lock = threading.RLock()
+
+
+@contextmanager
+def command_transaction():
+    """Serialize embedded API mutations with a complete engine command cycle."""
+    with _command_lock:
+        yield
 
 
 @dataclass
@@ -53,13 +65,15 @@ class SimulationCommand:
         )
 
 
+@command_transaction()
 def append_command(cmd: SimulationCommand) -> SimulationCommand:
-    COMMANDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with COMMANDS_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(cmd)) + "\n")
+    commands = load_all_commands()
+    commands.append(cmd)
+    rewrite_commands(commands)
     return cmd
 
 
+@command_transaction()
 def load_all_commands() -> list[SimulationCommand]:
     if not COMMANDS_PATH.exists():
         return []
@@ -68,22 +82,25 @@ def load_all_commands() -> list[SimulationCommand]:
         line = line.strip()
         if not line:
             continue
-        raw = json.loads(line)
-        out.append(SimulationCommand(**raw))
+        try:
+            raw = json.loads(line)
+            out.append(SimulationCommand(**raw))
+        except (ValueError, TypeError) as exc:
+            raise RuntimeFileError("Invalid simulation command queue") from exc
     return out
 
 
+@command_transaction()
 def rewrite_commands(commands: list[SimulationCommand]) -> None:
-    with COMMANDS_PATH.open("w", encoding="utf-8") as f:
-        for cmd in commands:
-            f.write(json.dumps(asdict(cmd)) + "\n")
+    atomic_write_text(COMMANDS_PATH, "".join(json.dumps(asdict(cmd)) + "\n" for cmd in commands))
 
 
+@command_transaction()
 def clear_commands() -> None:
-    if COMMANDS_PATH.exists():
-        COMMANDS_PATH.write_text("", encoding="utf-8")
+    atomic_write_text(COMMANDS_PATH, "")
 
 
+@command_transaction()
 def cancel_command(command_id: str) -> SimulationCommand | None:
     cmds = load_all_commands()
     found = None
@@ -98,6 +115,7 @@ def cancel_command(command_id: str) -> SimulationCommand | None:
     return found
 
 
+@command_transaction()
 def append_event_log(
     *,
     sim_now: datetime,
@@ -118,14 +136,18 @@ def append_event_log(
         f.write(json.dumps(row) + "\n")
 
 
+@command_transaction()
 def read_event_log(limit: int = 200) -> list[dict]:
     if not EVENT_LOG_PATH.exists():
         return []
     lines = [ln for ln in EVENT_LOG_PATH.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    rows = [json.loads(ln) for ln in lines[-limit:]]
+    try:
+        rows = [json.loads(ln) for ln in lines[-limit:]]
+    except ValueError as exc:
+        raise RuntimeFileError("Invalid simulation event log") from exc
     return list(reversed(rows))
 
 
+@command_transaction()
 def clear_event_log() -> None:
-    if EVENT_LOG_PATH.exists():
-        EVENT_LOG_PATH.write_text("", encoding="utf-8")
+    atomic_write_text(EVENT_LOG_PATH, "")

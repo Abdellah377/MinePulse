@@ -1,10 +1,16 @@
 from contextlib import asynccontextmanager
+import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.api.routes import zones as zones_routes
+from app.services.operational.clock import OperationalClockUnavailable
+from simulator.file_io import RuntimeFileError
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -28,6 +34,18 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="MinePulse API", version="0.1.0", lifespan=lifespan)
+
+
+@app.exception_handler(OperationalClockUnavailable)
+@app.exception_handler(RuntimeFileError)
+async def runtime_unavailable(request: Request, exc: Exception):
+    logger.error("Runtime state unavailable for %s", request.url.path,
+                 exc_info=(type(exc), exc, exc.__traceback__))
+    clock_error = isinstance(exc, OperationalClockUnavailable)
+    return JSONResponse(status_code=503, content={"detail": {
+        "code": "OPERATIONAL_CLOCK_UNAVAILABLE" if clock_error else "SIMULATION_STATE_UNAVAILABLE",
+        "message": "Horloge opérationnelle indisponible." if clock_error else "État du simulateur indisponible.",
+    }})
 
 app.add_middleware(
     CORSMiddleware,

@@ -13,6 +13,10 @@ from typing import Protocol
 from app.config import get_settings
 
 
+class OperationalClockUnavailable(RuntimeError):
+    """No trustworthy operational timestamp is currently available."""
+
+
 class CurrentTimeProvider(Protocol):
     def now(self) -> datetime:
         """Return the authoritative operational timestamp."""

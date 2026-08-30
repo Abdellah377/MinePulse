@@ -5,6 +5,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
+
+from simulator.file_io import RuntimeFileError, atomic_write_text, read_json_object
+
+control_transaction = threading.RLock()
 
 SIM_DIR = Path(__file__).resolve().parent
 SIM_STATE_PATH = SIM_DIR / "sim_state.json"
@@ -33,8 +38,12 @@ def default_control() -> dict:
 
 
 def read_control() -> dict:
-    if SIM_STATE_PATH.exists():
-        data = json.loads(SIM_STATE_PATH.read_text(encoding="utf-8"))
+    data = read_json_object(SIM_STATE_PATH)
+    if data is not None:
+        try:
+            datetime.fromisoformat(data["sim_now"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeFileError("Invalid operational timestamp in sim_state.json") from exc
         base = default_control()
         base.update(data)
         return base
@@ -43,11 +52,12 @@ def read_control() -> dict:
 
 def write_control(data: dict) -> dict:
     """Merge into existing control and write. Returns merged dict."""
-    current = read_control()
-    current.update(data)
-    # Preserve sim_now unless explicitly provided
-    SIM_STATE_PATH.write_text(json.dumps(current, indent=2), encoding="utf-8")
-    return current
+    with control_transaction:
+        current = read_control()
+        current.update(data)
+        # Preserve sim_now unless explicitly provided. Never truncate the live file.
+        atomic_write_text(SIM_STATE_PATH, json.dumps(current, indent=2))
+        return current
 
 
 def update_control(**kwargs) -> dict:
@@ -72,16 +82,12 @@ def patch_control_mode(mode: str) -> dict:
 
 
 def write_heartbeat(sim_now: datetime, tick: int, status: str) -> None:
-    HEARTBEAT_PATH.write_text(
-        json.dumps({"ts": sim_now.isoformat(), "tick": tick, "status": status}),
-        encoding="utf-8",
+    atomic_write_text(
+        HEARTBEAT_PATH,
+        json.dumps({"ts": sim_now.isoformat(), "tick": tick, "status": status,
+                    "recorded_at": datetime.now(timezone.utc).isoformat()}),
     )
 
 
 def read_heartbeat() -> dict | None:
-    if not HEARTBEAT_PATH.exists():
-        return None
-    try:
-        return json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
+    return read_json_object(HEARTBEAT_PATH)

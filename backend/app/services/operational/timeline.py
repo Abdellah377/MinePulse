@@ -18,7 +18,9 @@ def timeline_for_shift(
 ) -> list[dict]:
     """Return state segments overlapping the active shift window."""
     since = ctx.shift_window_start
-    until = ctx.sim_now
+    until = min(ctx.sim_now, ctx.shift_window_end)
+    if until <= since:
+        return []
     rows = session.scalars(
         select(EquipmentStateRow)
         .join(Equipment, Equipment.equipment_id == EquipmentStateRow.equipment_id)

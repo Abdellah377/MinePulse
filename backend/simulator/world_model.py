@@ -219,10 +219,12 @@ class SimulationWorld(SimWorld):
             "ground_truth_count": len(self.ground_truth),
         }
         text = json.dumps(payload, separators=(",", ":")) if compact else json.dumps(payload, indent=2)
-        RUNTIME_SNAPSHOT_PATH.write_text(text, encoding="utf-8")
+        from simulator.file_io import atomic_write_text
+
+        atomic_write_text(RUNTIME_SNAPSHOT_PATH, text)
 
     @staticmethod
     def read_runtime_snapshot() -> dict:
-        if RUNTIME_SNAPSHOT_PATH.exists():
-            return json.loads(RUNTIME_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        return {}
+        from simulator.file_io import read_json_object
+
+        return read_json_object(RUNTIME_SNAPSHOT_PATH) or {}

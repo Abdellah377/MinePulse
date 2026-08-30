@@ -457,7 +457,9 @@ def test_attach_failure_risk_scores_only_haul_trucks_and_swallows_scoring_errors
         "app.ml.failure_risk.inference.score_equipment",
         lambda _session, equipment_ids, _ts, **_kwargs: scored_ids.extend(equipment_ids) or {},
     )
-    attached = attach_failure_risk_predictions(object(), snapshot)
+    from unittest.mock import MagicMock
+
+    attached = attach_failure_risk_predictions(MagicMock(), snapshot)
     assert scored_ids == [10]
     assert attached.failure_risk == {}
 
@@ -465,5 +467,5 @@ def test_attach_failure_risk_scores_only_haul_trucks_and_swallows_scoring_errors
         "app.ml.failure_risk.inference.score_equipment",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    isolated = attach_failure_risk_predictions(object(), snapshot)
+    isolated = attach_failure_risk_predictions(MagicMock(), snapshot)
     assert isolated.failure_risk == {}

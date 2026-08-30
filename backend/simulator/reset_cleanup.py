@@ -40,7 +40,7 @@ def clear_simulation_run_data(session: Session, *, site_code: str = "MP-SIM-01")
     """Delete only dynamic records belonging to the configured simulation site.
 
     Reference configuration, non-simulation sites, non-monitoring RULE alerts,
-    predictions, and unrelated/human AI records are deliberately preserved.
+    unrelated predictions, and unrelated/human AI records are deliberately preserved.
     """
     site = session.scalar(select(Site).where(Site.code == site_code))
     if site is None:
@@ -59,6 +59,8 @@ def clear_simulation_run_data(session: Session, *, site_code: str = "MP-SIM-01")
     resettable_alerts = alert_scope & or_(
         Alert.source == AlertSource.FMS,
         (Alert.source == AlertSource.RULE) & Alert.metadata_.has_key("monitoring"),  # noqa: W601
+        (Alert.source == AlertSource.PREDICTION)
+        & (Alert.metadata_["monitoring"]["source"].as_string() == "FAILURE_RISK_V1"),
     )
     alert_ids = list(session.scalars(select(Alert.alert_id).where(resettable_alerts)).all())
     source_record_ids = [f"alert-{alert_id}" for alert_id in alert_ids]

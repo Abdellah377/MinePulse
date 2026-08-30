@@ -13,8 +13,13 @@ def _aware_utc(ts: datetime) -> datetime:
 
 def simulation_control() -> dict:
     from simulator.world import SimWorld
+    from simulator.file_io import RuntimeFileError
+    from app.services.operational.clock import OperationalClockUnavailable
 
-    return SimWorld.read_control()
+    try:
+        return SimWorld.read_control()
+    except RuntimeFileError as exc:
+        raise OperationalClockUnavailable("Operational simulation clock unavailable") from exc
 
 
 class SimulationClock:

@@ -77,7 +77,9 @@ def test_high_volume_writes_are_batched_not_orm_add():
 def test_pause_commits_deferred_batch_before_control_persist():
     source = inspect.getsource(SimulationEngine.pause)
     assert "_commit_pending" in source
-    source = inspect.getsource(SimulationEngine.tick)
+    # tick is now the serialized public boundary; batching remains in _tick.
+    assert "command_transaction" in inspect.getsource(SimulationEngine.tick)
+    source = inspect.getsource(SimulationEngine._tick)
     assert "batch_generation" in source
     assert "write_heartbeat" in source
     assert "if not self.cfg.batch_generation:" in source
