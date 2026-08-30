@@ -38,6 +38,7 @@ class MonitoringCandidate(BaseModel):
     deduplication_key: str = Field(min_length=1, max_length=240)
     source_alert_id: int | None = Field(default=None, gt=0)
     alert_source: AlertSource = AlertSource.RULE
+    # Specific predicted occurrence time only. Leave null for windowed risk.
     predicted_for: datetime | None = None
     context: dict[str, JsonValue] = Field(default_factory=dict)
 

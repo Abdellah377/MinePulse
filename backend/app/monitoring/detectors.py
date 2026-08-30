@@ -345,7 +345,6 @@ def detect_predicted_mechanical_failure_risk(
                 unit="probability",
                 deduplication_key=f"failure-risk:{snapshot.context.site_id}:{equipment_id}",
                 alert_source=AlertSource.PREDICTION,
-                predicted_for=snapshot.context.sim_now + timedelta(minutes=horizon),
                 context={
                     "equipmentCode": equipment.code,
                     "horizonMinutes": horizon,

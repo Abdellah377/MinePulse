@@ -38,7 +38,10 @@ hard-codes 0.80. A candidate fires only when status is `AVAILABLE` and
 (`RiskLevel.HIGH` already means the operating threshold was met); `CRITICAL`
 remains reserved for confirmed stops and OEM critical alerts. Copy describes
 elevated **predicted** risk of a mechanical stop within 60 minutes, not a
-confirmed failure. Scores below threshold, `UNAVAILABLE`, and
+confirmed failure. `Alert.predicted_for` stays null: the model does not emit
+an occurrence timestamp. The 60-minute window lives on
+`metadata.monitoring.horizonMinutes` (and detector copy). Scores below
+threshold, `UNAVAILABLE`, and
 `INSUFFICIENT_HISTORY` do not create alerts. Metadata labels the source as
 `FAILURE_RISK_V1` / `synthetic_prototype`. Scoring runs once per site cycle
 inside the existing `monitoring_interval_seconds` loop; a scoring failure

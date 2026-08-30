@@ -317,7 +317,6 @@ def _prediction_candidate():
             "detector_id": "predicted-mechanical-failure-risk",
             "trigger_type": TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK,
             "alert_source": AlertSource.PREDICTION,
-            "predicted_for": NOW + timedelta(minutes=60),
             "metric": "failure_risk_probability",
             "value": 0.72,
             "threshold": 0.41,
@@ -356,7 +355,7 @@ def test_predicted_failure_risk_alert_is_prediction_source_with_synthetic_metada
     assert service._process_candidate(session, _prediction_candidate()) is True
     alert = session.alerts[1]
     assert alert.source == AlertSource.PREDICTION
-    assert alert.predicted_for == NOW + timedelta(minutes=60)
+    assert alert.predicted_for is None
     monitoring = alert.metadata_["monitoring"]
     assert monitoring["source"] == "FAILURE_RISK_V1"
     assert monitoring["dataClass"] == "synthetic_prototype"

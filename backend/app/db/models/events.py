@@ -93,6 +93,9 @@ class Alert(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Specific predicted occurrence timestamp, if the source names one.
+    # Null when the source predicts a window rather than an instant
+    # (Failure-Risk V1: risk within the next 60 minutes, not failure at T+60).
     predicted_for: Mapped[datetime | None] = mapped_column()
     source: Mapped[AlertSource] = mapped_column(nullable=False)
     severity: Mapped[AlertSeverity] = mapped_column(nullable=False)

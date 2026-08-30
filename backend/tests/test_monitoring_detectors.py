@@ -249,7 +249,7 @@ def test_predicted_failure_risk_fires_at_artifact_threshold_with_predicted_copy(
     assert finding.metric == "failure_risk_probability"
     assert finding.unit == "probability"
     assert finding.alert_source == AlertSource.PREDICTION
-    assert finding.predicted_for == NOW + timedelta(minutes=60)
+    assert finding.predicted_for is None
     assert finding.deduplication_key == "failure-risk:1:10"
     assert "prédit" in finding.title.casefold() or "prédit" in finding.title
     assert "Risque mécanique prédit" in finding.title
