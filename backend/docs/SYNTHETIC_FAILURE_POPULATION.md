@@ -62,10 +62,10 @@ python -m pytest tests/test_simulator_failure_population.py tests/test_causal_sc
 ```
 
 The resulting data is synthetic and is not proof of production predictive
-accuracy. A readiness verdict still requires independent review of leakage,
-window construction, class imbalance, temporal splits, asset-age/reference
-fields, and validation against future real FMS/OEM history. Do not train solely
-because the simulator audit reports `READY WITH SMALL DATA FIXES`.
+accuracy. Failure-Risk V1 is a 60-minute `STOPPED_MECHANICAL` prediction
+problem with a 15-minute lead-time exclusion. Train only when
+`scripts/audit_failure_risk_dataset.py` reports `READY TO BUILD FAILURE-RISK V1`
+and `do_not_train: false`. Hidden simulator labels stay out of features.
 
 ## Verified snapshot (seed 42)
 
@@ -88,14 +88,20 @@ cadence. The simulation is paused with no active cycle or incident.
 
 | Horizon | Samples before each stop | Positive windows | Negative windows | Imbalance |
 | --- | ---: | ---: | ---: | --- |
-| 15 minutes | 7–8 | 70 | 3,083 | severe |
-| 30 minutes | 15 | 140 | 2,994 | severe |
-| 60 minutes | 30 | 279 | 2,817 | manageable |
+| 15 minutes | 7–8 | 70 | 3,063 | severe |
+| 30 minutes | 15 | 140 | 2,974 | severe |
+| 60 minutes (diagnostic, no lead gap) | 30 | 279 | 2,797 | manageable |
+| **V1: 60 min + 15 min lead** | 30 | **213** | **2,797** | **manageable (ratio 0.076)** |
 
-The unchanged read-only audit verdict is **READY WITH SMALL DATA FIXES**. It
-still explicitly reports `do_not_train: true`. Asset commissioning dates are
-unpopulated, short-horizon imbalance remains severe, and synthetic history is
-not field validation. No failure-risk model was trained.
+66 immediate-pre-failure windows are excluded from V1 (not relabeled negative).
+20 windows lack 15 minutes of history; 164 fall inside an active stop.
+
+The read-only audit now evaluates the V1 specification in
+`app/ml/failure_risk/spec.py` (60-minute horizon, 15-minute lead-time gap,
+incident-grouped chronological split). `commission_date` is unpopulated and is
+**not** a V1 blocker; equipment age is excluded. Immediate pre-stop OEM
+threshold crossings are handled by the lead-time exclusion rather than treated
+as a data-generation failure. No failure-risk model was trained.
 
 During validation, a lifecycle bug was found: mechanical downtime could start
 before a later phase change persisted the mechanical equipment state. The

@@ -24,11 +24,27 @@ if str(BACKEND_ROOT) not in sys.path:
 from sqlalchemy import bindparam, text
 
 from app.db.database import SessionLocal
+from app.ml.failure_risk.spec import (
+    FORBIDDEN_FEATURE_NAMES,
+    HORIZON_MINUTES,
+    MIN_LEAD_TIME_MINUTES,
+    STRIDE_MINUTES,
+    TELEMETRY_FEATURE_FIELDS,
+    ReadinessEvidence,
+    assign_temporal_splits,
+    count_exclusions,
+    evaluate_readiness,
+    imbalance_label,
+    iter_prediction_times,
+    labeled_windows,
+    merge_mechanical_incidents,
+    positive_negative_ratio,
+    specification_dict,
+    split_has_incident_leakage,
+)
 from app.oem.catalog import EVENT_TYPE_TO_CODE
 from app.oem.thresholds import classify_value
 
-INCIDENT_MERGE_GAP = timedelta(minutes=5)
-NEGATIVE_STRIDE = timedelta(minutes=15)
 HORIZONS_MIN = (5, 15, 30, 60)
 MAX_PRECURSOR_MIN = 60
 TELEMETRY_WARN_KEYS = (
@@ -93,69 +109,6 @@ def _iso(ts: datetime | None) -> str | None:
     return ts.isoformat() if ts else None
 
 
-def _merge_mechanical_intervals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Collapse adjacent STOPPED_MECHANICAL intervals into incidents."""
-    incidents: list[dict[str, Any]] = []
-    for row in rows:
-        start = _aware(row["start_time"])
-        end = _aware(row["end_time"])
-        if start is None:
-            continue
-        if incidents:
-            prev = incidents[-1]
-            gap_ok = False
-            if prev["equipment_id"] == row["equipment_id"] and prev["end_time"] is not None:
-                gap_ok = start - prev["end_time"] <= INCIDENT_MERGE_GAP
-            if gap_ok:
-                prev["end_time"] = end if end is None or prev["end_time"] is None else max(prev["end_time"], end)
-                prev["state_ids"].append(row["state_id"])
-                prev["raw_interval_count"] += 1
-                if row["reason_code"]:
-                    prev["reason_codes"].append(row["reason_code"])
-                continue
-        incidents.append(
-            {
-                "incident_id": f"{row['equipment_id']}:{start.isoformat()}",
-                "equipment_id": row["equipment_id"],
-                "code": row["code"],
-                "equipment_type": row["equipment_type"],
-                "start_time": start,
-                "end_time": end,
-                "reason_codes": [row["reason_code"]] if row["reason_code"] else [],
-                "state_ids": [row["state_id"]],
-                "raw_interval_count": 1,
-            }
-        )
-    return incidents
-
-
-def _covers(incidents: list[dict[str, Any]], equipment_id: int, ts: datetime) -> bool:
-    for item in incidents:
-        if item["equipment_id"] != equipment_id:
-            continue
-        start = item["start_time"]
-        end = item["end_time"]
-        if ts >= start and (end is None or ts < end):
-            return True
-    return False
-
-
-def _failure_in_horizon(
-    incidents: list[dict[str, Any]],
-    equipment_id: int,
-    ts: datetime,
-    horizon: timedelta,
-) -> bool:
-    until = ts + horizon
-    for item in incidents:
-        if item["equipment_id"] != equipment_id:
-            continue
-        start = item["start_time"]
-        if ts < start <= until:
-            return True
-    return False
-
-
 def _row_warn_keys(row: dict[str, Any]) -> list[str]:
     flagged: list[str] = []
     for key in TELEMETRY_WARN_KEYS:
@@ -176,28 +129,18 @@ def main() -> int:
             "the simulator. It is not field-validated. Hidden causal scenario ids are "
             "intentionally not queried."
         ),
+        "v1_specification": specification_dict(),
         "label_definition": {
             "positive_incident": "merged contiguous equipment_states STOPPED_MECHANICAL",
-            "merge_gap_minutes": INCIDENT_MERGE_GAP.total_seconds() / 60.0,
+            "merge_gap_minutes": 5,
             "prediction_timestamp": "window start T; features must use data with ts <= T",
-            "excluded_from_mechanical_target": [
-                "STOPPED_UNDEFINED",
-                "NO_DATA",
-                "MAINTENANCE",
-                "STOPPED_EXTERNAL",
-            ],
-            "forbidden_features": [
-                "scenario_id",
-                "hidden_root_cause",
-                "run_id",
-                "performance_factor",
-                "scenario_*_target",
-                "progress",
-                "stage",
-            ],
+            "horizon_min": HORIZON_MINUTES,
+            "minimum_lead_time_min": MIN_LEAD_TIME_MINUTES,
+            "excluded_from_mechanical_target": sorted(specification_dict()["excluded_from_mechanical_target"]),
+            "forbidden_features": sorted(FORBIDDEN_FEATURE_NAMES),
         },
         "horizons_min": list(HORIZONS_MIN),
-        "negative_stride_minutes": NEGATIVE_STRIDE.total_seconds() / 60.0,
+        "negative_stride_minutes": float(STRIDE_MINUTES),
     }
 
     with SessionLocal() as session:
@@ -378,11 +321,12 @@ def main() -> int:
             ORDER BY s.equipment_id, s.start_time, s.state_id
             """
         )
-        incidents = _merge_mechanical_intervals(state_rows)
+        incidents = merge_mechanical_incidents(state_rows)
+        code_by_eq = {int(row["equipment_id"]): row["code"] for row in state_rows}
         report["incidents"] = {
             "raw_stopped_mechanical_intervals": len(state_rows),
             "merged_incident_count": len(incidents),
-            "open_incidents": sum(1 for item in incidents if item["end_time"] is None),
+            "open_incidents": sum(1 for item in incidents if item.end_time is None),
             "per_equipment": [],
             "reason_code_mix": [],
         }
@@ -390,12 +334,11 @@ def main() -> int:
         reason_mix: dict[str, int] = defaultdict(int)
         durations_min: list[float] = []
         for item in incidents:
-            per_eq[item["code"]] += 1
-            codes = item["reason_codes"] or ["NULL"]
-            for code in set(codes):
-                reason_mix[code or "NULL"] += 1
-            if item["end_time"] is not None:
-                durations_min.append((item["end_time"] - item["start_time"]).total_seconds() / 60.0)
+            per_eq[str(code_by_eq.get(item.equipment_id, item.equipment_id))] += 1
+            if item.end_time is not None:
+                durations_min.append((item.end_time - item.start_time).total_seconds() / 60.0)
+        for row in state_rows:
+            reason_mix[row["reason_code"] or "NULL"] += 1
         report["incidents"]["per_equipment"] = [
             {"code": code, "n": n} for code, n in sorted(per_eq.items(), key=lambda pair: (-pair[1], pair[0]))
         ]
@@ -404,7 +347,7 @@ def main() -> int:
         ]
         report["incidents"]["duration_minutes"] = _quantiles(durations_min)
         if incidents:
-            starts = sorted(item["start_time"] for item in incidents)
+            starts = sorted(item.start_time for item in incidents)
             report["incidents"]["temporal"] = {
                 "first_start": _iso(starts[0]),
                 "last_start": _iso(starts[-1]),
@@ -435,7 +378,7 @@ def main() -> int:
         excluded = {"no_telemetry_before": 0, "history_shorter_than_5_min": 0}
 
         for item in incidents:
-            lookback = item["start_time"] - timedelta(minutes=MAX_PRECURSOR_MIN)
+            lookback = item.start_time - timedelta(minutes=MAX_PRECURSOR_MIN)
             rows = grouped(
                 """
                 SELECT ts, engine_temp_c, coolant_temp_c, oil_pressure_kpa,
@@ -444,8 +387,8 @@ def main() -> int:
                 WHERE equipment_id = :eid AND ts < :start AND ts >= :lookback
                 ORDER BY ts
                 """,
-                eid=item["equipment_id"],
-                start=item["start_time"],
+                eid=item.equipment_id,
+                start=item.start_time,
                 lookback=lookback,
             )
             if not rows:
@@ -454,8 +397,8 @@ def main() -> int:
                     SELECT COUNT(*) FROM equipment_telemetry
                     WHERE equipment_id = :eid AND ts < :start
                     """,
-                    eid=item["equipment_id"],
-                    start=item["start_time"],
+                    eid=item.equipment_id,
+                    start=item.start_time,
                 )
                 excluded["no_telemetry_before"] += 1
                 if int(any_before or 0) == 0:
@@ -464,18 +407,18 @@ def main() -> int:
             first_ts = _aware(rows[0]["ts"])
             last_ts = _aware(rows[-1]["ts"])
             assert first_ts is not None and last_ts is not None
-            precursor_minutes.append((item["start_time"] - first_ts).total_seconds() / 60.0)
+            precursor_minutes.append((item.start_time - first_ts).total_seconds() / 60.0)
             for h in HORIZONS_MIN:
-                window_start = item["start_time"] - timedelta(minutes=h)
+                window_start = item.start_time - timedelta(minutes=h)
                 n_in_h = sum(1 for row in rows if _aware(row["ts"]) >= window_start)
                 telemetry_before[h].append(float(n_in_h))
             oem_before_counts.append(
                 sum(
                     1
                     for event in oem_events
-                    if event["equipment_id"] == item["equipment_id"]
+                    if event["equipment_id"] == item.equipment_id
                     and _aware(event["ts"]) is not None
-                    and _aware(event["ts"]) < item["start_time"]
+                    and _aware(event["ts"]) < item.start_time
                     and _aware(event["ts"]) >= lookback
                 )
             )
@@ -483,18 +426,18 @@ def main() -> int:
                 sum(
                     1
                     for event in oem_events
-                    if event["equipment_id"] == item["equipment_id"]
+                    if event["equipment_id"] == item.equipment_id
                     and _aware(event["ts"]) is not None
-                    and _aware(event["ts"]) >= item["start_time"]
-                    and (item["end_time"] is None or _aware(event["ts"]) <= item["end_time"])
+                    and _aware(event["ts"]) >= item.start_time
+                    and (item.end_time is None or _aware(event["ts"]) <= item.end_time)
                 )
             )
             last_sample_warn.append(
                 {
-                    "code": item["code"],
-                    "start_time": _iso(item["start_time"]),
+                    "code": code_by_eq.get(item.equipment_id),
+                    "start_time": _iso(item.start_time),
                     "minutes_before_last_sample": round(
-                        (item["start_time"] - last_ts).total_seconds() / 60.0, 2
+                        (item.start_time - last_ts).total_seconds() / 60.0, 2
                     ),
                     "warn_or_crit_keys": _row_warn_keys(rows[-1]),
                 }
@@ -520,55 +463,95 @@ def main() -> int:
         }
 
         windows: dict[str, Any] = {}
+        first_ts_by_eq: dict[int, datetime | None] = {}
+        equipment_ids: list[int] = []
+        v1_counts = {
+            "insufficient_history": 0,
+            "active_incident": 0,
+            "immediate_pre_failure": 0,
+            "labeled_positive": 0,
+            "labeled_negative": 0,
+        }
+        split_leakage = 0
         if data_start and data_end and report["counts"]["equipment"]:
-            equipment_ids = [
-                int(v)
-                for v in session.execute(
-                    text("SELECT DISTINCT equipment_id FROM equipment_telemetry ORDER BY 1")
-                ).scalars().all()
-            ]
-            by_eq: dict[int, list[dict[str, Any]]] = defaultdict(list)
-            for item in incidents:
-                by_eq[item["equipment_id"]].append(item)
+            eq_span_rows = grouped(
+                """
+                SELECT equipment_id, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+                FROM equipment_telemetry
+                GROUP BY equipment_id
+                ORDER BY equipment_id
+                """
+            )
+            equipment_ids = [int(row["equipment_id"]) for row in eq_span_rows]
+            first_ts_by_eq = {int(row["equipment_id"]): _aware(row["first_ts"]) for row in eq_span_rows}
             for h in HORIZONS_MIN:
-                horizon = timedelta(minutes=h)
-                positives = 0
-                negatives = 0
-                inside_stop = 0
-                canonical_usable = 0
-                for item in incidents:
-                    t0 = item["start_time"] - horizon
-                    if t0 >= data_start:
-                        canonical_usable += 1
-                t = data_start
-                last_t = data_end - horizon
-                while t <= last_t:
-                    for eid in equipment_ids:
-                        if _covers(by_eq[eid], eid, t):
-                            inside_stop += 1
-                            continue
-                        if _failure_in_horizon(by_eq[eid], eid, t, horizon):
-                            positives += 1
-                        else:
-                            negatives += 1
-                    t = t + NEGATIVE_STRIDE
-                ratio = round(positives / negatives, 6) if negatives else None
+                times = list(iter_prediction_times(data_start, data_end, horizon_minutes=h))
+                diagnostic = count_exclusions(
+                    equipment_ids=equipment_ids,
+                    prediction_times=times,
+                    incidents=incidents,
+                    first_telemetry_ts=first_ts_by_eq,
+                    horizon_minutes=h,
+                    min_lead_time_minutes=0,
+                )
+                positives = diagnostic["labeled_positive"]
+                negatives = diagnostic["labeled_negative"]
+                canonical_usable = sum(
+                    1 for item in incidents if item.start_time - timedelta(minutes=h) >= data_start
+                )
                 windows[str(h)] = {
                     "horizon_min": h,
+                    "lead_time_min": 0,
+                    "note": "Diagnostic only; V1 uses 60 min + 15 min lead-time exclusion.",
                     "canonical_incidents_with_room_for_horizon": canonical_usable,
                     "canonical_incidents_missing_horizon": n_incidents - canonical_usable,
                     "stride_positive_windows": positives,
                     "stride_negative_windows": negatives,
-                    "stride_windows_inside_an_incident": inside_stop,
-                    "positive_negative_ratio": ratio,
-                    "imbalance": (
-                        "unusable"
-                        if n_incidents < 10 or not negatives or (positives / max(negatives, 1) < 0.01 and n_incidents < 20)
-                        else "severe"
-                        if negatives and positives / negatives < 0.05
-                        else "manageable"
-                    ),
+                    "stride_windows_inside_an_incident": diagnostic["active_incident"],
+                    "stride_insufficient_history": diagnostic["insufficient_history"],
+                    "positive_negative_ratio": positive_negative_ratio(positives, negatives),
+                    "imbalance": imbalance_label(positives, negatives, n_incidents),
                 }
+            v1_times = list(iter_prediction_times(data_start, data_end))
+            v1_counts = count_exclusions(
+                equipment_ids=equipment_ids,
+                prediction_times=v1_times,
+                incidents=incidents,
+                first_telemetry_ts=first_ts_by_eq,
+            )
+            v1_labeled = labeled_windows(
+                equipment_ids=equipment_ids,
+                prediction_times=v1_times,
+                incidents=incidents,
+                first_telemetry_ts=first_ts_by_eq,
+            )
+            v1_split = assign_temporal_splits(v1_labeled, incidents)
+            split_leakage = int(split_has_incident_leakage(v1_split))
+            report["v1_windows"] = {
+                "recommended_horizon_min": HORIZON_MINUTES,
+                "minimum_lead_time_min": MIN_LEAD_TIME_MINUTES,
+                "sampling_stride_min": STRIDE_MINUTES,
+                "usable_positive_windows": v1_counts["labeled_positive"],
+                "usable_negative_windows": v1_counts["labeled_negative"],
+                "positive_negative_ratio": positive_negative_ratio(
+                    v1_counts["labeled_positive"], v1_counts["labeled_negative"]
+                ),
+                "imbalance": imbalance_label(
+                    v1_counts["labeled_positive"], v1_counts["labeled_negative"], n_incidents
+                ),
+                "excluded_windows": {
+                    "insufficient_history": v1_counts["insufficient_history"],
+                    "active_incident": v1_counts["active_incident"],
+                    "immediate_pre_failure": v1_counts["immediate_pre_failure"],
+                },
+                "temporal_split": {
+                    "train_windows": len(v1_split.train),
+                    "validation_windows": len(v1_split.validation),
+                    "test_windows": len(v1_split.test),
+                    "dropped_boundary_windows": v1_split.dropped_boundary_windows,
+                    "incident_leakage": bool(split_leakage),
+                },
+            }
         else:
             for h in HORIZONS_MIN:
                 windows[str(h)] = {
@@ -580,28 +563,55 @@ def main() -> int:
                     "imbalance": "unusable",
                     "note": "No telemetry time span; cannot build windows.",
                 }
+            report["v1_windows"] = {
+                "recommended_horizon_min": HORIZON_MINUTES,
+                "minimum_lead_time_min": MIN_LEAD_TIME_MINUTES,
+                "sampling_stride_min": STRIDE_MINUTES,
+                "usable_positive_windows": 0,
+                "usable_negative_windows": 0,
+                "positive_negative_ratio": None,
+                "imbalance": "unusable",
+                "excluded_windows": v1_counts,
+                "note": "No telemetry time span; cannot build windows.",
+            }
         report["window_sampling"] = windows
 
-        few_incidents = n_incidents < 10
-        short_precursor = bool(precursor_minutes) and (sum(precursor_minutes) / len(precursor_minutes) < 15)
-        no_precursor = n_incidents > 0 and not precursor_minutes
-        trivial = (last_with_warn / len(last_sample_warn) >= 0.8) if last_sample_warn else False
-        if n_incidents == 0 or few_incidents or short_precursor or no_precursor or trivial:
-            verdict = "NOT READY — DATA/SIMULATOR CHANGES REQUIRED"
-        else:
-            verdict = "READY WITH SMALL DATA FIXES"
+        missing_rates = report["telemetry_missing_rates_pct"]
+        required_missing = [
+            (float(missing_rates.get(name) or 0) / 100.0)
+            for name in TELEMETRY_FEATURE_FIELDS
+            if name in missing_rates
+        ]
+        leakage_names = [name for name in TELEMETRY_FEATURE_FIELDS if name in FORBIDDEN_FEATURE_NAMES]
+        n_precursor_ok = sum(1 for minutes in precursor_minutes if minutes >= 55)
+        evidence = ReadinessEvidence(
+            n_incidents=n_incidents,
+            n_open_incidents=report["incidents"]["open_incidents"],
+            n_incidents_with_60min_precursor=n_precursor_ok,
+            n_positive_windows=v1_counts["labeled_positive"],
+            n_negative_windows=v1_counts["labeled_negative"],
+            n_excluded_immediate_pre_failure=v1_counts["immediate_pre_failure"],
+            downtime_events=report["counts"]["downtime_events"],
+            maintenance_events=report["counts"]["maintenance_events"],
+            required_feature_max_missing_rate=max(required_missing) if required_missing else 0.0,
+            leakage_feature_violations=len(leakage_names),
+            split_incident_leakage=split_leakage,
+            commission_date_populated=report["counts"]["equipment_with_commission_date"],
+            lead_time_applied=True,
+        )
+        readiness = evaluate_readiness(evidence)
         report["readiness_snapshot"] = {
-            "verdict": verdict,
+            "verdict": readiness.verdict,
+            "do_not_train": readiness.do_not_train,
             "merged_mechanical_incidents": n_incidents,
             "downtime_events": report["counts"]["downtime_events"],
             "commission_date_populated": report["counts"]["equipment_with_commission_date"] > 0,
-            "reasons": {
-                "too_few_independent_incidents": few_incidents,
-                "mean_precursor_telemetry_under_15_min": short_precursor or no_precursor,
-                "last_pre_stop_sample_usually_already_past_oem_threshold": trivial,
-                "downtime_events_table_empty": report["counts"]["downtime_events"] == 0,
-            },
-            "do_not_train": True,
+            "commission_date_blocks_v1": False,
+            "last_pre_stop_sample_warn_or_crit_pct": _pct(last_with_warn, len(last_sample_warn)),
+            "reasons": readiness.reasons,
+            "notes": list(readiness.notes),
+            "allowed_feature_groups": specification_dict()["allowed_feature_groups"],
+            "unavailable_nonblocking_features": specification_dict()["unavailable_nonblocking_features"],
         }
 
     print(json.dumps(report, indent=2, default=str))
