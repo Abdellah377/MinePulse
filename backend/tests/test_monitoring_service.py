@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from app.ai.contracts import InvestigationStatus, Severity, TriggerSource, TriggerType
 from app.config import Settings
-from app.db.enums import AlertStatus
+from app.db.enums import AlertSource, AlertStatus
 from app.db.models import AiInvestigation, Alert, Site
 from app.monitoring.contracts import MonitoringCandidate
 from app.monitoring.scheduler import MonitoringScheduler
@@ -309,3 +309,162 @@ def test_inflight_investigation_finishing_after_reset_is_discarded(monkeypatch):
     assert service._process_candidate(session, _candidate()) is False
     assert session.alerts == {}
     assert session.investigations == {}
+
+
+def _prediction_candidate():
+    return _candidate().model_copy(
+        update={
+            "detector_id": "predicted-mechanical-failure-risk",
+            "trigger_type": TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK,
+            "alert_source": AlertSource.PREDICTION,
+            "predicted_for": NOW + timedelta(minutes=60),
+            "metric": "failure_risk_probability",
+            "value": 0.72,
+            "threshold": 0.41,
+            "unit": "probability",
+            "deduplication_key": "failure-risk:1:10",
+            "title": "Risque mécanique prédit — TRK-010",
+            "reason": (
+                "TRK-010 présente un risque prédit élevé d'entrer en arrêt "
+                "mécanique dans les 60 prochaines minutes."
+            ),
+            "context": {
+                "horizonMinutes": 60,
+                "modelVersion": "failure_risk_v1",
+                "dataClass": "synthetic_prototype",
+                "topSignals": ["engine_temp_c"],
+                "source": "FAILURE_RISK_V1",
+            },
+        }
+    )
+
+
+def test_predicted_failure_risk_alert_is_prediction_source_with_synthetic_metadata(monkeypatch):
+    session = FakeSession()
+    monkeypatch.setattr(
+        "app.monitoring.service.list_site_alerts",
+        lambda *_args, **_kwargs: [
+            alert for alert in session.alerts.values() if alert.status != AlertStatus.RESOLVED
+        ],
+    )
+    service = MonitoringService(
+        settings=_settings(),
+        investigation_runner=lambda *_: SimpleNamespace(
+            investigation_id=uuid4(), status=InvestigationStatus.COMPLETED, completed_at=NOW
+        ),
+    )
+    assert service._process_candidate(session, _prediction_candidate()) is True
+    alert = session.alerts[1]
+    assert alert.source == AlertSource.PREDICTION
+    assert alert.predicted_for == NOW + timedelta(minutes=60)
+    monitoring = alert.metadata_["monitoring"]
+    assert monitoring["source"] == "FAILURE_RISK_V1"
+    assert monitoring["dataClass"] == "synthetic_prototype"
+    assert monitoring["probability"] == 0.72
+    assert monitoring["horizonMinutes"] == 60
+    assert monitoring["modelVersion"] == "failure_risk_v1"
+
+
+def test_predicted_failure_risk_repeated_key_is_deduplicated(monkeypatch):
+    session = FakeSession()
+    calls = []
+    monkeypatch.setattr(
+        "app.monitoring.service.list_site_alerts",
+        lambda *_args, **_kwargs: [
+            alert for alert in session.alerts.values() if alert.status != AlertStatus.RESOLVED
+        ],
+    )
+    service = MonitoringService(
+        settings=_settings(),
+        investigation_runner=lambda _session, trigger: calls.append(trigger) or SimpleNamespace(
+            investigation_id=uuid4(), status=InvestigationStatus.COMPLETED, completed_at=NOW
+        ),
+    )
+    assert service._process_candidate(session, _prediction_candidate()) is True
+    assert service._process_candidate(session, _prediction_candidate()) is False
+    assert len(calls) == 1
+    assert len(session.alerts) == 1
+
+
+def test_failure_risk_adapter_exception_does_not_stop_other_detectors(monkeypatch):
+    site = Site(site_id=1, code="S", name="Site", active=True)
+    snapshot = object()
+    processed = []
+
+    class Scalars:
+        def all(self):
+            return [site]
+
+    class CycleSession(FakeSession):
+        def scalars(self, _statement):
+            return Scalars()
+
+    monkeypatch.setattr(
+        "app.monitoring.service.attach_failure_risk_predictions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("scoring failed")),
+    )
+    service = MonitoringService(
+        settings=_settings(),
+        detectors=(lambda _snapshot, _settings: [_candidate()],),
+        snapshot_builder=lambda *_: snapshot,
+    )
+    monkeypatch.setattr(
+        service,
+        "_process_candidate",
+        lambda _session, candidate, **_kwargs: processed.append(candidate) or True,
+    )
+    counts = service.run_cycle(CycleSession())
+    assert counts["errors"] == 0
+    assert counts["investigations"] == 1
+    assert len(processed) == 1
+
+
+def test_attach_failure_risk_scores_only_haul_trucks_and_swallows_scoring_errors(monkeypatch):
+    from datetime import date, time
+
+    from app.db.enums import EquipmentType
+    from app.db.models import Equipment, Shift
+    from app.monitoring.contracts import MonitoringSnapshot
+    from app.monitoring.predictive import attach_failure_risk_predictions
+    from app.services.operational.context import OperationalContext
+    from app.services.operational.equipment import FleetBulkContext
+
+    site = Site(site_id=1, code="S", name="Site", active=True)
+    shift = Shift(
+        shift_id=2, site_id=1, name="Jour", shift_date=date(2026, 8, 27),
+        start_time=time(6), end_time=time(18),
+    )
+    context = OperationalContext(
+        site=site, shift=shift, sim_now=NOW,
+        shift_window_start=NOW, shift_window_end=NOW,
+    )
+    truck = Equipment(
+        equipment_id=10, site_id=1, code="TRK-010", type=EquipmentType.HAUL_TRUCK,
+        current_state="MOVING_EMPTY", active=True,
+    )
+    loader = Equipment(
+        equipment_id=20, site_id=1, code="LDR-020", type=EquipmentType.LOADER,
+        current_state="LOADING", active=True,
+    )
+    snapshot = MonitoringSnapshot(
+        context=context,
+        equipment=[truck, loader],
+        fleet=FleetBulkContext(),
+        production={"hourly": [], "daily": [], "shiftly": []},
+        active_alerts=[],
+    )
+    scored_ids = []
+    monkeypatch.setattr(
+        "app.ml.failure_risk.inference.score_equipment",
+        lambda _session, equipment_ids, _ts, **_kwargs: scored_ids.extend(equipment_ids) or {},
+    )
+    attached = attach_failure_risk_predictions(object(), snapshot)
+    assert scored_ids == [10]
+    assert attached.failure_risk == {}
+
+    monkeypatch.setattr(
+        "app.ml.failure_risk.inference.score_equipment",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    isolated = attach_failure_risk_predictions(object(), snapshot)
+    assert isolated.failure_risk == {}

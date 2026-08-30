@@ -121,3 +121,14 @@ def test_investigation_conclusion_includes_three_state_diagnosis_status():
     default = InvestigationConclusion(summary="Unknown.", confidence=ConfidenceLevel.LOW)
     assert default.diagnosis_status is DiagnosisStatus.INCONCLUSIVE
     assert {item.value for item in DiagnosisStatus} == {"CONFIRMED", "PROBABLE", "INCONCLUSIVE"}
+
+
+def test_predicted_mechanical_failure_risk_maps_to_maintenance_subject():
+    trigger = InvestigationTrigger(
+        trigger_type=TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK,
+        trigger_source=TriggerSource.AUTOMATIC_MONITORING,
+        site_id=7,
+        occurred_at=datetime(2026, 8, 24, 9, 0),
+    )
+    assert trigger.subject == InvestigationSubject.MAINTENANCE
+    assert trigger.trigger_type == TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK

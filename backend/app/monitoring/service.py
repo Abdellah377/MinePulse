@@ -18,6 +18,7 @@ from app.db.models import AiInvestigation, Alert, Site
 from app.monitoring.contracts import MonitoringCandidate, MonitoringSnapshot
 from app.monitoring.coordination import monitoring_reset_coordinator
 from app.monitoring.detectors import DEFAULT_DETECTORS, Detector
+from app.monitoring.predictive import attach_failure_risk_predictions
 from app.services.operational.alerts import list_site_alerts
 from app.services.operational.context import get_operational_context
 from app.services.operational.equipment import build_fleet_bulk_context, list_site_equipment
@@ -116,6 +117,14 @@ class MonitoringService:
                 session.rollback()
                 continue
 
+            try:
+                snapshot = attach_failure_risk_predictions(session, snapshot)
+            except Exception:
+                logger.exception(
+                    "Failure-Risk scoring failed; predictive detector will emit nothing",
+                    extra={"site_id": site.site_id},
+                )
+
             candidates: list[MonitoringCandidate] = []
             for detector in self.detectors:
                 try:
@@ -200,11 +209,32 @@ class MonitoringService:
         return self._recent_investigation_exists(session, candidate, alert)
 
     def _create_alert(self, session: Session, candidate: MonitoringCandidate) -> Alert:
+        monitoring: dict[str, object] = {
+            "detectorId": candidate.detector_id,
+            "deduplicationKey": candidate.deduplication_key,
+            "metric": candidate.metric,
+            "value": candidate.value,
+            "threshold": candidate.threshold,
+            "unit": candidate.unit,
+        }
+        if candidate.alert_source == AlertSource.PREDICTION:
+            context = candidate.context or {}
+            monitoring.update({
+                "probability": candidate.value,
+                "horizonMinutes": context.get("horizonMinutes", 60),
+                "modelVersion": context.get("modelVersion"),
+                "modelType": context.get("modelType"),
+                "dataClass": context.get("dataClass"),
+                "topSignals": context.get("topSignals"),
+                "source": context.get("source", "FAILURE_RISK_V1"),
+                "riskLevel": context.get("riskLevel"),
+            })
         alert = Alert(
             site_id=candidate.site_id,
             created_at=datetime.now(timezone.utc),
             occurred_at=candidate.detected_at,
-            source=AlertSource.RULE,
+            predicted_for=candidate.predicted_for,
+            source=candidate.alert_source,
             severity=_AI_TO_ALERT_SEVERITY[candidate.severity.value],
             status=AlertStatus.NEW,
             alert_type=candidate.trigger_type.value,
@@ -215,16 +245,7 @@ class MonitoringService:
             confidence=None,
             estimated_impact_t=None,
             estimated_impact_tph=None,
-            metadata_={
-                "monitoring": {
-                    "detectorId": candidate.detector_id,
-                    "deduplicationKey": candidate.deduplication_key,
-                    "metric": candidate.metric,
-                    "value": candidate.value,
-                    "threshold": candidate.threshold,
-                    "unit": candidate.unit,
-                }
-            },
+            metadata_={"monitoring": monitoring},
         )
         session.add(alert)
         session.commit()

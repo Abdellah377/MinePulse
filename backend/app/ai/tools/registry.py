@@ -26,6 +26,12 @@ from app.services.operational.context import OperationalContext
 
 logger = logging.getLogger(__name__)
 
+_MECHANICAL_TRIGGER_TYPES = {
+    TriggerType.EQUIPMENT_ANOMALY,
+    TriggerType.MAINTENANCE_RISK,
+    TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK,
+}
+
 
 class EvidenceToolRegistry:
     def __init__(self, session: Session, debug: InvestigationDebugSink | None = None):
@@ -55,7 +61,7 @@ class EvidenceToolRegistry:
                     equipment_id=(
                         trigger.equipment_id
                         if trigger.trigger_type
-                        in {TriggerType.EQUIPMENT_ANOMALY, TriggerType.MAINTENANCE_RISK}
+                        in _MECHANICAL_TRIGGER_TYPES
                         else None
                     ),
                 ),
@@ -92,7 +98,7 @@ class EvidenceToolRegistry:
                 group = TelemetryMetricGroup.CONNECTIVITY
             elif any(term in trigger_text for term in ("fuel", "carburant", "consommation")):
                 group = TelemetryMetricGroup.FUEL
-            elif trigger.trigger_type in {TriggerType.EQUIPMENT_ANOMALY, TriggerType.MAINTENANCE_RISK}:
+            elif trigger.trigger_type in _MECHANICAL_TRIGGER_TYPES:
                 group = TelemetryMetricGroup.MECHANICAL
             else:
                 group = TelemetryMetricGroup.EQUIPMENT
@@ -109,7 +115,11 @@ class EvidenceToolRegistry:
                     lambda: oem.telemetry_trends(self.session, ctx, trend_request),
                 )
             )
-        return [self._safe_call(ctx, name, call) for name, call in tools]
+        items = [self._safe_call(ctx, name, call) for name, call in tools]
+        prediction_item = self._failure_risk_prediction_evidence(ctx, trigger)
+        if prediction_item is not None:
+            items.insert(0, prediction_item)
+        return items
 
     def gather_requested(
         self,
@@ -181,6 +191,45 @@ class EvidenceToolRegistry:
         )
         item.metadata = {**item.metadata, "requestId": request.request_id, "requestReason": request.reason}
         return item
+
+    def _failure_risk_prediction_evidence(
+        self,
+        ctx: OperationalContext,
+        trigger: InvestigationTrigger,
+    ) -> EvidenceItem | None:
+        if trigger.trigger_type != TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK:
+            return None
+        payload = trigger.payload or {}
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        probability = payload.get("value")
+        notes = (
+            "Prototype / synthetic-data model prediction of elevated mechanical-stop "
+            "risk within the next 60 minutes. This is not a confirmed failure."
+        )
+        return EvidenceItem(
+            kind=EvidenceKind.MODEL_PREDICTION,
+            source_tool="failure_risk_v1",
+            source_service="app.ml.failure_risk.inference",
+            metric="failure_risk_probability",
+            value=probability,
+            available=probability is not None,
+            status=EvidenceStatus.AVAILABLE if probability is not None else EvidenceStatus.UNAVAILABLE,
+            unit="probability",
+            site_id=ctx.site_id,
+            shift_id=ctx.shift_id,
+            equipment_id=trigger.equipment_id,
+            observed_at=trigger.occurred_at,
+            metadata={
+                "horizonMinutes": context.get("horizonMinutes", 60),
+                "modelVersion": context.get("modelVersion"),
+                "modelType": context.get("modelType"),
+                "dataClass": context.get("dataClass", "synthetic_prototype"),
+                "source": context.get("source", "FAILURE_RISK_V1"),
+                "operatingThreshold": payload.get("threshold"),
+                "riskLevel": context.get("riskLevel"),
+            },
+            notes=notes,
+        )
 
     def _safe_call(
         self,

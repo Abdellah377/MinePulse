@@ -182,7 +182,35 @@ def predict_failure_risk(
     artifacts_dir: Path | None = None,
     artifact: FailureRiskArtifact | None = None,
 ) -> FailureRiskPrediction:
+    return score_equipment(
+        session,
+        [equipment_id],
+        prediction_time,
+        artifacts_dir=artifacts_dir,
+        artifact=artifact,
+    )[equipment_id]
+
+
+def score_equipment(
+    session: Session,
+    equipment_ids: list[int],
+    prediction_time: datetime,
+    *,
+    artifacts_dir: Path | None = None,
+    artifact: FailureRiskArtifact | None = None,
+) -> dict[int, FailureRiskPrediction]:
+    """Score many equipment ids against one resolved artifact and one operational snapshot."""
+
     resolved = resolve_artifact(artifacts_dir=artifacts_dir, artifact=artifact)
     if isinstance(resolved, FailureRiskPrediction):
-        return resolved.model_copy(update={"equipment_id": equipment_id, "prediction_timestamp": prediction_time})
-    return predict_from_snapshot(load_snapshot(session), equipment_id, prediction_time, resolved)
+        return {
+            equipment_id: resolved.model_copy(
+                update={"equipment_id": equipment_id, "prediction_timestamp": prediction_time}
+            )
+            for equipment_id in equipment_ids
+        }
+    snapshot = load_snapshot(session)
+    return {
+        equipment_id: predict_from_snapshot(snapshot, equipment_id, prediction_time, resolved)
+        for equipment_id in equipment_ids
+    }

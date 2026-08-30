@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.db.database import SessionLocal
 from app.db.models import Site
 from app.monitoring.detectors import DEFAULT_DETECTORS
+from app.monitoring.predictive import attach_failure_risk_predictions
 from app.monitoring.service import MonitoringService, build_monitoring_snapshot
 
 
@@ -33,7 +34,9 @@ def main() -> int:
             findings = []
             sites = session.scalars(select(Site).where(Site.active.is_(True)).order_by(Site.site_id)).all()
             for site in sites:
-                snapshot = build_monitoring_snapshot(session, site)
+                snapshot = attach_failure_risk_predictions(
+                    session, build_monitoring_snapshot(session, site)
+                )
                 for detector in DEFAULT_DETECTORS:
                     findings.extend(detector(snapshot, settings))
             print(json.dumps([item.model_dump(mode="json") for item in findings], indent=2, ensure_ascii=False))

@@ -31,7 +31,12 @@ from app.ml.failure_risk.features import (
     build_feature_rows,
     features_for_window,
 )
-from app.ml.failure_risk.inference import predict_from_snapshot, resolve_artifact, risk_level_for
+from app.ml.failure_risk.inference import (
+    predict_from_snapshot,
+    resolve_artifact,
+    risk_level_for,
+    score_equipment,
+)
 from app.ml.failure_risk.model import (
     build_hgb_pipeline,
     build_logistic_pipeline,
@@ -325,6 +330,31 @@ def test_inference_never_reads_after_t_and_insufficient_history_is_explicit():
     unresolved = resolve_artifact(artifacts_dir=Path("missing-artifacts-dir"))
     assert getattr(unresolved, "status", None) == FailureRiskStatus.UNAVAILABLE
     assert unresolved.risk_probability is None
+
+
+def test_score_equipment_returns_unavailable_copies_when_artifact_is_missing():
+    scored = score_equipment(object(), [1, 2], _at(40), artifacts_dir=Path("missing-artifacts-dir"))
+    assert set(scored) == {1, 2}
+    assert all(item.status == FailureRiskStatus.UNAVAILABLE for item in scored.values())
+    assert all(item.risk_probability is None for item in scored.values())
+    assert scored[1].equipment_id == 1
+    assert scored[2].equipment_id == 2
+
+
+def test_score_equipment_loads_snapshot_once(monkeypatch):
+    snapshot = _snapshot(end_min=80)
+    rows = _balanced_rows()
+    artifact, _report = train_from_rows(rows)
+    loads = []
+    monkeypatch.setattr(
+        "app.ml.failure_risk.inference.load_snapshot",
+        lambda _session: loads.append(1) or snapshot,
+    )
+    scored = score_equipment(object(), [1, 99], _at(40), artifact=artifact)
+    assert loads == [1]
+    assert scored[1].status == FailureRiskStatus.AVAILABLE
+    assert scored[99].status == FailureRiskStatus.UNAVAILABLE
+    assert scored[99].risk_probability is None
 
 
 def test_active_stop_inference_is_unavailable_not_zero_risk():

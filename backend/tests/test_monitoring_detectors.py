@@ -10,11 +10,14 @@ from app.config import Settings
 from app.db.enums import AlertSeverity, AlertSource, AlertStatus, EquipmentState, EquipmentType
 from app.db.models import Alert, Cycle, Equipment, EquipmentTelemetry, Shift, Site
 from app.db.models.telemetry import EquipmentState as EquipmentStateRow
+from app.ml.failure_risk.contracts import FailureRiskPrediction, FailureRiskStatus
 from app.monitoring.contracts import MonitoringSnapshot
 from app.monitoring.detectors import (
+    DEFAULT_DETECTORS,
     detect_abnormal_cycle_duration,
     detect_communication_degradation,
     detect_critical_conditions,
+    detect_predicted_mechanical_failure_risk,
     detect_production_deviation,
     detect_prolonged_idle_wait,
     detect_unexpected_stops,
@@ -50,6 +53,8 @@ def _snapshot(
     open_maintenance: set[int] | None = None,
     active_cycle: Cycle | None = None,
     average_cycle: float | None = None,
+    failure_risk: dict[int, FailureRiskPrediction] | None = None,
+    equipment_type: EquipmentType = EquipmentType.HAUL_TRUCK,
 ) -> MonitoringSnapshot:
     site = Site(site_id=1, code="SITE-A", name="Site A", active=True)
     shift = Shift(
@@ -61,7 +66,7 @@ def _snapshot(
         shift_window_start=NOW - timedelta(hours=6), shift_window_end=NOW + timedelta(hours=6),
     )
     equipment = Equipment(
-        equipment_id=10, site_id=1, code="TRK-010", type=EquipmentType.HAUL_TRUCK,
+        equipment_id=10, site_id=1, code="TRK-010", type=equipment_type,
         current_state=state, active=True,
     )
     state_row = EquipmentStateRow(
@@ -81,6 +86,7 @@ def _snapshot(
         fleet=fleet,
         production=production or {"hourly": [], "daily": [], "shiftly": []},
         active_alerts=alerts or [],
+        failure_risk=failure_risk or {},
     )
 
 
@@ -205,3 +211,85 @@ def test_critical_communication_threshold_cannot_exceed_warning_threshold():
             monitoring_communication_quality_threshold=40,
             monitoring_communication_critical_threshold=60,
         )
+
+
+def _failure_risk_prediction(**overrides) -> FailureRiskPrediction:
+    payload = {
+        "equipment_id": 10,
+        "equipment_code": "TRK-010",
+        "prediction_timestamp": NOW,
+        "horizon_minutes": 60,
+        "risk_probability": 0.82,
+        "risk_level": "HIGH",
+        "model_version": "failure_risk_v1",
+        "model_type": "logistic",
+        "threshold": 0.40,
+        "status": FailureRiskStatus.AVAILABLE,
+        "data_class": "synthetic_prototype",
+        "served_predictor": "logistic",
+        "top_predictive_signals": ["engine_temp_c", "oil_pressure_kpa"],
+    }
+    payload.update(overrides)
+    return FailureRiskPrediction(**payload)
+
+
+def test_predicted_failure_risk_fires_at_artifact_threshold_with_predicted_copy():
+    findings = detect_predicted_mechanical_failure_risk(
+        _snapshot(failure_risk={10: _failure_risk_prediction(threshold=0.31, risk_probability=0.35)}),
+        _settings(),
+    )
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.detector_id == "predicted-mechanical-failure-risk"
+    assert finding.trigger_type == TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK
+    assert finding.severity == Severity.WARNING
+    assert finding.threshold == 0.31
+    assert finding.threshold != 0.80
+    assert finding.value == 0.35
+    assert finding.metric == "failure_risk_probability"
+    assert finding.unit == "probability"
+    assert finding.alert_source == AlertSource.PREDICTION
+    assert finding.predicted_for == NOW + timedelta(minutes=60)
+    assert finding.deduplication_key == "failure-risk:1:10"
+    assert "prédit" in finding.title.casefold() or "prédit" in finding.title
+    assert "Risque mécanique prédit" in finding.title
+    assert "prédit" in finding.reason
+    assert "60" in finding.reason
+    assert "will fail" not in finding.reason.casefold()
+    assert finding.context["source"] == "FAILURE_RISK_V1"
+    assert finding.context["dataClass"] == "synthetic_prototype"
+    assert finding.context["modelVersion"] == "failure_risk_v1"
+    assert finding.context["horizonMinutes"] == 60
+
+
+def test_predicted_failure_risk_ignores_scores_below_artifact_threshold():
+    assert detect_predicted_mechanical_failure_risk(
+        _snapshot(failure_risk={10: _failure_risk_prediction(threshold=0.31, risk_probability=0.30)}),
+        _settings(),
+    ) == []
+
+
+def test_predicted_failure_risk_ignores_unavailable_and_insufficient_history():
+    unavailable = _snapshot(
+        failure_risk={10: _failure_risk_prediction(
+            status=FailureRiskStatus.UNAVAILABLE, risk_probability=None, risk_level=None,
+        )}
+    )
+    insufficient = _snapshot(
+        failure_risk={10: _failure_risk_prediction(
+            status=FailureRiskStatus.INSUFFICIENT_HISTORY, risk_probability=None, risk_level=None,
+        )}
+    )
+    assert detect_predicted_mechanical_failure_risk(unavailable, _settings()) == []
+    assert detect_predicted_mechanical_failure_risk(insufficient, _settings()) == []
+
+
+def test_predicted_failure_risk_skips_equipment_not_in_snapshot_map():
+    excavator = _snapshot(equipment_type=EquipmentType.LOADER)
+    assert excavator.failure_risk == {}
+    assert detect_predicted_mechanical_failure_risk(excavator, _settings()) == []
+
+
+def test_default_detectors_include_predicted_failure_risk_after_six_deterministic():
+    assert detect_predicted_mechanical_failure_risk in DEFAULT_DETECTORS
+    assert len(DEFAULT_DETECTORS) == 7

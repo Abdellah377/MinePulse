@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import mean
 
 from app.ai.contracts import Severity, TriggerType
 from app.config import Settings
 from app.db.enums import AlertSeverity, AlertSource, EquipmentState
+from app.ml.failure_risk.contracts import DATA_CLASS, FailureRiskStatus
 from app.monitoring.contracts import MonitoringCandidate, MonitoringSnapshot
+from app.monitoring.predictive import FAILURE_RISK_SOURCE
 
 Detector = Callable[[MonitoringSnapshot, Settings], list[MonitoringCandidate]]
 
@@ -302,6 +304,63 @@ def detect_abnormal_cycle_duration(snapshot: MonitoringSnapshot, settings: Setti
     return candidates
 
 
+def detect_predicted_mechanical_failure_risk(
+    snapshot: MonitoringSnapshot, settings: Settings
+) -> list[MonitoringCandidate]:
+    """Alert only when the served Failure-Risk probability meets the artifact threshold."""
+
+    _ = settings
+    candidates: list[MonitoringCandidate] = []
+    equipment_by_id = {equipment.equipment_id: equipment for equipment in snapshot.equipment}
+    for equipment_id, prediction in snapshot.failure_risk.items():
+        status = getattr(prediction.status, "value", prediction.status)
+        if status != FailureRiskStatus.AVAILABLE.value:
+            continue
+        probability = prediction.risk_probability
+        threshold = prediction.threshold
+        if probability is None or threshold is None or probability < threshold:
+            continue
+        equipment = equipment_by_id.get(equipment_id)
+        if equipment is None:
+            continue
+        horizon = int(prediction.horizon_minutes or 60)
+        risk_level = getattr(prediction.risk_level, "value", prediction.risk_level)
+        candidates.append(
+            MonitoringCandidate(
+                detector_id="predicted-mechanical-failure-risk",
+                trigger_type=TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK,
+                site_id=snapshot.context.site_id,
+                shift_id=snapshot.context.shift_id,
+                equipment_id=equipment_id,
+                detected_at=snapshot.context.sim_now,
+                severity=Severity.WARNING,
+                title=f"Risque mécanique prédit — {equipment.code}",
+                reason=(
+                    f"{equipment.code} présente un risque prédit élevé d'entrer en arrêt "
+                    f"mécanique dans les {horizon} prochaines minutes."
+                ),
+                metric="failure_risk_probability",
+                value=probability,
+                threshold=threshold,
+                unit="probability",
+                deduplication_key=f"failure-risk:{snapshot.context.site_id}:{equipment_id}",
+                alert_source=AlertSource.PREDICTION,
+                predicted_for=snapshot.context.sim_now + timedelta(minutes=horizon),
+                context={
+                    "equipmentCode": equipment.code,
+                    "horizonMinutes": horizon,
+                    "modelVersion": prediction.model_version,
+                    "modelType": prediction.model_type or prediction.served_predictor,
+                    "riskLevel": risk_level,
+                    "dataClass": prediction.data_class or DATA_CLASS,
+                    "topSignals": list(prediction.top_predictive_signals or []),
+                    "source": FAILURE_RISK_SOURCE,
+                },
+            )
+        )
+    return candidates
+
+
 DEFAULT_DETECTORS: tuple[Detector, ...] = (
     detect_critical_conditions,
     detect_unexpected_stops,
@@ -309,4 +368,5 @@ DEFAULT_DETECTORS: tuple[Detector, ...] = (
     detect_communication_degradation,
     detect_production_deviation,
     detect_abnormal_cycle_duration,
+    detect_predicted_mechanical_failure_risk,
 )

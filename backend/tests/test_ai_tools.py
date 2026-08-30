@@ -7,6 +7,7 @@ from app.ai.contracts import (
     EvidenceRequest,
     EvidenceRequestType,
     EvidenceStatus,
+    InvestigationSubject,
     InvestigationTrigger,
     TriggerSource,
     TriggerType,
@@ -451,3 +452,65 @@ def test_fuel_trigger_selects_bounded_fuel_metric_group(monkeypatch):
     EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
 
     assert requests[0].parameters == ["fuel"]
+
+
+def test_predicted_mechanical_failure_risk_uses_mechanical_evidence_and_model_prediction(monkeypatch):
+    captured = []
+    requests = []
+
+    def fake_safe(self, ctx, name, call, **kwargs):
+        captured.append(name)
+        if name == "equipment_telemetry_trends":
+            return call()
+        return EvidenceItem(
+            kind=EvidenceKind.FACT,
+            source_tool=name,
+            source_service="test",
+            metric=name,
+            value={},
+        )
+
+    monkeypatch.setattr(EvidenceToolRegistry, "_safe_call", fake_safe)
+    monkeypatch.setattr(
+        oem,
+        "telemetry_trends",
+        lambda session, ctx, request: requests.append(request) or EvidenceItem(
+            kind=EvidenceKind.DERIVED_METRIC,
+            source_tool="equipment_telemetry_trends",
+            source_service="test",
+            metric="equipment_telemetry_trends",
+            value={},
+        ),
+    )
+    trigger = InvestigationTrigger(
+        trigger_type=TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK,
+        trigger_source=TriggerSource.AUTOMATIC_MONITORING,
+        site_id=1,
+        shift_id=2,
+        equipment_id=7,
+        occurred_at=_context().sim_now,
+        payload={
+            "value": 0.72,
+            "threshold": 0.41,
+            "context": {
+                "horizonMinutes": 60,
+                "modelVersion": "failure_risk_v1",
+                "modelType": "logistic",
+                "dataClass": "synthetic_prototype",
+                "source": "FAILURE_RISK_V1",
+                "riskLevel": "HIGH",
+            },
+        },
+    )
+
+    evidence = EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
+
+    assert trigger.subject == InvestigationSubject.MAINTENANCE
+    prediction = next(item for item in evidence if item.kind == EvidenceKind.MODEL_PREDICTION)
+    assert prediction.metric == "failure_risk_probability"
+    assert prediction.value == 0.72
+    assert prediction.metadata["dataClass"] == "synthetic_prototype"
+    assert prediction.metadata["source"] == "FAILURE_RISK_V1"
+    assert "not a confirmed failure" in prediction.notes.casefold()
+    assert requests[0].parameters == ["mechanical"]
+    assert "equipment_telemetry_trends" in captured

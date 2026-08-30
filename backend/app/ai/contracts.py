@@ -21,6 +21,7 @@ class TriggerType(str, Enum):
     EQUIPMENT_ANOMALY = "EQUIPMENT_ANOMALY"
     CONGESTION_RISK = "CONGESTION_RISK"
     MAINTENANCE_RISK = "MAINTENANCE_RISK"
+    PREDICTED_MECHANICAL_FAILURE_RISK = "PREDICTED_MECHANICAL_FAILURE_RISK"
     CONNECTIVITY_ISSUE = "CONNECTIVITY_ISSUE"
     OPERATIONAL_EVENT = "OPERATIONAL_EVENT"
 
@@ -178,6 +179,7 @@ class InvestigationTrigger(ContractModel):
                 TriggerType.EQUIPMENT_ANOMALY: InvestigationSubject.EQUIPMENT,
                 TriggerType.CONGESTION_RISK: InvestigationSubject.ZONE,
                 TriggerType.MAINTENANCE_RISK: InvestigationSubject.MAINTENANCE,
+                TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK: InvestigationSubject.MAINTENANCE,
                 TriggerType.CONNECTIVITY_ISSUE: InvestigationSubject.CONNECTIVITY,
             }.get(self.trigger_type, InvestigationSubject.OTHER)
         return self

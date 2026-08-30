@@ -5,8 +5,9 @@ Monitoring and investigation deliberately have different jobs:
 ```text
 PostgreSQL operational records
   -> canonical operational/OEM services
-  -> deterministic monitoring detectors
-  -> normal operational alert
+  -> Failure-Risk V1 inference (haul trucks, once per site cycle)
+  -> monitoring detectors
+  -> normal operational alert (RULE or PREDICTION)
   -> app.ai.service.run_investigation
   -> persisted LangGraph result
   -> Alertes IA
@@ -27,6 +28,21 @@ human validation.
 | Critical OEM/maintenance condition | active operational alerts/open maintenance | critical alert or open event |
 | Production deviation | published hourly production actual/target rows | 20% below target |
 | Abnormal active cycle | active cycle plus authoritative completed-cycle average | 1.5x baseline |
+| Predicted mechanical failure risk | served Failure-Risk V1 prediction attached to the snapshot | artifact operating threshold (validation F1 maximizer) |
+
+The predicted-mechanical-failure detector is the first predictive monitor. It
+scores only `HAUL_TRUCK` equipment (V1 training is truck telemetry), uses the
+probability and threshold copied onto `FailureRiskPrediction`, and never
+hard-codes 0.80. A candidate fires only when status is `AVAILABLE` and
+`probability >= artifact.threshold`. Fired alerts are always `WARNING`
+(`RiskLevel.HIGH` already means the operating threshold was met); `CRITICAL`
+remains reserved for confirmed stops and OEM critical alerts. Copy describes
+elevated **predicted** risk of a mechanical stop within 60 minutes, not a
+confirmed failure. Scores below threshold, `UNAVAILABLE`, and
+`INSUFFICIENT_HISTORY` do not create alerts. Metadata labels the source as
+`FAILURE_RISK_V1` / `synthetic_prototype`. Scoring runs once per site cycle
+inside the existing `monitoring_interval_seconds` loop; a scoring failure
+leaves an empty prediction map and the six deterministic detectors continue.
 
 Missing values are not converted to zero. A fresh telemetry record with null
 communication quality does not fire a quality detector; measured 0% does.
