@@ -10,19 +10,26 @@ from sqlalchemy.orm import Session
 from app.db.enums import EquipmentState
 from app.db.models import Equipment, EquipmentState as EquipmentStateRow
 from simulator.generators.events import emit_system_event
-from simulator.geometry import resolve_zone_id
+from simulator.geometry import ZoneGeom, resolve_zone_id
 from simulator.loaders import LoaderRuntime
 from simulator.state_machine import PHASE_TO_DB, TruckPhase, TruckRuntime
 
 if TYPE_CHECKING:
     pass
 
+OpenStateRef = int | EquipmentStateRow
 
-def _close_open_interval(session: Session, open_states: dict[str, int], code: str, sim_now: datetime) -> None:
-    prev_id = open_states.pop(code, None)
-    if not prev_id:
+
+def _close_open_interval(
+    session: Session,
+    open_states: dict[str, OpenStateRef],
+    code: str,
+    sim_now: datetime,
+) -> None:
+    prev = open_states.pop(code, None)
+    if prev is None:
         return
-    row = session.get(EquipmentStateRow, prev_id)
+    row = prev if isinstance(prev, EquipmentStateRow) else session.get(EquipmentStateRow, prev)
     if row and row.end_time is None:
         row.end_time = sim_now
         row.duration_sec = int((sim_now - row.start_time).total_seconds())
@@ -48,13 +55,15 @@ def loader_db_state(ldr: LoaderRuntime) -> EquipmentState:
 
 def transition_truck(
     session: Session,
-    open_states: dict[str, int],
+    open_states: dict[str, OpenStateRef],
     truck: TruckRuntime,
     sim_now: datetime,
     site_id: int,
     *,
     source: str = "SIMULATOR",
     message: str | None = None,
+    zones: dict[str, ZoneGeom] | None = None,
+    equipment: Equipment | None = None,
 ) -> EquipmentStateRow:
     """Close previous interval, open new one, emit system event."""
     _close_open_interval(session, open_states, truck.code, sim_now)
@@ -65,6 +74,7 @@ def transition_truck(
         truck.lng,
         truck.lat,
         moving=truck.is_moving() and truck.road_progress < 1.0,
+        zones=zones,
     )
     reason_confirmed = not truck.unexplained_hold
     reason_code = None
@@ -84,9 +94,9 @@ def transition_truck(
     )
     session.add(row)
     session.flush()
-    open_states[truck.code] = row.state_id
+    open_states[truck.code] = row
 
-    eq = session.get(Equipment, truck.equipment_id)
+    eq = equipment if equipment is not None else session.get(Equipment, truck.equipment_id)
     if eq:
         eq.current_state = new_state
 
@@ -97,12 +107,13 @@ def transition_truck(
 
 def transition_loader(
     session: Session,
-    open_states: dict[str, int],
+    open_states: dict[str, OpenStateRef],
     ldr: LoaderRuntime,
     sim_now: datetime,
     *,
     source: str = "SIMULATOR",
     message: str | None = None,
+    equipment: Equipment | None = None,
 ) -> EquipmentStateRow:
     """Transition loader/excavator equipment state."""
     _close_open_interval(session, open_states, ldr.code, sim_now)
@@ -118,9 +129,9 @@ def transition_loader(
     )
     session.add(row)
     session.flush()
-    open_states[ldr.code] = row.state_id
+    open_states[ldr.code] = row
 
-    eq = session.get(Equipment, ldr.equipment_id)
+    eq = equipment if equipment is not None else session.get(Equipment, ldr.equipment_id)
     if eq:
         eq.current_state = new_state
 
@@ -131,7 +142,7 @@ def transition_loader(
 
 def close_truck_state_interval(
     session: Session,
-    open_states: dict[str, int],
+    open_states: dict[str, OpenStateRef],
     truck: TruckRuntime,
     sim_now: datetime,
 ) -> None:
@@ -141,7 +152,7 @@ def close_truck_state_interval(
 
 def close_loader_state_interval(
     session: Session,
-    open_states: dict[str, int],
+    open_states: dict[str, OpenStateRef],
     ldr: LoaderRuntime,
     sim_now: datetime,
 ) -> None:

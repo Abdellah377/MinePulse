@@ -87,17 +87,24 @@ def cmd_generate_cycles(
         raise ValueError("sample_every_ticks must be at least 1")
     if not verbose:
         log.setLevel(logging.WARNING)
+    wall0 = time.perf_counter()
     with SessionLocal() as session:
         seed_static_world(session)
         cfg = SimConfig(random_seed=seed)
         cfg.speed = sim_speed
         cfg.persistence_sample_every_ticks = sample_every_ticks
         cfg.failure_population = FailurePopulationConfig(enabled=with_failures)
+        cfg.batch_generation = True
+        cfg.commit_every_ticks = 25
+        cfg.persist_control_every_ticks = 50
         engine = SimulationEngine(session, cfg=cfg)
+        engine.world.mode = "MANUAL"
+        engine.cfg.scenario = "normal"
         engine.reset()
         engine.start()
         tick_limit = max_ticks or max(1_000, target_cycles * 12)
         ticks = 0
+        loop0 = time.perf_counter()
         while engine.completed_cycle_count < target_cycles and ticks < tick_limit:
             engine.tick()
             ticks += 1
@@ -118,6 +125,8 @@ def cmd_generate_cycles(
                 drain_ticks += 1
         engine.pause()
         interruption = engine.interrupt_open_cycles(reason="DATASET_GENERATION_COMPLETE")
+        loop_elapsed = time.perf_counter() - loop0
+        elapsed = time.perf_counter() - wall0
         simulation_equipment_ids = select(Equipment.equipment_id).where(
             Equipment.site_id == engine.site_id
         )
@@ -153,6 +162,10 @@ def cmd_generate_cycles(
             "interrupted_at_generation_end": interruption["cycles"],
             "ticks": ticks,
             "drain_ticks": drain_ticks,
+            "elapsed_seconds": round(elapsed, 3),
+            "tick_loop_seconds": round(loop_elapsed, 3),
+            "ticks_per_second": round(ticks / loop_elapsed, 2) if loop_elapsed else None,
+            "cycles_per_second": round(completed / loop_elapsed, 2) if loop_elapsed else None,
             "sim_now": engine.clock.sim_now.isoformat(),
             "reached_target": completed >= target_cycles,
             "failures_enabled": with_failures,

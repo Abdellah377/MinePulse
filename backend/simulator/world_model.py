@@ -99,6 +99,8 @@ class SimulationWorld(SimWorld):
         append_event_log(sim_now=sim_now, kind="TEST", message=message, target_type=target_type, target_id=target_id)
 
     def log_sim(self, sim_now: datetime, message: str, target_type: str | None = None, target_id: str | None = None) -> None:
+        if getattr(self.cfg, "batch_generation", False):
+            return
         append_event_log(sim_now=sim_now, kind="SIMULATION", message=message, target_type=target_type, target_id=target_id)
 
     def loader_for_truck(self, truck: TruckRuntime) -> LoaderRuntime | None:
@@ -156,6 +158,7 @@ class SimulationWorld(SimWorld):
         speed: float,
         *,
         causal_scenarios: list[dict[str, Any]] | None = None,
+        compact: bool = False,
     ) -> None:
         payload = {
             "sim_now": sim_now.isoformat(),
@@ -215,7 +218,8 @@ class SimulationWorld(SimWorld):
             },
             "ground_truth_count": len(self.ground_truth),
         }
-        RUNTIME_SNAPSHOT_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        text = json.dumps(payload, separators=(",", ":")) if compact else json.dumps(payload, indent=2)
+        RUNTIME_SNAPSHOT_PATH.write_text(text, encoding="utf-8")
 
     @staticmethod
     def read_runtime_snapshot() -> dict:

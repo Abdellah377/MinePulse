@@ -36,7 +36,7 @@ class RoadGeom:
 
 
 def load_zones(session: Session, site_id: int) -> dict[str, ZoneGeom]:
-    zones = session.scalars(select(Zone).where(Zone.site_id == site_id)).all()
+    zones = session.scalars(select(Zone).where(Zone.site_id == site_id).order_by(Zone.code)).all()
     out: dict[str, ZoneGeom] = {}
     for z in zones:
         poly: Polygon = to_shape(z.geometry)
@@ -53,7 +53,9 @@ def load_zones(session: Session, site_id: int) -> dict[str, ZoneGeom]:
 def load_roads(
     session: Session, site_id: int, zone_id_to_code: dict[int, str]
 ) -> dict[str, RoadGeom]:
-    roads = session.scalars(select(HaulRoad).where(HaulRoad.site_id == site_id)).all()
+    roads = session.scalars(
+        select(HaulRoad).where(HaulRoad.site_id == site_id).order_by(HaulRoad.code)
+    ).all()
     out: dict[str, RoadGeom] = {}
     for r in roads:
         line: LineString = to_shape(r.geometry)
@@ -150,17 +152,39 @@ def point_wkt(lng: float, lat: float) -> WKTElement:
     return WKTElement(f"POINT({lng} {lat})", srid=4326)
 
 
-def resolve_zone_id(
-    session: Session,
-    site_id: int,
+def resolve_zone_id_from_geom(
+    zones: dict[str, ZoneGeom],
     lng: float,
     lat: float,
     *,
     moving: bool,
 ) -> int | None:
+    """In-memory ST_Contains equivalent using already-loaded shapely polygons."""
+    if moving:
+        return None
+    pt = Point(lng, lat)
+    for zg in zones.values():
+        if zg.polygon.contains(pt):
+            return zg.zone_id
+    return None
+
+
+def resolve_zone_id(
+    session: Session | None,
+    site_id: int,
+    lng: float,
+    lat: float,
+    *,
+    moving: bool,
+    zones: dict[str, ZoneGeom] | None = None,
+) -> int | None:
     """Spatial zone lookup. Travelling trucks get NULL."""
     if moving:
         return None
+    if zones is not None:
+        return resolve_zone_id_from_geom(zones, lng, lat, moving=False)
+    if session is None:
+        raise ValueError("session is required when in-memory zones are not provided")
     row = session.execute(
         text(
             """

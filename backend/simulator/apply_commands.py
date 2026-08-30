@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import hashlib
 from typing import Any
 from uuid import uuid4
+import hashlib
 
 from sqlalchemy.orm import Session
 
 from app.db.enums import AlertSeverity
-from app.db.models import MaintenanceEvent
+from app.db.models import Equipment, MaintenanceEvent
 from simulator.causal_scenarios import (
     SCENARIO_SPECS,
     CausalScenarioManager,
@@ -26,6 +26,7 @@ from simulator.command_registry import (
 )
 from simulator.commands import SimulationCommand, load_all_commands, rewrite_commands
 from simulator.generators.events import emit_fms_alert, emit_system_event, resolve_fms_alert
+from simulator.geometry import ZoneGeom
 from simulator.state_machine import TruckPhase
 from simulator.transition_service import transition_loader, transition_truck, truck_db_state
 from simulator.world_model import ActiveInjection, SimulationWorld
@@ -36,13 +37,21 @@ class CommandContext:
     world: SimulationWorld
     session: Session
     sim_now: datetime
-    open_states: dict[str, int]
+    open_states: dict[str, Any]
     equip_id_by_code: dict[str, int]
     zone_id_by_code: dict[str, int]
     site_id: int
     causal_scenarios: CausalScenarioManager | None = None
     causal_min_duration_min: float = 1.0
     causal_tick_sim_sec: float = 1.0
+    zones_geom: dict[str, ZoneGeom] | None = None
+    equipment_by_id: dict[int, Equipment] | None = None
+
+
+def _ctx_equipment(ctx: CommandContext, equipment_id: int) -> Equipment | None:
+    if ctx.equipment_by_id:
+        return ctx.equipment_by_id.get(equipment_id)
+    return None
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -180,6 +189,8 @@ def _persist_equipment_effects(
             ctx.site_id,
             source="COMMAND",
             message=f"{tid} → {truck_db_state(truck).value} (injection {cmd.action})",
+            zones=ctx.zones_geom,
+            equipment=_ctx_equipment(ctx, truck.equipment_id),
         )
         emit_system_event(
             ctx.session,
@@ -227,6 +238,7 @@ def _persist_equipment_effects(
             ctx.sim_now,
             source="COMMAND",
             message=f"{tid} → injection {cmd.action}",
+            equipment=_ctx_equipment(ctx, ldr.equipment_id),
         )
         emit_system_event(ctx.session, ctx.sim_now, spec.event_type, ldr.equipment_id, f"{cmd.action} on {tid}")
         if spec.alert and inj:
@@ -361,6 +373,8 @@ def _restore_injection(ctx: CommandContext, inj: ActiveInjection, reason: str) -
                 ctx.site_id,
                 source="RECOVERY",
                 message=f"{tid} restored ({reason})",
+                zones=ctx.zones_geom,
+                equipment=_ctx_equipment(ctx, truck.equipment_id),
             )
             emit_system_event(
                 ctx.session,
@@ -381,6 +395,7 @@ def _restore_injection(ctx: CommandContext, inj: ActiveInjection, reason: str) -
                 ctx.sim_now,
                 source="RECOVERY",
                 message=f"{tid} restored ({reason})",
+                equipment=_ctx_equipment(ctx, ldr.equipment_id),
             )
             emit_system_event(
                 ctx.session,

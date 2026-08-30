@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import select, text
+from sqlalchemy import insert, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -33,7 +33,7 @@ from simulator.causal_scenarios import CausalScenarioManager, ObservableTransiti
 from simulator.clock import SimClock, get_sim_logger
 from simulator.commands import clear_commands, clear_event_log, load_all_commands
 from simulator.config import SimConfig
-from simulator.control import read_control, write_control, write_heartbeat
+from simulator.control import COMMANDS_PATH, read_control, write_control, write_heartbeat
 from simulator.generators.events import emit_fms_alert, emit_system_event
 from simulator.generators.production import record_dump_production
 from simulator.generators.telemetry import build_telemetry
@@ -66,7 +66,12 @@ from simulator.state_machine import (
 from simulator.world_model import SimulationWorld
 from simulator.world import stable_seed
 
-from simulator.transition_service import transition_loader, transition_truck, truck_db_state
+from simulator.transition_service import (
+    OpenStateRef,
+    loader_db_state,
+    transition_loader,
+    transition_truck,
+)
 
 log = get_sim_logger()
 
@@ -98,7 +103,7 @@ class SimulationEngine:
         self.equip_id_by_code: dict[str, int] = {}
         self.zones_geom = {}
         self.roads_geom = {}
-        self.open_states: dict[str, int] = {}
+        self.open_states: dict[str, OpenStateRef] = {}
         self.open_cycles: dict[str, int] = {}
         self.open_cycle_stages: dict[str, int] = {}
         self.open_trips: dict[str, int] = {}
@@ -107,6 +112,14 @@ class SimulationEngine:
         self._tick_count = 0
         self.completed_cycle_count = 0
         self.startup_interrupted_cycles = 0
+        self._pending_positions: list[dict] = []
+        self._pending_telemetry: list[dict] = []
+        self._pending_tyres: list[dict] = []
+        self._equipment_by_id: dict[int, Equipment] = {}
+        self._loader_persisted_state: dict[str, EquipmentState] = {}
+        self._commands_mtime: float | None = None
+        self._commands_cache: list = []
+        self._shift_spec_key: tuple | None = None
         self._boot()
 
     def _boot(self) -> None:
@@ -146,8 +159,18 @@ class SimulationEngine:
         self.zone_code_by_id = {z.zone_id: c for c, z in self.zones_geom.items()}
         self.roads_geom = load_roads(self.session, site.site_id, self.zone_code_by_id)
 
-        all_equip = self.session.scalars(select(Equipment).where(Equipment.site_id == site.site_id)).all()
+        all_equip = self.session.scalars(
+            select(Equipment)
+            .where(Equipment.site_id == site.site_id)
+            .order_by(Equipment.equipment_id, Equipment.code)
+        ).all()
         self.equip_id_by_code = {e.code: e.equipment_id for e in all_equip}
+        self._equipment_by_id = {e.equipment_id: e for e in all_equip}
+        self._loader_persisted_state = {
+            e.code: e.current_state
+            for e in all_equip
+            if e.type in (EquipmentType.EXCAVATOR, EquipmentType.LOADER)
+        }
         trucks = [(e.equipment_id, e.code) for e in all_equip if e.type == EquipmentType.HAUL_TRUCK]
         centroids = {c: z.centroid for c, z in self.zones_geom.items()}
         self.world.load_trucks(trucks, self.cfg.random_seed, centroids)
@@ -319,6 +342,8 @@ class SimulationEngine:
             causal_scenarios=self.causal_scenarios,
             causal_min_duration_min=8.0 * tick_sim_sec / 60.0,
             causal_tick_sim_sec=tick_sim_sec,
+            zones_geom=self.zones_geom,
+            equipment_by_id=self._equipment_by_id,
         )
 
     def _persist_control(self) -> None:
@@ -338,7 +363,70 @@ class SimulationEngine:
             self.clock.status,
             self.clock.speed,
             causal_scenarios=self.causal_scenarios.developer_status(include_hidden=True),
+            compact=self.cfg.batch_generation,
         )
+
+    def _load_commands(self):
+        if not self.cfg.batch_generation:
+            return load_all_commands()
+        try:
+            mtime = COMMANDS_PATH.stat().st_mtime
+        except OSError:
+            return []
+        if self._commands_mtime == mtime:
+            return self._commands_cache
+        self._commands_mtime = mtime
+        self._commands_cache = load_all_commands()
+        return self._commands_cache
+
+    def _transition_truck(self, truck: TruckRuntime, *, sim_now: datetime | None = None, **kwargs):
+        return transition_truck(
+            self.session,
+            self.open_states,
+            truck,
+            sim_now or self.clock.sim_now,
+            self.site_id or 0,
+            zones=self.zones_geom,
+            equipment=self._equipment_by_id.get(truck.equipment_id),
+            **kwargs,
+        )
+
+    def _flush_telemetry_batch(self) -> None:
+        if self._pending_positions:
+            self.session.execute(insert(EquipmentPosition), self._pending_positions)
+            self._pending_positions.clear()
+        if self._pending_telemetry:
+            self.session.execute(insert(EquipmentTelemetry), self._pending_telemetry)
+            self._pending_telemetry.clear()
+        if self._pending_tyres:
+            stmt = pg_insert(TyreTelemetry).values(self._pending_tyres)
+            self.session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=["equipment_id", "ts", "position"],
+                    set_={
+                        "pressure_kpa": stmt.excluded.pressure_kpa,
+                        "temperature_c": stmt.excluded.temperature_c,
+                    },
+                )
+            )
+            self._pending_tyres.clear()
+
+    def _end_tick_persist(self) -> None:
+        commit_every = max(1, self.cfg.commit_every_ticks)
+        persist_every = max(1, self.cfg.persist_control_every_ticks)
+        should_commit = (not self.cfg.batch_generation) or (self._tick_count % commit_every == 0)
+        should_control = (not self.cfg.batch_generation) or (self._tick_count % persist_every == 0)
+        if should_commit:
+            self._flush_telemetry_batch()
+            self.session.commit()
+        if should_control:
+            self._persist_control()
+
+    def _commit_pending(self, *, persist_control: bool = True) -> None:
+        self._flush_telemetry_batch()
+        self.session.commit()
+        if persist_control:
+            self._persist_control()
 
     def _ensure_assignments(self) -> None:
         operators = list(self.session.scalars(select(Operator).order_by(Operator.operator_id)).all())
@@ -450,23 +538,24 @@ class SimulationEngine:
                 )
 
     def tick(self) -> None:
-        self._sync_control_from_disk()
+        if not self.cfg.batch_generation:
+            self._sync_control_from_disk()
         self._tick_count += 1
-        write_heartbeat(self.clock.sim_now, self._tick_count, self.clock.status)
+        if not self.cfg.batch_generation:
+            write_heartbeat(self.clock.sim_now, self._tick_count, self.clock.status)
 
         ctx = self._command_ctx()
-        all_cmds = load_all_commands()
+        all_cmds = self._load_commands()
 
         # Zone/road commands + expiry (always, including when paused)
         process_pending_commands(ctx)
 
         if self.clock.status != "RUNNING":
             # Apply truck equipment commands even when paused (no motion advance)
-            all_cmds = load_all_commands()
+            all_cmds = self._load_commands()
             for truck in self.world.trucks.values():
                 process_equipment_commands(ctx, truck.code, all_cmds)
-            self.session.commit()
-            self._persist_control()
+            self._end_tick_persist()
             return
 
         # Causal scenarios progress independently of legacy/manual fault
@@ -492,13 +581,7 @@ class SimulationEngine:
 
         for code, truck in self.world.trucks.items():
             if truck.code not in self.open_states:
-                transition_truck(
-                    self.session,
-                    self.open_states,
-                    truck,
-                    self.clock.sim_now,
-                    self.site_id or 0,
-                )
+                self._transition_truck(truck)
                 if truck.phase in CYCLE_PHASES and truck.code not in self.open_cycles:
                     self._start_cycle(truck)
                     self._open_cycle_stage(truck, truck.db_state())
@@ -609,13 +692,7 @@ class SimulationEngine:
                 self._complete_dump(truck, active_trucks, active_loaders)
 
             if PHASE_TO_DB.get(prev_phase) != PHASE_TO_DB.get(phase_after_advance):
-                transition_truck(
-                    self.session,
-                    self.open_states,
-                    truck,
-                    self.clock.sim_now,
-                    self.site_id or 0,
-                )
+                self._transition_truck(truck)
                 self._handle_cycle_transition(truck, prev_phase)
                 if truck.phase != prev_phase:
                     self.world.log_sim(
@@ -629,24 +706,20 @@ class SimulationEngine:
             eid = self.equip_id_by_code.get(code)
             if not eid:
                 continue
-            eq = self.session.get(Equipment, eid)
-            if not eq:
+            new_state = loader_db_state(ldr)
+            if self._loader_persisted_state.get(code) == new_state:
                 continue
-            new_state = (
-                EquipmentState.STOPPED_MECHANICAL
-                if ldr.mechanical_breakdown
-                else EquipmentState.NO_DATA
-                if ldr.communication_lost
-                else EquipmentState.LOADING
-                if ldr.effective_capacity() > 0
-                else EquipmentState.STOPPED_OPERATIONAL
+            transition_loader(
+                self.session,
+                self.open_states,
+                ldr,
+                self.clock.sim_now,
+                equipment=self._equipment_by_id.get(eid),
             )
-            if eq.current_state != new_state:
-                transition_loader(self.session, self.open_states, ldr, self.clock.sim_now)
+            self._loader_persisted_state[code] = new_state
 
         self.clock.advance()
-        self.session.commit()
-        self._persist_control()
+        self._end_tick_persist()
 
     def _update_position(self, truck: TruckRuntime) -> None:
         origin = self.zones_geom.get(truck.origin_zone_code)
@@ -684,51 +757,41 @@ class SimulationEngine:
             truck.lng,
             truck.lat,
             moving=truck.is_moving() and truck.road_progress < 1.0,
+            zones=self.zones_geom,
         )
-        self.session.add(
-            EquipmentPosition(
-                equipment_id=truck.equipment_id,
-                ts=self.clock.sim_now,
-                position=point_wkt(truck.lng, truck.lat),
-                speed_kmh=Decimal(str(round(truck.speed_kmh, 1))),
-                heading_deg=Decimal(str(round(truck.heading_deg, 1))),
-                zone_id=zone_id,
-            )
-        )
-
-    def _write_telemetry(self, truck: TruckRuntime, tel: dict) -> None:
-        self.session.add(
-            EquipmentTelemetry(
-                equipment_id=truck.equipment_id,
-                ts=self.clock.sim_now,
-                **tel,
-            )
-        )
-
-    def _write_tyres(self, truck: TruckRuntime) -> None:
-        values = [
+        self._pending_positions.append(
             {
                 "equipment_id": truck.equipment_id,
                 "ts": self.clock.sim_now,
-                "position": row["position"],
-                "pressure_kpa": row["pressure_kpa"],
-                "temperature_c": row["temperature_c"],
+                "position": point_wkt(truck.lng, truck.lat),
+                "speed_kmh": Decimal(str(round(truck.speed_kmh, 1))),
+                "heading_deg": Decimal(str(round(truck.heading_deg, 1))),
+                "zone_id": zone_id,
+                "metadata_": {},
             }
-            for row in tyre_rows(truck)
-        ]
-        if not values:
-            return
-
-        stmt = pg_insert(TyreTelemetry).values(values)
-        self.session.execute(
-            stmt.on_conflict_do_update(
-                index_elements=["equipment_id", "ts", "position"],
-                set_={
-                    "pressure_kpa": stmt.excluded.pressure_kpa,
-                    "temperature_c": stmt.excluded.temperature_c,
-                },
-            )
         )
+
+    def _write_telemetry(self, truck: TruckRuntime, tel: dict) -> None:
+        self._pending_telemetry.append(
+            {
+                "equipment_id": truck.equipment_id,
+                "ts": self.clock.sim_now,
+                "raw_data": {},
+                **tel,
+            }
+        )
+
+    def _write_tyres(self, truck: TruckRuntime) -> None:
+        for row in tyre_rows(truck):
+            self._pending_tyres.append(
+                {
+                    "equipment_id": truck.equipment_id,
+                    "ts": self.clock.sim_now,
+                    "position": row["position"],
+                    "pressure_kpa": row["pressure_kpa"],
+                    "temperature_c": row["temperature_c"],
+                }
+            )
 
     def _check_oem_anomalies(self, truck: TruckRuntime, tel: dict) -> None:
         from app.oem.catalog import SIM_ERROR_CODES
@@ -796,13 +859,7 @@ class SimulationEngine:
 
     def _transition_state(self, truck: TruckRuntime) -> None:
         """Deprecated — delegates to transition_service."""
-        transition_truck(
-            self.session,
-            self.open_states,
-            truck,
-            self.clock.sim_now,
-            self.site_id or 0,
-        )
+        self._transition_truck(truck)
 
     def _close_cycle_stage(self, truck: TruckRuntime) -> None:
         sid = self.open_cycle_stages.pop(truck.code, None)
@@ -1010,13 +1067,7 @@ class SimulationEngine:
                     # can lose the entire STOPPED_MECHANICAL interval.
                     truck.phase = TruckPhase.STOPPED
                     truck.speed_kmh = 0.0
-                    transition_truck(
-                        self.session,
-                        self.open_states,
-                        truck,
-                        transition.occurred_at,
-                        self.site_id or 0,
-                    )
+                    self._transition_truck(truck, sim_now=transition.occurred_at)
                     population_incident = self.failure_population.active.get(transition.run_id)
                     expected_recovery_at = (
                         population_incident.recovery_due_at
@@ -1096,13 +1147,7 @@ class SimulationEngine:
         if truck is None:
             return
         self._bind_road(truck)
-        transition_truck(
-            self.session,
-            self.open_states,
-            truck,
-            recovered_at,
-            self.site_id or 0,
-        )
+        self._transition_truck(truck, sim_now=recovered_at)
         if truck.phase in CYCLE_PHASES and truck.code not in self.open_cycles:
             self._start_cycle(truck)
             self._open_cycle_stage(truck, truck.db_state())
@@ -1116,7 +1161,7 @@ class SimulationEngine:
 
     def pause(self) -> None:
         self.clock.pause()
-        self._persist_control()
+        self._commit_pending(persist_control=True)
 
     def resume(self) -> None:
         self.clock.resume()
@@ -1127,6 +1172,7 @@ class SimulationEngine:
 
         from simulator.cycle_lifecycle import interrupt_active_simulation_cycles
 
+        self._flush_telemetry_batch()
         counts = interrupt_active_simulation_cycles(
             self.session,
             site_id=self.site_id or 0,
@@ -1154,6 +1200,12 @@ class SimulationEngine:
             self.open_cycle_stages.clear()
             self.open_trips.clear()
             self.open_failure_records.clear()
+            self._pending_positions.clear()
+            self._pending_telemetry.clear()
+            self._pending_tyres.clear()
+            self._commands_mtime = None
+            self._commands_cache = []
+            self._shift_spec_key = None
             self._last_queue_log.clear()
             self._tick_count = 0
             self.completed_cycle_count = 0

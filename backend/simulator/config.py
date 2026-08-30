@@ -25,3 +25,8 @@ class SimConfig:
         # scenarios continue to use the same underlying profile library.
         self.failure_population = FailurePopulationConfig()
         self.persistence_sample_every_ticks = 1
+        # Interactive `run` keeps live control-file + per-tick commits.
+        # `generate-cycles` sets batch_generation to skip wall-clock I/O.
+        self.batch_generation = False
+        self.commit_every_ticks = 1
+        self.persist_control_every_ticks = 1
