@@ -10,6 +10,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.db.enums import EquipmentType
 from app.ml.failure_risk.spec import MODEL_VERSION as SPEC_MODEL_VERSION
 
 MODEL_VERSION = SPEC_MODEL_VERSION
@@ -21,6 +22,7 @@ SYNTHETIC_DATA_WARNING = (
     "This model is trained entirely on synthetic MinePulse simulator data "
     "and is intended for prototype validation only. It is not field-validated."
 )
+FAILURE_RISK_ELIGIBLE_TYPES = (EquipmentType.HAUL_TRUCK,)
 
 
 class FailureRiskStatus(str, Enum):

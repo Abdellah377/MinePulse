@@ -5,6 +5,7 @@ from app.api.deps import Ctx, DbSession
 from app.db.models import Equipment, Zone
 from app.mappers.dto import enriched_equipment_dto, maintenance_history_for_equipment
 from app.services.operational.equipment import build_fleet_bulk_context, list_site_equipment
+from app.services.operational.failure_risk import current_failure_risk, failure_risk_to_dto
 
 router = APIRouter()
 
@@ -59,4 +60,5 @@ def equipment_detail(code: str, session: DbSession, ctx: Ctx):
             bulk=bulk,
         ),
         "maintenanceHistory": maintenance_history_for_equipment(session, eq.equipment_id),
+        "failureRisk": failure_risk_to_dto(current_failure_risk(session, eq, ctx.sim_now)),
     }

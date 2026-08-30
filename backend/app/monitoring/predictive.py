@@ -11,12 +11,11 @@ from dataclasses import replace
 
 from sqlalchemy.orm import Session
 
-from app.db.enums import EquipmentType
+from app.ml.failure_risk.contracts import FAILURE_RISK_ELIGIBLE_TYPES
 from app.monitoring.contracts import MonitoringSnapshot
 
 logger = logging.getLogger(__name__)
 
-FAILURE_RISK_ELIGIBLE_TYPES = (EquipmentType.HAUL_TRUCK,)
 FAILURE_RISK_SOURCE = "FAILURE_RISK_V1"
 
 

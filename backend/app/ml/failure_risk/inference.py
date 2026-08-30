@@ -1,4 +1,4 @@
-"""Internal failure-risk inference. No HTTP route in V1.
+"""Failure-risk inference. HTTP is via equipment detail, not a dedicated ML route.
 
 Never returns a 0% risk score when the prediction is unavailable.
 

@@ -19,4 +19,6 @@ def test_equipment_detail_contract(client):
     body = res.json()
     assert "equipment" in body
     assert "maintenanceHistory" in body
+    assert "failureRisk" in body
     assert body["equipment"]["code"] == code
+    assert "predictedFor" not in body["failureRisk"]

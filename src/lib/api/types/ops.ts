@@ -38,6 +38,27 @@ export type EquipmentLiveDto = {
   cycleDureeMoyenneMin: number | null
 }
 
+export type FailureRiskStatus = "AVAILABLE" | "INSUFFICIENT_HISTORY" | "UNAVAILABLE"
+
+export type FailureRiskLevel = "LOW" | "MEDIUM" | "HIGH"
+
+export type FailureRiskDto = {
+  equipmentId: number | null
+  equipmentCode: string | null
+  predictionTimestamp: string | null
+  horizonMinutes: number
+  riskProbability: number | null
+  riskLevel: FailureRiskLevel | null
+  modelVersion: string
+  modelType: string | null
+  servedPredictor: string | null
+  threshold: number | null
+  status: FailureRiskStatus
+  dataClass: string
+  topPredictiveSignals: string[]
+  detail: string | null
+}
+
 export type ProductionRecordDto = {
   label: string
   tonnage: number

@@ -14,6 +14,7 @@ import type {
   Zone,
 } from "@/lib/mock/types"
 import type { ProductionByShift } from "@/lib/production/mergeProduction"
+import type { FailureRiskDto } from "@/lib/api/types/ops"
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api"
 const DEFAULT_TIMEOUT_MS = 15_000
@@ -200,6 +201,7 @@ export type EquipmentMaintenanceRow = {
 export type EquipmentDetailPayload = {
   equipment: Equipment
   maintenanceHistory: EquipmentMaintenanceRow[]
+  failureRisk: FailureRiskDto
 }
 
 export function fetchEquipmentDetail(
