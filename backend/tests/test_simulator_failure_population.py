@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.db.database import SessionLocal
 from app.db.enums import AlertSeverity, EquipmentState, EquipmentType
 from app.db.models import Cycle, CycleStage, DowntimeEvent, Equipment, MaintenanceEvent, Site, Trip
 from app.db.models.telemetry import EquipmentState as EquipmentStateRow
+from simulator.cli import build_parser, cmd_generate_cycles
 from simulator.config import SimConfig
 from app.oem.thresholds import classify_value
 from simulator.causal_scenarios import CausalScenarioManager
@@ -25,6 +27,80 @@ from simulator.state_machine import TruckPhase, TruckRuntime
 
 
 NOW = datetime(2026, 1, 29, 6, 0, tzinfo=timezone.utc)
+
+
+def test_generate_cycles_default_does_not_enable_failure_population():
+    args = build_parser().parse_args(["generate-cycles"])
+    assert args.with_failures is False
+    assert SimConfig(random_seed=42).failure_population.enabled is False
+
+
+def test_generate_cycles_with_failures_flag_enables_existing_manager():
+    args = build_parser().parse_args(
+        ["generate-cycles", "--target-cycles", "1000", "--seed", "42", "--sim-speed", "60", "--with-failures"]
+    )
+    assert args.with_failures is True
+    cfg = SimConfig(random_seed=args.seed)
+    cfg.failure_population = FailurePopulationConfig(enabled=args.with_failures)
+    manager = FailurePopulationManager(cfg.failure_population, seed=cfg.random_seed)
+    assert manager.config.enabled is True
+    assert type(manager) is FailurePopulationManager
+
+
+def test_generate_cycles_command_uses_existing_population_not_parallel_logic():
+    source = inspect.getsource(cmd_generate_cycles)
+    assert "FailurePopulationConfig(enabled=with_failures)" in source
+    assert "engine.failure_population" in source
+    assert "developer_summary" in source
+    assert "stop_scheduling" in source
+    assert '"failures_enabled": with_failures' in source
+    assert "class FailurePopulationManager" not in source
+
+
+def test_disabled_failure_population_starts_no_incidents():
+    world = _world()
+    causal = CausalScenarioManager()
+    population = FailurePopulationManager(FailurePopulationConfig(), seed=42)
+    assert population.config.enabled is False
+    for minute in range(180):
+        population.advance(world, causal, NOW + timedelta(minutes=minute))
+    assert population.history == []
+    assert population.active == {}
+    assert causal.active == {}
+
+
+def test_generate_cycles_same_seed_with_failures_is_reproducible():
+    cfg = SimConfig(random_seed=42)
+    cfg.failure_population = FailurePopulationConfig(enabled=True)
+
+    def run() -> list[tuple]:
+        world = _world()
+        causal = CausalScenarioManager()
+        population = FailurePopulationManager(cfg.failure_population, seed=cfg.random_seed)
+        for minute in range(240):
+            population.advance(world, causal, NOW + timedelta(minutes=minute))
+        return _stable_history(population)
+
+    assert run() == run()
+    cfg_other = SimConfig(random_seed=43)
+    cfg_other.failure_population = FailurePopulationConfig(enabled=True)
+    world = _world()
+    causal = CausalScenarioManager()
+    other = FailurePopulationManager(cfg_other.failure_population, seed=cfg_other.random_seed)
+    for minute in range(240):
+        other.advance(world, causal, NOW + timedelta(minutes=minute))
+    assert _stable_history(other) != run()
+
+
+def test_persisted_failure_records_omit_hidden_simulator_truth():
+    from simulator.failure_lifecycle import start_mechanical_incident
+
+    maintenance_source = inspect.getsource(start_mechanical_incident)
+    assert "hidden_root_cause" not in maintenance_source
+    assert "profile_id" not in maintenance_source
+    assert "scenario_id" not in maintenance_source
+    assert "performance_factor" not in maintenance_source
+    assert '"source": "SIMULATOR_FAILURE"' in maintenance_source
 
 
 def _world(count: int = 20) -> SimpleNamespace:

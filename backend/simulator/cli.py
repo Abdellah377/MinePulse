@@ -101,20 +101,21 @@ def cmd_generate_cycles(
         while engine.completed_cycle_count < target_cycles and ticks < tick_limit:
             engine.tick()
             ticks += 1
-        engine.failure_population.stop_scheduling()
         drain_ticks = 0
-        max_drain_ticks = math.ceil(
-            (
-                cfg.failure_population.degradation_max
-                + cfg.failure_population.repair_max
-            )
-            * 60.0
-            / (cfg.tick_seconds * cfg.speed)
-        ) + 10
-        while engine.failure_population.has_active_incidents and drain_ticks < max_drain_ticks:
-            engine.tick()
-            ticks += 1
-            drain_ticks += 1
+        if with_failures:
+            engine.failure_population.stop_scheduling()
+            max_drain_ticks = math.ceil(
+                (
+                    cfg.failure_population.degradation_max
+                    + cfg.failure_population.repair_max
+                )
+                * 60.0
+                / (cfg.tick_seconds * cfg.speed)
+            ) + 10
+            while engine.failure_population.has_active_incidents and drain_ticks < max_drain_ticks:
+                engine.tick()
+                ticks += 1
+                drain_ticks += 1
         engine.pause()
         interruption = engine.interrupt_open_cycles(reason="DATASET_GENERATION_COMPLETE")
         simulation_equipment_ids = select(Equipment.equipment_id).where(
@@ -154,6 +155,7 @@ def cmd_generate_cycles(
             "drain_ticks": drain_ticks,
             "sim_now": engine.clock.sim_now.isoformat(),
             "reached_target": completed >= target_cycles,
+            "failures_enabled": with_failures,
             "failures_drained": not engine.failure_population.has_active_incidents,
             "failure_population": (
                 engine.failure_population.developer_summary() if with_failures else None
@@ -206,7 +208,7 @@ def cmd_causal_run(
     return 0
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MinePulse FMS Simulator")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("seed", help="Seed static mine world")
@@ -237,7 +239,8 @@ def main() -> int:
     generate_p.add_argument(
         "--with-failures",
         action="store_true",
-        help="populate balanced, gradual mechanical incidents for failure-risk dataset audits",
+        default=False,
+        help="opt-in: enable the existing mechanical failure population during batch generation",
     )
     sub.add_parser("causal-list", help="List causal diagnostic scenarios")
     causal_p = sub.add_parser(
@@ -254,7 +257,11 @@ def main() -> int:
         action="store_true",
         help="Sleep between ticks so progression can be watched in the UI",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     if args.cmd == "seed":
         return cmd_seed()
