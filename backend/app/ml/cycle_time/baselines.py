@@ -53,6 +53,21 @@ class MedianBaselines:
                 out.append(self.global_median)
         return out
 
+    def predict_truck_route_global(self, rows: list[FeatureRow]) -> list[float]:
+        """Official V1 deterministic strategy: truck → route → global. Never returns 0 unless the train median is 0."""
+        out: list[float] = []
+        for row in rows:
+            truck = row.values.get("truck_code")
+            if truck and truck != MISSING_CAT and truck in self.by_truck:
+                out.append(self.by_truck[truck])
+                continue
+            route = _route_token(row)
+            if route in self.by_route:
+                out.append(self.by_route[route])
+                continue
+            out.append(self.global_median)
+        return out
+
     def predict(self, name: str, rows: list[FeatureRow]) -> list[float]:
         if name == "global":
             return self.predict_global(rows)
@@ -60,4 +75,6 @@ class MedianBaselines:
             return self.predict_route(rows)
         if name == "truck":
             return self.predict_truck(rows)
+        if name == "truck_route_global":
+            return self.predict_truck_route_global(rows)
         raise KeyError(name)

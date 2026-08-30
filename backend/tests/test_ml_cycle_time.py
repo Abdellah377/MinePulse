@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from inspect import signature
 from pathlib import Path
 
 from app.ml.cycle_time.baselines import MedianBaselines
-from app.ml.cycle_time.contracts import MODEL_VERSION, CycleTimeStatus, TRAINING_DATA_TYPE
+from app.ml.cycle_time.contracts import (
+    DETERMINISTIC_SERVED_PREDICTOR,
+    MIN_ML_RELATIVE_MAE_IMPROVEMENT,
+    MODEL_VERSION,
+    CycleTimeStatus,
+    ModelStatus,
+    TRAINING_DATA_TYPE,
+)
 from app.ml.cycle_time.dataset import (
     CycleRecord,
     CycleSnapshot,
@@ -16,7 +25,7 @@ from app.ml.cycle_time.dataset import (
     select_training_cycles,
     training_target_minutes,
 )
-from app.ml.cycle_time.evaluation import apply_residual_bounds
+from app.ml.cycle_time.evaluation import apply_residual_bounds, residual_quantiles, targets
 from app.ml.cycle_time.features import (
     FEATURE_NAMES,
     FORBIDDEN_FEATURE_NAMES,
@@ -25,6 +34,7 @@ from app.ml.cycle_time.features import (
 )
 from app.ml.cycle_time.inference import predict_feature_rows, predict_from_snapshot, resolve_artifact
 from app.ml.cycle_time.model import build_pipeline, predict_pipeline, rows_to_matrix
+from app.ml.cycle_time.policy import ServingDecision, select_served_predictor
 from app.ml.cycle_time.train import temporal_split, train_from_rows
 
 T0 = datetime(2026, 1, 29, 7, 0, tzinfo=timezone.utc)
@@ -209,6 +219,39 @@ def test_baseline_unseen_category_falls_back_to_global():
     unseen = build_feature_rows([_cycle(99, truck_id=3, origin=11, dest=21, start=400, duration_min=130)], _snapshot(cycles + [_cycle(99, truck_id=3, origin=11, dest=21, start=400, duration_min=130)]))
     assert fitted.predict_truck(unseen) == [fitted.global_median]
     assert fitted.predict_route(unseen) == [fitted.global_median]
+    assert fitted.predict_truck_route_global(unseen) == [fitted.global_median]
+    assert fitted.predict_truck_route_global(unseen)[0] != 0
+
+
+def test_hierarchical_fallback_truck_then_route_then_global():
+    cycles = [
+        *[_cycle(i, truck_id=1, origin=10, dest=20, start=i * 30, duration_min=80) for i in range(1, 6)],
+        *[_cycle(i, truck_id=2, origin=11, dest=21, start=200 + i * 30, duration_min=140) for i in range(6, 11)],
+    ]
+    rows = build_feature_rows(cycles, _snapshot(cycles))
+    fitted = MedianBaselines().fit(rows)
+    assert fitted.global_median != 0
+
+    known_truck = build_feature_rows(
+        [_cycle(90, truck_id=1, origin=11, dest=21, start=500, duration_min=130)],
+        _snapshot(cycles + [_cycle(90, truck_id=1, origin=11, dest=21, start=500, duration_min=130)]),
+    )
+    assert fitted.predict_truck_route_global(known_truck) == [fitted.by_truck["TRK-001"]]
+
+    unseen_truck_known_route = build_feature_rows(
+        [_cycle(91, truck_id=3, origin=10, dest=20, start=510, duration_min=130)],
+        _snapshot(cycles + [_cycle(91, truck_id=3, origin=10, dest=20, start=510, duration_min=130)]),
+    )
+    route_median = fitted.by_route["BANC_A|DUMP_S"]
+    assert fitted.predict_truck_route_global(unseen_truck_known_route) == [route_median]
+    assert route_median != fitted.global_median
+
+    unseen_both = build_feature_rows(
+        [_cycle(92, truck_id=3, origin=11, dest=20, start=520, duration_min=130)],
+        _snapshot(cycles + [_cycle(92, truck_id=3, origin=11, dest=20, start=520, duration_min=130)]),
+    )
+    assert fitted.predict_truck_route_global(unseen_both) == [fitted.global_median]
+    assert fitted.predict_truck_route_global(unseen_both)[0] != 0
 
 
 def test_pipeline_trains_and_returns_finite_predictions():
@@ -241,7 +284,37 @@ def test_residual_bounds_and_train_metadata():
     for value, lower, upper in val_pred:
         assert lower <= value <= upper
         assert math_isfinite(value)
-    assert report["model_status"] in {"MODEL_BEATS_BASELINE", "BASELINE_NOT_BEATEN"}
+    expected = select_served_predictor(
+        report["hgb_validation"]["mae"],
+        {name: metrics["mae"] for name, metrics in report["baseline_validation"].items()},
+    )
+    assert report["promotion_threshold"] == MIN_ML_RELATIVE_MAE_IMPROVEMENT
+    assert report["selection"]["test_set_used_for_selection"] is False
+    assert report["served_predictor"] == expected.served_predictor
+    assert report["ml_promoted"] == expected.ml_promoted
+    assert report["decision_reason"] == expected.decision_reason
+    assert report["hgb_validation_mae"] == report["hgb_validation"]["mae"]
+    assert report["best_baseline_validation_mae"] == expected.best_baseline_mae
+    assert "truck_route_global" in report["baseline_validation"]
+    assert artifact.pipeline is not None
+    assert artifact.served_predictor == report["served_predictor"]
+    if report["ml_promoted"]:
+        assert report["model_status"] == ModelStatus.MODEL_BEATS_BASELINE.value
+        assert report["served_predictor"] == "hgb"
+        assert report["relative_mae_improvement"] >= MIN_ML_RELATIVE_MAE_IMPROVEMENT
+    else:
+        assert report["model_status"] == ModelStatus.BASELINE_NOT_BEATEN.value
+        assert report["served_predictor"] == DETERMINISTIC_SERVED_PREDICTOR
+        assert report["hgb_role"] == "experimental"
+
+    train, val, _test = temporal_split(rows)
+    if artifact.served_predictor == "hgb":
+        served_preds = predict_pipeline(artifact.pipeline, val)
+    else:
+        served_preds = artifact.baselines.predict(artifact.served_predictor, val)
+    q10, q90 = residual_quantiles(targets(val), served_preds)
+    assert artifact.residual_q10 == q10
+    assert artifact.residual_q90 == q90
     _ = lo, hi
 
 
@@ -282,3 +355,154 @@ def test_inference_available_unavailable_and_insufficient_history(tmp_path: Path
     mismatch.feature_names = ("not_a_real_feature",)
     bad_schema = resolve_artifact(artifact=mismatch)
     assert bad_schema.status == CycleTimeStatus.UNAVAILABLE.value or bad_schema.status == CycleTimeStatus.UNAVAILABLE
+
+
+def _deterministic_maes() -> dict[str, float]:
+    return {"global": 12.0, "route": 11.0, "truck": 10.0, "truck_route_global": 10.0}
+
+
+def test_hgb_loss_keeps_deterministic_served():
+    decision = select_served_predictor(11.0, _deterministic_maes())
+    assert decision.ml_promoted is False
+    assert decision.served_predictor == DETERMINISTIC_SERVED_PREDICTOR
+    assert decision.model_status == ModelStatus.BASELINE_NOT_BEATEN
+    assert decision.hgb_role == "experimental"
+    assert decision.promotion_threshold == MIN_ML_RELATIVE_MAE_IMPROVEMENT
+    meta = decision.metadata()
+    assert meta["ml_promoted"] is False
+    assert meta["served_predictor"] == "truck_route_global"
+    assert "did not beat" in decision.decision_reason
+
+
+def test_trivial_hgb_win_is_not_promoted():
+    for hgb_mae in (9.7, 9.8):
+        decision = select_served_predictor(hgb_mae, _deterministic_maes())
+        assert decision.ml_promoted is False
+        assert decision.served_predictor == DETERMINISTIC_SERVED_PREDICTOR
+        assert decision.model_status == ModelStatus.BASELINE_NOT_BEATEN
+        assert decision.relative_mae_improvement is not None
+        assert decision.relative_mae_improvement < MIN_ML_RELATIVE_MAE_IMPROVEMENT
+        assert decision.decision_reason == "ML improvement below minimum promotion threshold"
+        assert decision.metadata()["promotion_threshold"] == 0.05
+
+
+def test_meaningful_hgb_win_is_promoted():
+    at_threshold = select_served_predictor(9.5, _deterministic_maes())
+    assert at_threshold.ml_promoted is True
+    assert at_threshold.served_predictor == "hgb"
+    assert at_threshold.model_status == ModelStatus.MODEL_BEATS_BASELINE
+    assert at_threshold.relative_mae_improvement >= MIN_ML_RELATIVE_MAE_IMPROVEMENT
+    assert at_threshold.hgb_role == "served"
+    above = select_served_predictor(9.4, _deterministic_maes())
+    assert above.ml_promoted is True
+    assert above.served_predictor == "hgb"
+
+
+def test_select_served_predictor_rejects_test_set_as_an_input():
+    params = signature(select_served_predictor).parameters
+    assert list(params) == ["hgb_val_mae", "deterministic_val_mae", "threshold"]
+    huge_test_win = select_served_predictor(9.7, _deterministic_maes())
+    assert huge_test_win.ml_promoted is False
+    assert huge_test_win.served_predictor != "hgb"
+
+
+def test_train_selection_uses_validation_maes_only(monkeypatch):
+    captured: dict = {}
+    real = select_served_predictor
+
+    def wrapper(hgb_val_mae, deterministic_val_mae, **kwargs):
+        captured["hgb"] = hgb_val_mae
+        captured["baselines"] = dict(deterministic_val_mae)
+        captured["kwargs"] = dict(kwargs)
+        return real(hgb_val_mae, deterministic_val_mae, **kwargs)
+
+    monkeypatch.setattr("app.ml.cycle_time.train.select_served_predictor", wrapper)
+    cycles = [
+        _cycle(i, truck_id=1 + (i % 4), loader_id=100 + (i % 2), origin=10 + (i % 2), dest=20, start=i * 20, duration_min=90 + (i % 6) * 5)
+        for i in range(1, 41)
+    ]
+    rows = build_feature_rows(cycles, _snapshot(cycles))
+    artifact, report = train_from_rows(rows)
+    assert captured["hgb"] == report["hgb_validation"]["mae"]
+    assert set(captured["baselines"]) == set(report["baseline_validation"])
+    for name, mae in captured["baselines"].items():
+        assert mae == report["baseline_validation"][name]["mae"]
+    assert report["selection"]["test_set_used_for_selection"] is False
+    expected = real(
+        report["hgb_validation"]["mae"],
+        {name: metrics["mae"] for name, metrics in report["baseline_validation"].items()},
+    )
+    assert report["served_predictor"] == expected.served_predictor
+    assert report["ml_promoted"] == expected.ml_promoted
+    assert artifact.pipeline is not None
+
+
+def test_runtime_inference_follows_served_predictor():
+    cycles = [
+        _cycle(i, truck_id=1 + (i % 4), loader_id=100 + (i % 2), origin=10 + (i % 2), dest=20, start=i * 20, duration_min=90 + (i % 6) * 5)
+        for i in range(1, 41)
+    ]
+    rows = build_feature_rows(cycles, _snapshot(cycles))
+    artifact, report = train_from_rows(rows)
+    sample = rows[-4:]
+    hierarchical = artifact.baselines.predict_truck_route_global(sample)
+    hgb = predict_pipeline(artifact.pipeline, sample)
+    det = replace(artifact, served_predictor="truck_route_global")
+    ml = replace(artifact, served_predictor="hgb")
+    assert [item[0] for item in predict_feature_rows(det, sample)] == hierarchical
+    assert [item[0] for item in predict_feature_rows(ml, sample)] == hgb
+    live = [item[0] for item in predict_feature_rows(artifact, sample)]
+    if report["served_predictor"] == "hgb":
+        assert live == hgb
+    else:
+        assert live == hierarchical
+        assert report["served_predictor"] == DETERMINISTIC_SERVED_PREDICTOR
+
+
+def test_uncertainty_uses_hgb_residuals_when_hgb_is_served(monkeypatch):
+    def always_promote(hgb_val_mae, deterministic_val_mae, **kwargs):
+        best = min(deterministic_val_mae, key=deterministic_val_mae.get)
+        return ServingDecision(
+            served_predictor="hgb",
+            model_status=ModelStatus.MODEL_BEATS_BASELINE,
+            ml_promoted=True,
+            best_baseline=best,
+            best_baseline_mae=deterministic_val_mae[best],
+            hgb_mae=hgb_val_mae,
+            absolute_mae_improvement=1.0,
+            relative_mae_improvement=0.10,
+            promotion_threshold=MIN_ML_RELATIVE_MAE_IMPROVEMENT,
+            decision_reason="forced promotion for test",
+            hgb_role="served",
+        )
+
+    monkeypatch.setattr("app.ml.cycle_time.train.select_served_predictor", always_promote)
+    cycles = [
+        _cycle(i, truck_id=1 + (i % 4), loader_id=100 + (i % 2), origin=10 + (i % 2), dest=20, start=i * 20, duration_min=90 + (i % 6) * 5)
+        for i in range(1, 41)
+    ]
+    rows = build_feature_rows(cycles, _snapshot(cycles))
+    artifact, report = train_from_rows(rows)
+    assert report["served_predictor"] == "hgb"
+    assert report["ml_promoted"] is True
+    _train, val, _test = temporal_split(rows)
+    expected = residual_quantiles(targets(val), predict_pipeline(artifact.pipeline, val))
+    assert (artifact.residual_q10, artifact.residual_q90) == expected
+    sample = rows[-3:]
+    assert [item[0] for item in predict_feature_rows(artifact, sample)] == predict_pipeline(artifact.pipeline, sample)
+
+
+def test_hgb_artifact_remains_available_when_not_promoted():
+    cycles = [
+        _cycle(i, truck_id=1 + (i % 4), origin=10 + (i % 2), dest=20, start=i * 22, duration_min=95 + (i % 4) * 4)
+        for i in range(1, 36)
+    ]
+    rows = build_feature_rows(cycles, _snapshot(cycles))
+    artifact, report = train_from_rows(rows)
+    assert artifact.pipeline is not None
+    preds = predict_pipeline(artifact.pipeline, rows[-2:])
+    assert len(preds) == 2
+    assert all(pred == pred and pred > 0 for pred in preds)
+    if not report["ml_promoted"]:
+        assert report["hgb_role"] == "experimental"
+        assert report["served_predictor"] == DETERMINISTIC_SERVED_PREDICTOR

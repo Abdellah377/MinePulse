@@ -15,6 +15,9 @@ MODEL_VERSION = "cycle_time_v1"
 TRAINING_DATA_TYPE = "synthetic"
 DATA_CLASS = "synthetic_prototype"
 PREDICTION_TIMESTAMP_DEFINITION = "Cycle.started_at"
+# Official V1 served strategy when HGB is not promoted: truck → route → global.
+DETERMINISTIC_SERVED_PREDICTOR = "truck_route_global"
+MIN_ML_RELATIVE_MAE_IMPROVEMENT = 0.05
 
 
 class CycleTimeStatus(str, Enum):

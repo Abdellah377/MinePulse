@@ -59,15 +59,48 @@ cycle distance written at dump, post-start alerts/telemetry, `shift_id`,
 road grade/quality, simulator `performance_factor` / scenario names.
 
 Historical aggregates never use the test set or later completions. The
-temporal split is 70/15/15 by `started_at` with no shuffle. Residual
-intervals (10th–90th percentile) are fit on **validation** residuals of the
-**served** predictor.
+temporal split is 70/15/15 by `started_at` with no shuffle.
+
+## Served predictor
+
+Cycle-Time V1 is served using a **deterministic hierarchical median**:
+
+`truck median → route median → global median`
+
+That is the official V1 strategy: the simplest predictor that has been reliable
+across repeated synthetic seeds. Online inference still adapts to available
+truck and route history; it does not hardcode a single constant.
+
+HGB remains an **experimental candidate**. It is always trained, evaluated, and
+stored in the artifact so it can be re-checked when richer synthetic data or
+real mine data is available. It is **not** the default served predictor.
+
+### Promotion rule (validation only)
+
+HGB may be promoted only when **both** are true:
+
+1. HGB validation MAE is lower than the best deterministic baseline validation MAE
+2. Relative MAE improvement is at least `MIN_ML_RELATIVE_MAE_IMPROVEMENT = 0.05` (5%)
+
+```
+(best_baseline_mae - hgb_mae) / best_baseline_mae >= 0.05
+```
+
+A 2–3% validation-only win does **not** promote HGB. The test set is never used
+for model selection; it is reported only.
+
+`MODEL_BEATS_BASELINE` is set only when HGB is actually promoted.
+`BASELINE_NOT_BEATEN` covers both an HGB loss and a trivial win below 5%.
+
+All current numbers are synthetic / prototype only. Real mine data may change
+the serving decision later.
 
 ## Baselines vs ML
 
-Train-only global / route / truck medians. HGB is selected on validation MAE
-against those baselines. If HGB does not beat the best baseline,
-`MODEL_STATUS=BASELINE_NOT_BEATEN` and inference serves that baseline.
+Train-only global / route / truck medians plus the hierarchical
+`truck_route_global` strategy. HGB is compared on **validation** MAE. Residual
+intervals (10th–90th percentile) are fit on **validation** residuals of the
+**served** predictor (the hierarchical baseline today; HGB only if promoted).
 
 ## Inference (internal only)
 

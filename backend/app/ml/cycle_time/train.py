@@ -19,7 +19,7 @@ from typing import Any
 import sklearn
 
 from app.ml.cycle_time.baselines import MedianBaselines
-from app.ml.cycle_time.contracts import MODEL_VERSION, TRAINING_DATA_TYPE, ModelStatus
+from app.ml.cycle_time.contracts import MODEL_VERSION, TRAINING_DATA_TYPE
 from app.ml.cycle_time.dataset import load_snapshot, select_training_cycles
 from app.ml.cycle_time.evaluation import improvement, regression_metrics, residual_quantiles, slice_metrics, targets
 from app.ml.cycle_time.features import FEATURE_NAMES, FeatureRow, build_feature_rows, missing_rates
@@ -33,6 +33,7 @@ from app.ml.cycle_time.model import (
     rows_to_matrix,
     save_artifact as write_joblib,
 )
+from app.ml.cycle_time.policy import select_served_predictor
 
 METADATA_NAME = f"{MODEL_VERSION}.metadata.json"
 
@@ -120,24 +121,28 @@ def train_from_rows(
         "global": regression_metrics(targets(val), baselines.predict_global(val)),
         "route": regression_metrics(targets(val), baselines.predict_route(val)),
         "truck": regression_metrics(targets(val), baselines.predict_truck(val)),
+        "truck_route_global": regression_metrics(targets(val), baselines.predict_truck_route_global(val)),
     }
+    hgb, hgb_val, hgb_params = _select_hgb(train, val)
+
+    # Selection uses validation MAE only. Test metrics are computed after this
+    # call and are never passed into select_served_predictor.
+    decision = select_served_predictor(
+        hgb_val["mae"],
+        {name: metrics["mae"] for name, metrics in baseline_val.items()},
+    )
+    served = decision.served_predictor
+    status = decision.model_status
+
     baseline_test = {
         "global": regression_metrics(targets(test), baselines.predict_global(test)) if test else {},
         "route": regression_metrics(targets(test), baselines.predict_route(test)) if test else {},
         "truck": regression_metrics(targets(test), baselines.predict_truck(test)) if test else {},
+        "truck_route_global": (
+            regression_metrics(targets(test), baselines.predict_truck_route_global(test)) if test else {}
+        ),
     }
-    hgb, hgb_val, hgb_params = _select_hgb(train, val)
     hgb_test = regression_metrics(targets(test), predict_pipeline(hgb, test)) if test else {}
-
-    baseline_maes = {name: metrics["mae"] for name, metrics in baseline_val.items()}
-    best_baseline_name = min(baseline_maes, key=baseline_maes.get)
-    best_baseline_mae = baseline_maes[best_baseline_name]
-    if hgb_val["mae"] < best_baseline_mae:
-        served = "hgb"
-        status = ModelStatus.MODEL_BEATS_BASELINE
-    else:
-        served = best_baseline_name
-        status = ModelStatus.BASELINE_NOT_BEATEN
 
     artifact = CycleTimeArtifact(
         pipeline=hgb,
@@ -185,9 +190,9 @@ def train_from_rows(
         "served_predictor": served,
         "served_validation": served_val,
         "served_test": served_test,
-        "best_baseline": best_baseline_name,
-        "best_baseline_validation": baseline_val[best_baseline_name],
-        "ml_vs_best_baseline_validation": improvement(best_baseline_mae, hgb_val["mae"]),
+        "best_baseline": decision.best_baseline,
+        "best_baseline_validation": baseline_val[decision.best_baseline],
+        "ml_vs_best_baseline_validation": improvement(decision.best_baseline_mae, hgb_val["mae"]),
         "uncertainty": {
             "method": "validation residual quantiles (10th-90th percentile) of the served predictor",
             "residual_q10": q10,
@@ -195,9 +200,14 @@ def train_from_rows(
             "label": "empirical prototype interval; not a calibrated production probability",
         },
         "model_status": status.value,
+        "selection": {
+            "uses": "validation_only",
+            "test_set_used_for_selection": False,
+        },
         "slice_validation_by_route_origin": slice_metrics(val, val_pred, "origin_code"),
         "slice_validation_by_loader": slice_metrics(val, val_pred, "loader_code"),
     }
+    report.update(decision.metadata())
     if extra_metadata:
         report.update(extra_metadata)
     artifact.metadata = report
@@ -227,6 +237,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"split train/val/test = {report['split']['train']['n']}/{report['split']['validation']['n']}/{report['split']['test']['n']}")
     print(f"best baseline={report['best_baseline']}  val MAE={report['best_baseline_validation']['mae']}")
     print(f"HGB val MAE={report['hgb_validation']['mae']}  served={report['served_predictor']}")
+    print(f"ml_promoted={report['ml_promoted']}  threshold={report['promotion_threshold']}  reason={report['decision_reason']}")
     print(f"served val={report['served_validation']}")
     print(f"served test={report['served_test']}")
     print(f"uncertainty q10/q90={report['uncertainty']['residual_q10']}/{report['uncertainty']['residual_q90']}")
