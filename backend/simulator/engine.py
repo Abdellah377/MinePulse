@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -38,6 +38,13 @@ from simulator.generators.events import emit_fms_alert, emit_system_event
 from simulator.generators.production import record_dump_production
 from simulator.generators.telemetry import build_telemetry
 from simulator.generators.tyres import tyre_rows
+from simulator.failure_lifecycle import (
+    PersistedFailureRecords,
+    reconcile_open_simulation_failures,
+    recover_mechanical_incident,
+    start_mechanical_incident,
+)
+from simulator.failure_population import FailurePopulationManager, PopulationIncident
 from simulator.geometry import (
     find_road,
     interpolate_linestring,
@@ -70,6 +77,10 @@ class SimulationEngine:
         self.cfg = cfg or SimConfig()
         self.world = SimulationWorld(self.cfg)
         self.causal_scenarios = CausalScenarioManager()
+        self.failure_population = FailurePopulationManager(
+            self.cfg.failure_population,
+            seed=self.cfg.random_seed,
+        )
         control = read_control()
         sim_now = datetime.fromisoformat(control["sim_now"])
         if sim_now.tzinfo is None:
@@ -91,6 +102,7 @@ class SimulationEngine:
         self.open_cycles: dict[str, int] = {}
         self.open_cycle_stages: dict[str, int] = {}
         self.open_trips: dict[str, int] = {}
+        self.open_failure_records: dict[str, PersistedFailureRecords] = {}
         self._last_queue_log: dict[str, int] = {}
         self._tick_count = 0
         self.completed_cycle_count = 0
@@ -112,6 +124,11 @@ class SimulationEngine:
             reason="SIMULATOR_ENGINE_RESTART",
         )
         self.startup_interrupted_cycles += lifecycle_counts["cycles"]
+        reconcile_open_simulation_failures(
+            self.session,
+            site_id=site.site_id,
+            reconciled_at=self.clock.sim_now,
+        )
         material = self.session.scalar(select(Material).where(Material.code == "PHOS_SIM"))
         self.material_id = material.material_id if material else None
         from simulator.shifts import ensure_simulation_shift
@@ -455,8 +472,14 @@ class SimulationEngine:
         # Causal scenarios progress independently of legacy/manual fault
         # injection. They mutate normal runtime signals; only resulting
         # operational records are persisted below.
-        causal_transitions = self.causal_scenarios.step(self.world, self.clock.sim_now)
-        self._persist_causal_transitions(causal_transitions)
+        population_update = self.failure_population.advance(
+            self.world,
+            self.causal_scenarios,
+            self.clock.sim_now,
+        )
+        for incident in population_update.recovered:
+            self._persist_failure_recovery(incident)
+        self._persist_causal_transitions(list(population_update.transitions))
         self.world.refresh_operating_conditions(self.clock.sim_now)
 
         # Auto scenarios only outside MANUAL mode
@@ -976,18 +999,120 @@ class SimulationEngine:
                     severity=severity,
                 )
             if transition.maintenance_required and equipment_id:
-                self.session.add(
-                    MaintenanceEvent(
-                        equipment_id=equipment_id,
-                        type="UNPLANNED_STOP",
-                        component=None,
-                        description="Unplanned stop pending inspection and diagnosis.",
-                        start_time=transition.occurred_at,
-                        severity=AlertSeverity.CRITICAL,
-                        status="OPEN",
-                        planned=False,
+                truck = self.world.trucks.get(transition.target_id)
+                if truck is not None and truck.mechanical_hold:
+                    self._interrupt_truck_work(
+                        truck,
+                        interrupted_at=transition.occurred_at,
                     )
-                )
+                    # Persist the authoritative operational state at the
+                    # incident timestamp.  Waiting for a later phase change
+                    # can lose the entire STOPPED_MECHANICAL interval.
+                    truck.phase = TruckPhase.STOPPED
+                    truck.speed_kmh = 0.0
+                    transition_truck(
+                        self.session,
+                        self.open_states,
+                        truck,
+                        transition.occurred_at,
+                        self.site_id or 0,
+                    )
+                    population_incident = self.failure_population.active.get(transition.run_id)
+                    expected_recovery_at = (
+                        population_incident.recovery_due_at
+                        if population_incident and population_incident.recovery_due_at
+                        else transition.occurred_at + timedelta(minutes=30)
+                    )
+                    records = start_mechanical_incident(
+                        self.session,
+                        equipment_id=equipment_id,
+                        started_at=transition.occurred_at,
+                        expected_recovery_at=expected_recovery_at,
+                        severity=AlertSeverity.CRITICAL,
+                    )
+                    self.open_failure_records[transition.run_id] = records
+                else:
+                    self.session.add(
+                        MaintenanceEvent(
+                            equipment_id=equipment_id,
+                            type="UNPLANNED_STOP",
+                            component=None,
+                            description="Unplanned stop pending inspection and diagnosis.",
+                            start_time=transition.occurred_at,
+                            severity=AlertSeverity.CRITICAL,
+                            status="OPEN",
+                            planned=False,
+                        )
+                    )
+
+    def _interrupt_truck_work(
+        self,
+        truck: TruckRuntime,
+        *,
+        interrupted_at: datetime,
+    ) -> None:
+        """Close in-flight work without converting interruption into a target."""
+
+        from simulator.cycle_lifecycle import interrupt_active_truck_work
+
+        interrupt_active_truck_work(
+            self.session,
+            cycle_id=self.open_cycles.pop(truck.code, None),
+            stage_id=self.open_cycle_stages.pop(truck.code, None),
+            trip_id=self.open_trips.pop(truck.code, None),
+            interrupted_at=interrupted_at,
+            reason="MECHANICAL_INCIDENT",
+        )
+        loader = self.world.loader_for_truck(truck)
+        if loader is not None:
+            loader.release_service(truck.code, requeue=False)
+        zone = self.world.zones.get(truck.origin_zone_code)
+        if zone is not None:
+            zone.leave(truck.code)
+
+    def _persist_failure_recovery(self, incident: PopulationIncident) -> None:
+        self._close_failure_recovery(
+            run_id=incident.run_id,
+            target_id=incident.target_id,
+            recovered_at=incident.recovered_at or self.clock.sim_now,
+        )
+
+    def _close_failure_recovery(
+        self,
+        *,
+        run_id: str,
+        target_id: str,
+        recovered_at: datetime,
+    ) -> None:
+        records = self.open_failure_records.pop(run_id, None)
+        if records is None:
+            return
+        recover_mechanical_incident(
+            self.session,
+            records,
+            recovered_at=recovered_at,
+        )
+        truck = self.world.trucks.get(target_id)
+        if truck is None:
+            return
+        self._bind_road(truck)
+        transition_truck(
+            self.session,
+            self.open_states,
+            truck,
+            recovered_at,
+            self.site_id or 0,
+        )
+        if truck.phase in CYCLE_PHASES and truck.code not in self.open_cycles:
+            self._start_cycle(truck)
+            self._open_cycle_stage(truck, truck.db_state())
+        emit_system_event(
+            self.session,
+            recovered_at,
+            "EQUIPMENT_RECOVERED",
+            truck.equipment_id,
+            f"{truck.code} returned to service after inspection.",
+        )
 
     def pause(self) -> None:
         self.clock.pause()
@@ -1019,6 +1144,7 @@ class SimulationEngine:
 
         with monitoring_reset_coordinator.reset_guard():
             self.causal_scenarios.reset(self.world)
+            self.failure_population.reset()
             self._clear_dynamic_data()
             self.world.clear_scenario_memory()
             clear_commands()
@@ -1027,6 +1153,7 @@ class SimulationEngine:
             self.open_cycles.clear()
             self.open_cycle_stages.clear()
             self.open_trips.clear()
+            self.open_failure_records.clear()
             self._last_queue_log.clear()
             self._tick_count = 0
             self.completed_cycle_count = 0
@@ -1076,6 +1203,11 @@ class SimulationEngine:
 
     def stop_causal_scenario(self, run_id: str) -> dict:
         run = self.causal_scenarios.stop(self.world, run_id)
+        self._close_failure_recovery(
+            run_id=run.run_id,
+            target_id=run.target_id,
+            recovered_at=self.clock.sim_now,
+        )
         self._persist_control()
         self.world.log_test(
             self.clock.sim_now,

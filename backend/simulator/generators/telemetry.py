@@ -101,6 +101,8 @@ def build_telemetry(truck: TruckRuntime) -> dict:
             target_temp = max(target_temp, 108.0)
         if truck.scenario_engine_temp_target is not None:
             target_temp = max(target_temp, truck.scenario_engine_temp_target)
+        if truck.scenario_engine_temp_ceiling is not None:
+            target_temp = min(target_temp, truck.scenario_engine_temp_ceiling)
         truck.engine_temp_c += (target_temp - truck.engine_temp_c) * 0.12 + jitter
         coolant_target = target_temp - 6.0
         if truck.scenario_coolant_temp_target is not None:
@@ -113,6 +115,8 @@ def build_telemetry(truck: TruckRuntime) -> dict:
             oil_target = min(oil_target, truck.scenario_oil_pressure_target)
         truck.oil_pressure_kpa += (oil_target - truck.oil_pressure_kpa) * 0.2
         batt_target = 23.0 if truck.battery_low else 27.4
+        if truck.scenario_battery_voltage_target is not None:
+            batt_target = min(batt_target, truck.scenario_battery_voltage_target)
         truck.battery_voltage += (batt_target - truck.battery_voltage) * 0.15
         comm_target = 94.0 + truck.rng.uniform(-3, 3)
         if truck.scenario_comm_quality_target is not None:

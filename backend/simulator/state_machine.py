@@ -112,7 +112,9 @@ class TruckRuntime:
     performance_factor: float = 1.0
     scenario_oil_pressure_target: float | None = None
     scenario_engine_temp_target: float | None = None
+    scenario_engine_temp_ceiling: float | None = None
     scenario_coolant_temp_target: float | None = None
+    scenario_battery_voltage_target: float | None = None
     scenario_comm_quality_target: float | None = None
     scenario_tyre_pressure_target: float | None = None
     scenario_tyre_temp_target: float | None = None

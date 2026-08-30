@@ -22,6 +22,7 @@ from simulator.clock import get_sim_logger
 from simulator.causal_scenarios import SCENARIO_SPECS, scenario_catalog, validate_trace
 from simulator.config import SimConfig
 from simulator.engine import SimulationEngine
+from simulator.failure_population import FailurePopulationConfig
 from simulator.seed import seed_static_world
 from simulator.world import SimWorld
 
@@ -74,6 +75,7 @@ def cmd_generate_cycles(
     sim_speed: float,
     verbose: bool,
     sample_every_ticks: int,
+    with_failures: bool = False,
 ) -> int:
     """Generate a fresh, reproducible simulation-site dataset without wall sleeps."""
 
@@ -90,6 +92,7 @@ def cmd_generate_cycles(
         cfg = SimConfig(random_seed=seed)
         cfg.speed = sim_speed
         cfg.persistence_sample_every_ticks = sample_every_ticks
+        cfg.failure_population = FailurePopulationConfig(enabled=with_failures)
         engine = SimulationEngine(session, cfg=cfg)
         engine.reset()
         engine.start()
@@ -98,6 +101,20 @@ def cmd_generate_cycles(
         while engine.completed_cycle_count < target_cycles and ticks < tick_limit:
             engine.tick()
             ticks += 1
+        engine.failure_population.stop_scheduling()
+        drain_ticks = 0
+        max_drain_ticks = math.ceil(
+            (
+                cfg.failure_population.degradation_max
+                + cfg.failure_population.repair_max
+            )
+            * 60.0
+            / (cfg.tick_seconds * cfg.speed)
+        ) + 10
+        while engine.failure_population.has_active_incidents and drain_ticks < max_drain_ticks:
+            engine.tick()
+            ticks += 1
+            drain_ticks += 1
         engine.pause()
         interruption = engine.interrupt_open_cycles(reason="DATASET_GENERATION_COMPLETE")
         simulation_equipment_ids = select(Equipment.equipment_id).where(
@@ -134,11 +151,16 @@ def cmd_generate_cycles(
             "active_cycles": active,
             "interrupted_at_generation_end": interruption["cycles"],
             "ticks": ticks,
+            "drain_ticks": drain_ticks,
             "sim_now": engine.clock.sim_now.isoformat(),
             "reached_target": completed >= target_cycles,
+            "failures_drained": not engine.failure_population.has_active_incidents,
+            "failure_population": (
+                engine.failure_population.developer_summary() if with_failures else None
+            ),
         }
         print(json.dumps(result, indent=2))
-        return 0 if result["reached_target"] and active == 0 else 2
+        return 0 if result["reached_target"] and active == 0 and result["failures_drained"] else 2
 
 
 def cmd_causal_list() -> int:
@@ -212,6 +234,11 @@ def main() -> int:
         default=2,
         help="persist position/telemetry every N ticks during batch generation",
     )
+    generate_p.add_argument(
+        "--with-failures",
+        action="store_true",
+        help="populate balanced, gradual mechanical incidents for failure-risk dataset audits",
+    )
     sub.add_parser("causal-list", help="List causal diagnostic scenarios")
     causal_p = sub.add_parser(
         "causal-run",
@@ -245,6 +272,7 @@ def main() -> int:
             args.sim_speed,
             args.verbose,
             args.sample_every_ticks,
+            args.with_failures,
         )
     if args.cmd == "causal-list":
         return cmd_causal_list()

@@ -65,6 +65,15 @@ SCENARIO_SPECS: dict[str, CausalScenarioSpec] = {
         observable_signals=("engine_temp_c", "coolant_temp_c", "speed_kmh"),
         final_behavior="MECHANICAL_STOP",
     ),
+    "electrical_degradation": CausalScenarioSpec(
+        scenario_id="electrical_degradation",
+        description="Progressive charging-system voltage degradation",
+        target_kind="TRUCK",
+        hidden_root_cause="charging_system_degradation",
+        default_duration_min=8.0,
+        observable_signals=("battery_voltage", "engine_load_pct", "speed_kmh"),
+        final_behavior="MECHANICAL_STOP",
+    ),
     "tyre_degradation": CausalScenarioSpec(
         scenario_id="tyre_degradation",
         description="Progressive tyre-pressure loss",
@@ -295,7 +304,9 @@ def _capture_truck(truck: TruckRuntime) -> dict[str, Any]:
         "fuel_rate_factor": truck.fuel_rate_factor,
         "scenario_oil_pressure_target": truck.scenario_oil_pressure_target,
         "scenario_engine_temp_target": truck.scenario_engine_temp_target,
+        "scenario_engine_temp_ceiling": truck.scenario_engine_temp_ceiling,
         "scenario_coolant_temp_target": truck.scenario_coolant_temp_target,
+        "scenario_battery_voltage_target": truck.scenario_battery_voltage_target,
         "scenario_comm_quality_target": truck.scenario_comm_quality_target,
         "scenario_tyre_pressure_target": truck.scenario_tyre_pressure_target,
         "scenario_tyre_temp_target": truck.scenario_tyre_temp_target,
@@ -445,6 +456,16 @@ class CausalScenarioManager:
             if progress >= 0.92:
                 truck.pre_stop_phase = truck.pre_stop_phase or truck.phase
                 truck.mechanical_hold = True
+        elif run.scenario_id == "electrical_degradation":
+            truck = entity
+            assert isinstance(truck, TruckRuntime)
+            truck.scenario_battery_voltage_target = max(
+                20.8, 27.5 - 7.0 * progress + 30.0 * bias["sensor_bias"]
+            )
+            truck.performance_factor = max(0.68, 1.0 - 0.32 * progress)
+            if progress >= 0.92:
+                truck.pre_stop_phase = truck.pre_stop_phase or truck.phase
+                truck.mechanical_hold = True
         elif run.scenario_id == "tyre_degradation":
             truck = entity
             assert isinstance(truck, TruckRuntime)
@@ -507,9 +528,12 @@ class CausalScenarioManager:
             truck.scenario_oil_pressure_target = (
                 425.0 - 88.0 * progress * strength + bias["pressure_bias"]
             )
-            truck.scenario_engine_temp_target = (
-                88.0 + 12.0 * progress * strength + bias["thermal_bias"]
-            )
+            # This profile represents a mechanical incident without a single
+            # threshold-crossing thermal precursor.  Keep a weak observable
+            # drift while allowing normal loaded operation to overlap warning
+            # ranges in unrelated healthy periods.
+            truck.scenario_engine_temp_target = 88.0 + 5.0 * progress * strength
+            truck.scenario_engine_temp_ceiling = 96.0 + 0.5 * bias["thermal_bias"]
             truck.scenario_comm_quality_target = 96.0 - 11.0 * progress * strength
             truck.performance_factor = max(0.74, 1.0 - 0.26 * progress * strength)
             if progress >= 0.92:
@@ -530,6 +554,7 @@ class CausalScenarioManager:
             "oil_pressure_target_kpa": entity.scenario_oil_pressure_target,
             "engine_temp_target_c": entity.scenario_engine_temp_target,
             "coolant_temp_target_c": entity.scenario_coolant_temp_target,
+            "battery_voltage_target": entity.scenario_battery_voltage_target,
             "communication_quality_target": entity.scenario_comm_quality_target,
             "tyre_pressure_target_kpa": entity.scenario_tyre_pressure_target,
             "tyre_temp_target_c": entity.scenario_tyre_temp_target,
@@ -676,7 +701,9 @@ class CausalScenarioManager:
         entity.fuel_rate_factor = original.get("fuel_rate_factor", 1.0)
         entity.scenario_oil_pressure_target = original["scenario_oil_pressure_target"]
         entity.scenario_engine_temp_target = original["scenario_engine_temp_target"]
+        entity.scenario_engine_temp_ceiling = original["scenario_engine_temp_ceiling"]
         entity.scenario_coolant_temp_target = original["scenario_coolant_temp_target"]
+        entity.scenario_battery_voltage_target = original["scenario_battery_voltage_target"]
         entity.scenario_comm_quality_target = original["scenario_comm_quality_target"]
         entity.scenario_tyre_pressure_target = original["scenario_tyre_pressure_target"]
         entity.scenario_tyre_temp_target = original["scenario_tyre_temp_target"]
@@ -711,6 +738,7 @@ def validate_trace(run: ActiveCausalScenario) -> list[str]:
                 "oil_pressure_target_kpa": 80.0,
                 "engine_temp_target_c": 10.0,
                 "coolant_temp_target_c": 10.0,
+                "battery_voltage_target": 2.0,
                 "communication_quality_target": 25.0,
                 "tyre_pressure_target_kpa": 90.0,
                 "tyre_temp_target_c": 12.0,

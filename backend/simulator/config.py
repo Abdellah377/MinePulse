@@ -1,5 +1,6 @@
 from app.config import get_settings
 from simulator.cycle_dynamics import CycleDynamicsConfig
+from simulator.failure_population import FailurePopulationConfig
 
 
 class SimConfig:
@@ -20,4 +21,7 @@ class SimConfig:
         self.default_truck_payload = 175.0
         self.scenario = "normal"
         self.cycle_dynamics = CycleDynamicsConfig()
+        # Opt-in for batch dataset generation. Interactive/manual causal
+        # scenarios continue to use the same underlying profile library.
+        self.failure_population = FailurePopulationConfig()
         self.persistence_sample_every_ticks = 1

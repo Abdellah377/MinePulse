@@ -100,3 +100,36 @@ def interrupt_active_simulation_cycles(
         "equipment_states": len(state_rows),
     }
 
+
+def interrupt_active_truck_work(
+    session: Session,
+    *,
+    cycle_id: int | None,
+    stage_id: int | None,
+    trip_id: int | None,
+    interrupted_at: datetime,
+    reason: str,
+) -> None:
+    """Interrupt one truck's in-memory work when a mechanical stop occurs."""
+
+    if stage_id is not None:
+        stage = session.get(CycleStage, stage_id)
+        if stage is not None and stage.end_time is None:
+            end = _safe_end(stage.start_time, interrupted_at)
+            stage.end_time = end
+            stage.duration_sec = int((end - _aware(stage.start_time)).total_seconds())
+            _metadata(stage, reason=reason)
+    if trip_id is not None:
+        trip = session.get(Trip, trip_id)
+        if trip is not None and trip.status == "ACTIVE":
+            trip.end_time = _safe_end(trip.start_time, interrupted_at)
+            trip.status = "INTERRUPTED"
+            _metadata(trip, reason=reason)
+    if cycle_id is not None:
+        cycle = session.get(Cycle, cycle_id)
+        if cycle is not None and cycle.status == "ACTIVE":
+            cycle.completed_at = _safe_end(cycle.started_at, interrupted_at)
+            cycle.total_duration_sec = None
+            cycle.status = "INTERRUPTED"
+            _metadata(cycle, reason=reason)
+    session.flush()

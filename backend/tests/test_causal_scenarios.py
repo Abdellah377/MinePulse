@@ -233,6 +233,7 @@ def test_scenario_catalog_contains_diagnostic_and_manual_sabotage_profiles():
     assert set(SCENARIO_SPECS) == {
         "lubrication_degradation",
         "cooling_degradation",
+        "electrical_degradation",
         "tyre_degradation",
         "communication_degradation",
         "loader_bottleneck",
