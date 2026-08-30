@@ -265,6 +265,18 @@ export interface RoutePath {
 
 export type AlertSeverity = "critical" | "warning" | "info"
 export type AlertStatus = "new" | "acknowledged" | "investigating" | "assigned" | "resolved"
+export type AlertSource = "FMS" | "SENSOR" | "RULE" | "PREDICTION" | "AI"
+
+export type AlertPredictionMeta = {
+  probability?: number | null
+  threshold?: number | null
+  horizonMinutes?: number | null
+  dataClass?: string | null
+  modelVersion?: string | null
+  modelType?: string | null
+  topSignals?: string[] | null
+  source?: string | null
+}
 
 export const ALERT_STATUS_LABEL: Record<AlertStatus, string> = {
   new: "Nouveau",
@@ -291,6 +303,8 @@ export interface Alert {
   updatedAt: number
   assignedTo: string | null
   resolution: string | null
+  source?: AlertSource
+  prediction?: AlertPredictionMeta | null
 }
 
 export interface TimelineSegment {

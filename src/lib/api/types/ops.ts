@@ -87,4 +87,15 @@ export type AlertDto = {
   updatedAt: number
   assignedTo: string | null
   resolution: string | null
+  source?: "FMS" | "SENSOR" | "RULE" | "PREDICTION" | "AI"
+  prediction?: {
+    probability?: number | null
+    threshold?: number | null
+    horizonMinutes?: number | null
+    dataClass?: string | null
+    modelVersion?: string | null
+    modelType?: string | null
+    topSignals?: string[] | null
+    source?: string | null
+  } | null
 }

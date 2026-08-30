@@ -330,6 +330,20 @@ def alert_to_dto(
     if assigned_label is None and alert.assigned_to and session is not None:
         op = session.get(Operator, alert.assigned_to)
         assigned_label = op.full_name if op else None
+    source = alert.source.value if hasattr(alert.source, "value") else alert.source
+    monitoring = meta.get("monitoring") if isinstance(meta.get("monitoring"), dict) else {}
+    prediction = None
+    if source == "PREDICTION":
+        prediction = {
+            "probability": monitoring.get("probability", monitoring.get("value")),
+            "threshold": monitoring.get("threshold"),
+            "horizonMinutes": monitoring.get("horizonMinutes"),
+            "dataClass": monitoring.get("dataClass"),
+            "modelVersion": monitoring.get("modelVersion"),
+            "modelType": monitoring.get("modelType"),
+            "topSignals": monitoring.get("topSignals") or [],
+            "source": monitoring.get("source"),
+        }
     return {
         "id": f"alert-{alert.alert_id}",
         "severity": ALERT_SEVERITY_TO_UI.get(alert.severity, "info"),
@@ -340,11 +354,13 @@ def alert_to_dto(
         "zoneId": zone_code,
         "location": zone_code or "Site",
         "category": alert.alert_type,
+        "source": source,
         "occurredAt": occurred,
         "createdAt": created,
         "updatedAt": updated,
         "assignedTo": assigned_label,
         "resolution": meta.get("resolution"),
+        "prediction": prediction,
     }
 
 

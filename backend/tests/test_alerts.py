@@ -57,8 +57,55 @@ def test_assigned_actor_label_persists_as_assigned_to_label():
     dto = alert_to_dto(out, {}, {})
     assert dto["status"] == "assigned"
     assert dto["assignedTo"] == "Régulateur de poste"
+    assert dto["source"] == "RULE"
+    assert dto["prediction"] is None
     assert dto["occurredAt"] == int(occurred_at.timestamp() * 1000)
     assert dto["createdAt"] == int(persisted_at.timestamp() * 1000)
+
+
+def test_prediction_alert_dto_preserves_source_and_does_not_invent_probability():
+    alert = Alert(
+        alert_id=7,
+        created_at=datetime(2026, 8, 30, 12, tzinfo=timezone.utc),
+        occurred_at=datetime(2026, 8, 30, 11, 50, tzinfo=timezone.utc),
+        source=AlertSource.PREDICTION,
+        severity=AlertSeverity.WARNING,
+        status=AlertStatus.NEW,
+        alert_type="PREDICTED_MECHANICAL_FAILURE_RISK",
+        title="Risque mécanique prédit — TRK-010",
+        description="Risque prédit élevé d'entrer en arrêt mécanique dans les 60 prochaines minutes.",
+        metadata_={
+            "monitoring": {
+                "probability": 0.74,
+                "threshold": 0.41,
+                "horizonMinutes": 60,
+                "dataClass": "synthetic_prototype",
+                "modelVersion": "failure_risk_v1",
+                "source": "FAILURE_RISK_V1",
+            }
+        },
+    )
+    dto = alert_to_dto(alert, {}, {})
+    assert dto["source"] == "PREDICTION"
+    assert dto["category"] == "PREDICTED_MECHANICAL_FAILURE_RISK"
+    assert dto["prediction"]["probability"] == 0.74
+    assert dto["prediction"]["horizonMinutes"] == 60
+    assert dto["prediction"]["dataClass"] == "synthetic_prototype"
+    assert "predictedFor" not in dto
+
+    bare = Alert(
+        alert_id=8,
+        created_at=datetime(2026, 8, 30, 12, tzinfo=timezone.utc),
+        source=AlertSource.PREDICTION,
+        severity=AlertSeverity.WARNING,
+        status=AlertStatus.NEW,
+        alert_type="PREDICTED_MECHANICAL_FAILURE_RISK",
+        title="Risque mécanique prédit",
+        metadata_={},
+    )
+    bare_dto = alert_to_dto(bare, {}, {})
+    assert bare_dto["source"] == "PREDICTION"
+    assert bare_dto["prediction"]["probability"] is None
 
 
 def test_legacy_alert_operational_time_falls_back_to_created_at():
