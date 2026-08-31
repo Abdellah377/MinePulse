@@ -18,6 +18,7 @@ const DISMISS_MS = 8_000
 export function AlertToasts() {
   const alerts = useOpsStore((s) => s.alerts)
   const equipment = useOpsStore((s) => s.equipment)
+  const apiBootstrapped = useOpsStore((s) => s.apiBootstrapped)
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace)
   const navigate = useNavigate()
   const seen = useRef<Set<string> | null>(null)
@@ -25,14 +26,14 @@ export function AlertToasts() {
 
   useEffect(() => {
     const codes = new Map(equipment.map((item) => [item.id, item.code]))
-    const { seen: next, fresh } = diffNewAlerts(seen.current, alerts)
+    const { seen: next, fresh } = diffNewAlerts(seen.current, alerts, apiBootstrapped)
     seen.current = next
     if (!fresh.length) return
     const incoming = fresh.map((alert) =>
       toAlertNotice(alert, alert.equipmentId ? codes.get(alert.equipmentId) : null),
     )
     setNotices((current) => [...incoming, ...current].slice(0, MAX_TOASTS))
-  }, [alerts, equipment])
+  }, [alerts, equipment, apiBootstrapped])
 
   useEffect(() => {
     if (!notices.length) return

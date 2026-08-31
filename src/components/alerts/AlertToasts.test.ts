@@ -42,6 +42,7 @@ it("API mode never imports demo prediction intelligence for toasts", () => {
   expect(source).not.toContain("buildPredictionIntelligence")
   expect(source).not.toContain("alertIntelligence")
   expect(source).toContain("diffNewAlerts")
+  expect(source).toContain("apiBootstrapped")
   expect(source).toContain("alertWorkspaceContext")
   expect(readFileSync("src/components/layout/AppShell.tsx", "utf8")).toContain("AlertToasts")
 })

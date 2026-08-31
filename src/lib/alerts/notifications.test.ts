@@ -38,7 +38,33 @@ const prediction: Alert = {
 it("does not emit notices for historical alerts present at first observation", () => {
   const first = diffNewAlerts(null, [current, prediction])
   expect(first.fresh).toEqual([])
-  expect([...first.seen]).toEqual(["alert-1", "alert-pred"])
+  expect([...first.seen!]).toEqual(["alert-1", "alert-pred"])
+})
+
+it("does not emit notices for historical alerts present at first observation", () => {
+  const first = diffNewAlerts(null, [current, prediction])
+  expect(first.fresh).toEqual([])
+  expect([...first.seen!]).toEqual(["alert-1", "alert-pred"])
+})
+
+it("does not treat the empty pre-bootstrap list as the seen baseline", () => {
+  const historicalA = current
+  const historicalB = prediction
+  const arriving = { ...current, id: "alert-d", title: "Arrêt inattendu" }
+
+  const beforeBootstrap = diffNewAlerts(null, [], false)
+  expect(beforeBootstrap.fresh).toEqual([])
+  expect(beforeBootstrap.seen).toBeNull()
+
+  const firstReady = diffNewAlerts(beforeBootstrap.seen, [historicalA, historicalB], true)
+  expect(firstReady.fresh).toEqual([])
+  expect([...firstReady.seen!]).toEqual(["alert-1", "alert-pred"])
+
+  const withNew = diffNewAlerts(firstReady.seen, [historicalA, historicalB, arriving], true)
+  expect(withNew.fresh).toEqual([arriving])
+
+  const polledAgain = diffNewAlerts(withNew.seen, [historicalA, historicalB, arriving], true)
+  expect(polledAgain.fresh).toEqual([])
 })
 
 it("emits one notice for a newly arriving current alert and one for a prediction", () => {

@@ -14,7 +14,11 @@ export type AlertNotice = {
 export function diffNewAlerts<T extends Pick<Alert, "id">>(
   seenIds: ReadonlySet<string> | null,
   alerts: readonly T[],
-): { seen: Set<string>; fresh: T[] } {
+  ready = true,
+): { seen: Set<string> | null; fresh: T[] } {
+  if (!ready) {
+    return { seen: null, fresh: [] }
+  }
   const currentIds = alerts.map((alert) => alert.id)
   if (seenIds == null) {
     return { seen: new Set(currentIds), fresh: [] }
