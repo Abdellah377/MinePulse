@@ -180,6 +180,7 @@ it("Prédictions tab shows only prediction-source alerts and labels them as Pré
   expect(html).not.toContain(fixtures.currentA.title)
   expect(html).not.toContain(fixtures.currentB.title)
   expect(html).not.toContain("Le camion va tomber en panne")
+  expect(html).toContain("Pourquoi ?")
   expect(fixtures.demo).not.toHaveBeenCalled()
   expect(fixtures.start).not.toHaveBeenCalled()
 })

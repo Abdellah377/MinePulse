@@ -1,14 +1,18 @@
+import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { FailureRiskDto, FailureRiskLevel } from "@/lib/api/types/ops"
 import {
+  FAILURE_RISK_LOADING_COPY,
   FAILURE_RISK_PROTOTYPE_LABEL,
   FAILURE_RISK_PROTOTYPE_WARNING,
+  FAILURE_RISK_SIGNALS_UNAVAILABLE,
   FAILURE_RISK_WINDOW_COPY,
   RISK_LEVEL_LABEL,
+  failureRiskWhy,
   formatFailureRiskPercent,
-  signalLabel,
 } from "@/lib/equipment/failureRisk"
+import { AiExplanationBlock, AiExplanationPanel, AiWhyButton } from "@/components/ai/AiExplanation"
 import { cn } from "@/lib/utils"
 
 const LEVEL_BADGE: Record<FailureRiskLevel, string> = {
@@ -17,10 +21,47 @@ const LEVEL_BADGE: Record<FailureRiskLevel, string> = {
   LOW: "border-transparent bg-muted text-muted",
 }
 
-export function FailureRiskCard({ prediction }: { prediction: FailureRiskDto }) {
+export function FailureRiskCard({
+  prediction,
+  loading,
+  error,
+}: {
+  prediction?: FailureRiskDto | null
+  loading?: boolean
+  error?: string | null
+}) {
+  const [whyOpen, setWhyOpen] = useState(false)
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[7.5rem] flex-col gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-3" role="status">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-2">
+          Risque de panne mécanique
+        </p>
+        <p className="text-xs text-muted">{FAILURE_RISK_LOADING_COPY}</p>
+        <div className="mt-1 h-7 w-16 animate-pulse rounded-md bg-surface-3" />
+        <div className="h-3 w-full animate-pulse rounded-sm bg-surface-3" />
+        <div className="h-3 w-2/3 animate-pulse rounded-sm bg-surface-3" />
+      </div>
+    )
+  }
+
+  if (!prediction) {
+    return (
+      <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-3">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-2">
+          Risque de panne mécanique
+        </p>
+        <p className="text-xs text-muted">Prédiction indisponible.</p>
+        {error && <p className="text-[10px] text-muted-2">{error}</p>}
+      </div>
+    )
+  }
+
+  const why = failureRiskWhy(prediction)
   const available =
     prediction.status === "AVAILABLE" && prediction.riskProbability != null
-  const horizon = prediction.horizonMinutes || 60
+  const horizon = why.horizonMinutes
 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-3">
@@ -54,25 +95,38 @@ export function FailureRiskCard({ prediction }: { prediction: FailureRiskDto }) 
           </div>
           <p className="text-[11px] leading-snug text-muted">{FAILURE_RISK_WINDOW_COPY}</p>
           <p className="text-[10px] text-muted-2">Prochaines {horizon} minutes</p>
+          <AiWhyButton expanded={whyOpen} onClick={() => setWhyOpen((open) => !open)} />
+          <AiExplanationPanel open={whyOpen}>
+            <AiExplanationBlock label="Ce que l’IA a observé">
+              Prédiction de modèle — probabilité d’un arrêt mécanique dans les {horizon} prochaines minutes, pas un fait observé.
+            </AiExplanationBlock>
+            <AiExplanationBlock label="Risque actuel">
+              {why.probabilityLabel}
+            </AiExplanationBlock>
+            <AiExplanationBlock label="Horizon">{horizon} min</AiExplanationBlock>
+            <AiExplanationBlock label="Pourquoi le modèle estime-t-il ce risque ?">
+              {why.signalsAvailable ? (
+                <ul className="list-disc pl-4">
+                  {why.signals.map((label) => (
+                    <li key={label}>{label}</li>
+                  ))}
+                </ul>
+              ) : (
+                FAILURE_RISK_SIGNALS_UNAVAILABLE
+              )}
+            </AiExplanationBlock>
+            <AiExplanationBlock label="Confiance / incertitude">
+              {why.prototype
+                ? FAILURE_RISK_PROTOTYPE_WARNING
+                : "Prédiction de modèle, pas une panne confirmée."}
+              {why.modelVersion ? ` Version ${why.modelVersion}.` : ""}
+            </AiExplanationBlock>
+          </AiExplanationPanel>
         </>
       ) : prediction.status === "INSUFFICIENT_HISTORY" ? (
         <p className="text-xs text-muted">Historique insuffisant pour prédire.</p>
       ) : (
         <p className="text-xs text-muted">Prédiction indisponible.</p>
-      )}
-
-      {available && prediction.topPredictiveSignals.length > 0 && (
-        <details className="text-[11px] text-muted">
-          <summary className="cursor-pointer text-muted-2">Signaux associés</summary>
-          <p className="mt-1 text-[10px] text-muted-2">
-            Signaux associés au modèle, pas des causes confirmées.
-          </p>
-          <ul className="mt-1 list-disc pl-4">
-            {prediction.topPredictiveSignals.map((name) => (
-              <li key={name}>{signalLabel(name)}</li>
-            ))}
-          </ul>
-        </details>
       )}
     </div>
   )

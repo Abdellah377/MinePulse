@@ -32,6 +32,43 @@ export function signalLabel(name: string): string {
   return SIGNAL_LABELS[name] ?? name.replaceAll("_", " ")
 }
 
+export function failureRiskWhy(prediction: FailureRiskDto) {
+  const signals = (prediction.topPredictiveSignals ?? []).map((name) => signalLabel(name))
+  return {
+    horizonMinutes: prediction.horizonMinutes || 60,
+    probabilityLabel:
+      prediction.riskProbability != null ? formatFailureRiskPercent(prediction.riskProbability) : null,
+    signals,
+    signalsAvailable: signals.length > 0,
+    prototype: prediction.dataClass === "synthetic_prototype",
+    modelVersion: prediction.modelVersion,
+  }
+}
+
+export const FAILURE_RISK_LOADING_COPY = "Calcul du risque de panne mécanique…"
+export const FAILURE_RISK_SIGNALS_UNAVAILABLE =
+  "Les facteurs explicatifs détaillés ne sont pas disponibles pour cette prédiction."
+
+export type FailureRiskView =
+  | { kind: "hidden" }
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; prediction: FailureRiskDto }
+
+export function failureRiskView(input: {
+  apiMode: boolean
+  equipmentType: string
+  loading: boolean
+  error: string | null
+  prediction: FailureRiskDto | null
+}): FailureRiskView {
+  if (input.equipmentType !== "haul_truck") return { kind: "hidden" }
+  if (input.apiMode && input.loading && !input.prediction) return { kind: "loading" }
+  if (input.prediction) return { kind: "ready", prediction: input.prediction }
+  if (input.apiMode && input.error) return { kind: "error", message: input.error }
+  return { kind: "hidden" }
+}
+
 function hashSeed(id: string) {
   let h = 0
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0

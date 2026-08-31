@@ -17,7 +17,7 @@ import {
 import { useOpsStore } from "@/lib/store/useOpsStore"
 import { fetchEquipmentDetail, useApiMode, type EquipmentMaintenanceRow } from "@/lib/api/client"
 import type { FailureRiskDto } from "@/lib/api/types/ops"
-import { demoFailureRisk } from "@/lib/equipment/failureRisk"
+import { demoFailureRisk, failureRiskView } from "@/lib/equipment/failureRisk"
 import { FailureRiskCard } from "@/components/equipment/FailureRiskCard"
 import { shiftWindowBounds } from "@/lib/ops/shiftWindow"
 import { useUiStore } from "@/lib/store/useUiStore"
@@ -126,18 +126,21 @@ export function EquipmentDetailContent({
   const [maintenanceRows, setMaintenanceRows] = useState<EquipmentMaintenanceRow[] | null>(null)
   const [apiFailureRisk, setApiFailureRisk] = useState<FailureRiskDto | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailLoading, setDetailLoading] = useState(useApiMode)
 
   useEffect(() => {
     if (!useApiMode) {
       setMaintenanceRows(null)
       setApiFailureRisk(null)
       setDetailError(null)
+      setDetailLoading(false)
       return
     }
     let cancelled = false
     setDetailError(null)
     setMaintenanceRows(null)
     setApiFailureRisk(null)
+    setDetailLoading(true)
     void fetchEquipmentDetail(equipmentId, {
       siteCode: selectedSiteId,
       shiftId: selectedShiftId,
@@ -147,10 +150,12 @@ export function EquipmentDetailContent({
         patchEquipment(detail.equipment)
         setMaintenanceRows(detail.maintenanceHistory)
         setApiFailureRisk(detail.failureRisk)
+        setDetailLoading(false)
       })
       .catch(() => {
         if (!cancelled) {
           setDetailError("Impossible de charger le détail équipement.")
+          setDetailLoading(false)
         }
       })
     return () => {
@@ -182,6 +187,13 @@ export function EquipmentDetailContent({
   const cfg = STATE_CONFIG[eq.state]
   const now = rangeEnd
   const failureRisk = useApiMode ? apiFailureRisk : eq.type === "haul_truck" ? demoFailureRisk(eq.id) : null
+  const riskView = failureRiskView({
+    apiMode: useApiMode,
+    equipmentType: eq.type,
+    loading: detailLoading,
+    error: detailError,
+    prediction: failureRisk,
+  })
 
   const shiftElapsedMin = Math.max(1, (rangeEnd - rangeStart) / 60_000)
   const waitingPct = useApiMode ? NaN : (eq.waitingMinutesThisShift / shiftElapsedMin) * 100
@@ -449,7 +461,9 @@ export function EquipmentDetailContent({
           </TabsContent>
 
           <TabsContent value="ia" className="flex flex-col gap-3 px-5 py-4">
-            {eq.type === "haul_truck" && failureRisk && <FailureRiskCard prediction={failureRisk} />}
+            {riskView.kind === "loading" && <FailureRiskCard loading />}
+            {riskView.kind === "error" && <FailureRiskCard error={riskView.message} />}
+            {riskView.kind === "ready" && <FailureRiskCard prediction={riskView.prediction} />}
             <AiSlot insight={insight} label="Pourquoi" />
           </TabsContent>
         </Tabs>

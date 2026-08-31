@@ -1,4 +1,5 @@
 import { createElement } from "react"
+import { readFileSync } from "node:fs"
 import { renderToStaticMarkup } from "react-dom/server"
 import { beforeEach, expect, it, vi } from "vitest"
 import { result, alert } from "@/test/aiFixtures"
@@ -59,8 +60,17 @@ it("labels persisted automatic monitoring results without starting a frontend in
   }
   const html = renderToStaticMarkup(createElement(AlertesIA))
   expect(html).toContain("Détecté automatiquement")
+  expect(html).toContain("Pourquoi ?")
+  expect(html).toContain("ai-why-report")
   expect(mocks.start).not.toHaveBeenCalled()
   expect(mocks.demo).not.toHaveBeenCalled()
+})
+it("Pourquoi ? is available without an investigation and does not POST", () => {
+  const html = renderToStaticMarkup(createElement(AlertesIA))
+  expect(html).toContain("Pourquoi ?")
+  expect(html).toContain("Investiguer")
+  expect(html).toContain("Analyse IA non lancée")
+  expect(mocks.start).not.toHaveBeenCalled()
 })
 it("render and rerender cannot create investigations; pending is not confidence zero", () => {
   const html = renderToStaticMarkup(createElement(AlertesIA))
@@ -84,10 +94,18 @@ it("API Actions IA uses only the persisted UUID result, without dispatch scenari
   expect(mocks.demo).not.toHaveBeenCalled()
 })
 
+it("Pourquoi ? only scrolls to the existing report and never starts an investigation", () => {
+  const source = readFileSync("src/components/ai/InvestigationAlerts.tsx", "utf8")
+  expect(source).toMatch(/AiWhyButton[\s\S]{0,180}scrollIntoView/)
+  expect(source).toMatch(/onClick=\{investigate\}/)
+  expect(source).not.toMatch(/AiWhyButton[\s\S]{0,220}start\(/)
+  expect(source).not.toMatch(/AiWhyButton[\s\S]{0,220}investigate\(/)
+})
 it("running state disables manual creation and persisted provider errors do not expose raw messages", () => {
   mocks.entry = { phase: "running" }
   let html = renderToStaticMarkup(createElement(AlertesIA))
   expect(html).toContain("Analyse IA en cours")
+  expect(html).toContain("Pourquoi ?")
   expect(html).not.toContain(result.recommendation!.description)
   mocks.entry = { phase: "ready", result: { ...result, status: "FAILED", conclusion: null, recommendation: null, error: { stage: "analyze", error_type: "ProviderTimeoutError", message: "secret SDK response" } } }
   html = renderToStaticMarkup(createElement(AlertesIA))
