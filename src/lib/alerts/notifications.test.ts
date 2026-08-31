@@ -41,12 +41,6 @@ it("does not emit notices for historical alerts present at first observation", (
   expect([...first.seen!]).toEqual(["alert-1", "alert-pred"])
 })
 
-it("does not emit notices for historical alerts present at first observation", () => {
-  const first = diffNewAlerts(null, [current, prediction])
-  expect(first.fresh).toEqual([])
-  expect([...first.seen!]).toEqual(["alert-1", "alert-pred"])
-})
-
 it("does not treat the empty pre-bootstrap list as the seen baseline", () => {
   const historicalA = current
   const historicalB = prediction
