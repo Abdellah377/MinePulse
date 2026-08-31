@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Film, Map, Sparkles, Truck, Inbox } from "lucide-react"
 import { useOpsStore } from "@/lib/store/useOpsStore"
+import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import { useUiStore } from "@/lib/store/useUiStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
 import { investigationKey, useInvestigationStore } from "@/lib/store/useInvestigationStore"
+import { useApiMode } from "@/lib/api/client"
 import type { InvestigationTriggerInput } from "@/lib/api/types/ai"
 import type { WorkspacePanelProps } from "@/components/workspace/WorkspaceHost"
 import { Button } from "@/components/ui/button"
@@ -20,26 +22,38 @@ import { alertsForKind, filterAlertsByUi, isPredictionAlert, userInvestigateTrig
 import { openMapForTarget } from "@/lib/workspace/openMapFocus"
 import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
 import { AiWhyButton } from "@/components/ai/AiExplanation"
+import { ALERT_STATUS_LABEL } from "@/lib/mock/types"
 
 /** Original three-column workspace; live data never passes through demo intelligence. */
 export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
   const ops = useOpsStore()
+  const feedIds = useAlertFeedStore((s) => s.orderedIds)
+  const feedById = useAlertFeedStore((s) => s.byId)
+  const hasMore = useAlertFeedStore((s) => s.hasMore)
+  const loadingMore = useAlertFeedStore((s) => s.loadingMore)
+  const loadMore = useAlertFeedStore((s) => s.loadMore)
+  const feedAlerts = useMemo(
+    () => feedIds.map((id) => feedById[id]).filter((row): row is NonNullable<typeof row> => row != null),
+    [feedIds, feedById],
+  )
+  const sourceAlerts = useApiMode && feedAlerts.length ? feedAlerts : ops.alerts
+  const listRef = useRef<HTMLDivElement>(null)
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace)
   const patchTabContext = useWorkspaceStore((s) => s.patchTabContext)
   const openEquipmentDrawer = useUiStore((s) => s.openEquipmentDrawer)
   const [selectedId, setSelectedId] = useState<string | null>(tab?.context.alertId ?? tab?.context.predictionId ?? null)
   const requestedOpenId = tab?.context.predictionId ?? tab?.context.alertId
-  const opened = requestedOpenId ? ops.alerts.find((a) => a.id === requestedOpenId) : undefined
+  const opened = requestedOpenId ? sourceAlerts.find((a) => a.id === requestedOpenId) : undefined
   const [mode, setMode] = useState<"current" | "prediction">(
     (opened != null && isPredictionAlert(opened)) || Boolean(tab?.context.predictionId) ? "prediction" : "current"
   )
   const [severity, setSeverity] = useState("all")
   const [zone, setZone] = useState("all")
-  const currentAlerts = useMemo(() => alertsForKind(ops.alerts, "current"), [ops.alerts])
-  const predictionAlerts = useMemo(() => alertsForKind(ops.alerts, "prediction"), [ops.alerts])
+  const currentAlerts = useMemo(() => alertsForKind(sourceAlerts, "current"), [sourceAlerts])
+  const predictionAlerts = useMemo(() => alertsForKind(sourceAlerts, "prediction"), [sourceAlerts])
   const alerts = useMemo(
-    () => newestAlertsFirst(filterAlertsByUi(ops.alerts, mode, severity, zone)),
-    [ops.alerts, mode, severity, zone],
+    () => newestAlertsFirst(filterAlertsByUi(sourceAlerts, mode, severity, zone)),
+    [sourceAlerts, mode, severity, zone],
   )
   const selected = alerts.find((a) => a.id === selectedId) ?? alerts[0]
   const siteId = ops.sites.find((s) => s.id === ops.selectedSiteId)?.databaseId
@@ -72,10 +86,10 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
   useEffect(() => {
     const requested = tab?.context.predictionId ?? tab?.context.alertId
     if (!requested) return
-    const target = ops.alerts.find((a) => a.id === requested)
+    const target = sourceAlerts.find((a) => a.id === requested)
     setMode(target ? (isPredictionAlert(target) ? "prediction" : "current") : tab?.context.predictionId ? "prediction" : "current")
     setSelectedId(requested)
-  }, [tab?.context.alertId, tab?.context.predictionId, ops.alerts])
+  }, [tab?.context.alertId, tab?.context.predictionId, sourceAlerts])
   useEffect(() => { if (scope) void lookup(scope) }, [scope, lookup]) // Reads only; POST requires a click.
   useEffect(() => {
     // Automatic investigations execute outside this component. Polling is
@@ -130,12 +144,43 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
           <select aria-label="Zone" className="h-6 max-w-[110px] rounded-md border border-border bg-background px-1 text-[10px]" value={zone} onChange={(e) => setZone(e.target.value)}><option value="all">Zone</option>{ops.zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}</select>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={listRef}
+        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={(event) => {
+          if (!useApiMode || !hasMore || loadingMore) return
+          const node = event.currentTarget
+          if (node.scrollHeight - node.scrollTop - node.clientHeight < 80) {
+            void loadMore({ siteCode: ops.selectedSiteId, shiftId: ops.selectedShiftId })
+          }
+        }}
+      >
         {!alerts.length && <div className="flex flex-col items-center gap-2 py-16 text-center"><Inbox className="size-5 text-muted-2" /><p className="text-xs text-muted">{ops.apiPollError ? "Alertes indisponibles." : !ops.apiBootstrapped ? "Chargement des alertes…" : mode === "prediction" ? "Aucune prédiction active." : "Aucune alerte."}</p></div>}
-        {alerts.map((a) => <button key={a.id} onClick={() => setSelectedId(a.id)} className={cn("flex w-full flex-col gap-0.5 border-b border-border px-3 py-2.5 text-left", selected?.id === a.id ? "bg-accent-soft/50" : "hover:bg-surface-2/70")}>
-          <div className="flex items-center gap-1.5 text-[10px]"><span className={cn("size-1.5 rounded-full", SEVERITY_CONFIG[a.severity].dot)} /><span className={cn("font-semibold", SEVERITY_CONFIG[a.severity].color)}>{SEVERITY_CONFIG[a.severity].label}</span><span className="text-muted-2">{a.category}</span><span className="ml-auto tabular-nums text-muted-2">{new Date(operationalAlertTime(a)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span></div>
-          <p className="text-[12px] font-medium text-foreground">{a.title}</p><p className="line-clamp-1 text-[11px] text-muted">{a.description}</p><p className="mt-0.5 text-[10px] text-muted-2">{a.location ?? "Localisation indisponible"}</p>
-        </button>)}
+        {alerts.map((a) => {
+          const handled = a.status === "resolved"
+          return (
+            <button
+              key={a.id}
+              onClick={() => setSelectedId(a.id)}
+              className={cn(
+                "flex w-full flex-col gap-0.5 border-b border-border px-3 py-2.5 text-left",
+                handled ? "bg-surface-2/40 text-muted" : "",
+                selected?.id === a.id ? "bg-accent-soft/50" : "hover:bg-surface-2/70",
+              )}
+            >
+              <div className="flex items-center gap-1.5 text-[10px]">
+                <span className={cn("size-1.5 rounded-full", handled ? "bg-muted-2" : SEVERITY_CONFIG[a.severity].dot)} />
+                <span className={cn("font-semibold", handled ? "text-muted-2" : SEVERITY_CONFIG[a.severity].color)}>{handled ? "Traité" : SEVERITY_CONFIG[a.severity].label}</span>
+                <span className="text-muted-2">{a.category}</span>
+                <span className="ml-auto tabular-nums text-muted-2">{new Date(operationalAlertTime(a)).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>
+              </div>
+              <p className={cn("text-[12px] font-medium", handled ? "text-muted" : "text-foreground")}>{a.title}</p>
+              <p className="line-clamp-1 text-[11px] text-muted">{a.description}</p>
+              <p className="mt-0.5 text-[10px] text-muted-2">{a.location ?? "Localisation indisponible"}{handled ? ` · ${ALERT_STATUS_LABEL[a.status]}` : ""}</p>
+            </button>
+          )
+        })}
+        {useApiMode && loadingMore && <p className="px-3 py-2 text-center text-[10px] text-muted-2">Chargement…</p>}
       </div>
     </aside>
     <main className="min-w-0 flex-1 overflow-y-auto border-r border-border bg-background p-4">
@@ -160,6 +205,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
         <AiWhyButton className="w-full" onClick={() => document.getElementById("ai-why-report")?.scrollIntoView({ block: "nearest" })} />
         {recommendation ? <Button className="w-full gap-1.5" onClick={() => openWorkspace({ type: "actions", context, investigationId: result!.investigation_id })}><Sparkles className="size-3.5" />Ouvrir Actions IA</Button>
           : <Button className="w-full gap-1.5" disabled={!scope || !!result || busy || entry?.creationUncertain || !!ops.apiPollError} onClick={investigate}><Sparkles className="size-3.5" />{entry?.phase === "running" ? "Analyse IA en cours" : "Investiguer"}</Button>}
+        <Button className="w-full" size="sm" variant="outline" onClick={() => openWorkspace({ type: "actions", context: { ...context, alertId } })}>Voir dans Actions IA</Button>
         <Button className="w-full" size="sm" variant="outline" disabled={!scope || busy} onClick={() => scope && void lookup(scope, true)}>Actualiser le résultat</Button>
         {!scope && <p className="text-xs text-muted">Identité opérationnelle indisponible.</p>}
         <p className="text-[10px] leading-relaxed text-muted-2">Validation humaine requise. Aucune application automatique.</p>

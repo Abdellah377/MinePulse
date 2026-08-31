@@ -133,7 +133,7 @@ function DemoActionsIA({ tab }: Partial<WorkspacePanelProps> = {}) {
         <h2 className="text-[15px] font-semibold text-foreground">Actions IA</h2>
         <p className="max-w-md text-[12px] text-muted">
           Sélectionnez une alerte ou une prédiction dans Alertes IA, puis cliquez sur
-          « Générer des solutions IA » pour ouvrir un plan contextualisé.
+          « Générer des solutions IA » pour ouvrir un plan contextualisé. Mode démonstration — pas l’historique live.
         </p>
         <Button
           onClick={() => openWorkspace({ type: "alerts", title: "Alertes IA" })}

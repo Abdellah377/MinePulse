@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import ai, alerts, bootstrap, equipment, external_context, oem, operations, production, settings, simulation, zones
+from app.api.routes import actions, ai, alerts, bootstrap, equipment, external_context, oem, operations, optimization, production, settings, simulation, zones
 
 api_router = APIRouter(prefix="/api")
 
@@ -15,4 +15,6 @@ api_router.include_router(oem.router, prefix="/oem", tags=["oem"])
 api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])
 api_router.include_router(ai.router, prefix="/ai", tags=["ai-investigations"])
+api_router.include_router(actions.router, prefix="/actions", tags=["actions-inbox"])
+api_router.include_router(optimization.router, prefix="/optimization", tags=["optimization"])
 api_router.include_router(external_context.router, prefix="/external-context", tags=["external-context"])

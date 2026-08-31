@@ -103,7 +103,8 @@ export interface BootstrapPayload {
   routes: RoutePath[]
   equipment: Equipment[]
   operators: Operator[]
-  alerts: Alert[]
+  alerts?: Alert[]
+  activeCount?: number
   productionByShift?: ProductionByShift
   timelineSegments: TimelineSegment[]
   cycleTimeSamples: CycleTimeSample[]
@@ -113,6 +114,30 @@ export interface BootstrapPayload {
   activeSiteCode?: string | null
   activeShiftId?: string | null
   error?: string
+}
+
+export type AlertListPage = {
+  items: Alert[]
+  nextCursor: string | null
+  hasMore: boolean
+  activeCount: number
+}
+
+export function fetchAlertPage(
+  params?: { limit?: number; cursor?: string | null; activeOnly?: boolean },
+  ctx?: OpsContext
+): Promise<AlertListPage> {
+  return fetchJson(
+    `/alerts${opsQueryString(ctx, {
+      limit: String(params?.limit ?? 20),
+      cursor: params?.cursor ?? undefined,
+      active_only: params?.activeOnly ? true : undefined,
+    })}`
+  )
+}
+
+export function fetchActiveAlertCount(ctx?: OpsContext): Promise<{ activeCount: number }> {
+  return fetchJson(`/alerts/active-count${opsQueryString(ctx)}`)
 }
 
 export function fetchBootstrap(options?: { lite?: boolean; ctx?: OpsContext }): Promise<BootstrapPayload> {

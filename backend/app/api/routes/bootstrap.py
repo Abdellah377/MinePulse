@@ -4,7 +4,6 @@ from sqlalchemy import select
 from app.api.deps import Ctx, DbSession
 from app.db.models import HaulRoad, Shift, Zone
 from app.mappers.dto import (
-    alert_to_dto,
     enriched_equipment_dto,
     operator_to_dto,
     road_to_dto,
@@ -12,7 +11,7 @@ from app.mappers.dto import (
     site_to_dto,
     zone_to_dto,
 )
-from app.services.operational.alerts import list_site_alerts
+from app.services.operational.alerts import count_active_alerts, list_site_alerts
 from app.services.operational.assignments import operators_for_site_equipment
 from app.services.operational.cycles import cycle_time_samples
 from app.services.operational.downtime import downtime_reasons
@@ -44,8 +43,8 @@ def bootstrap(
         .where(Shift.site_id == site.site_id)
         .order_by(Shift.shift_date.desc(), Shift.start_time)
     ).all()
-    alerts = list_site_alerts(session, site.site_id)
-    extra_op_ids = [a.assigned_to for a in alerts if a.assigned_to]
+    active_preview = list_site_alerts(session, site.site_id, limit=20, active_only=True)
+    extra_op_ids = [a.assigned_to for a in active_preview if a.assigned_to]
     operators = operators_for_site_equipment(
         session,
         [e.equipment_id for e in equipment],
@@ -97,7 +96,7 @@ def bootstrap(
             for e in equipment
         ],
         "operators": operator_dtos,
-        "alerts": [alert_to_dto(a, equip_codes, zone_codes, session=session) for a in alerts],
+        "activeCount": count_active_alerts(session, site.site_id),
         "simNow": ctx.sim_now.isoformat(),
         "simulation": control,
         "activeSiteCode": ctx.site_code,

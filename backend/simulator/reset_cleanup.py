@@ -9,6 +9,7 @@ from app.ai.contracts import TriggerSource
 from app.db.enums import AlertSource, EquipmentState, EquipmentType
 from app.db.models import (
     AiInvestigation,
+    AiOptimizationRun,
     AiRecommendation,
     AiRecommendationDecision,
     AiRecommendationDiscussionMessage,
@@ -92,6 +93,9 @@ def clear_simulation_run_data(session: Session, *, site_code: str = "MP-SIM-01")
     )
     counts["ai_investigations"] = _execute_delete(session, AiInvestigation, investigation_scope)
     if alert_ids:
+        counts["ai_optimization_runs"] = _execute_delete(
+            session, AiOptimizationRun, AiOptimizationRun.alert_id.in_(alert_ids)
+        )
         counts["ai_recommendations"] = _execute_delete(
             session,
             AiRecommendation,
@@ -100,6 +104,7 @@ def clear_simulation_run_data(session: Session, *, site_code: str = "MP-SIM-01")
         )
         counts["alerts"] = _execute_delete(session, Alert, Alert.alert_id.in_(alert_ids))
     else:
+        counts["ai_optimization_runs"] = 0
         counts["ai_recommendations"] = 0
         counts["alerts"] = 0
 

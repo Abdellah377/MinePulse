@@ -48,7 +48,6 @@ from app.ai.debug import (
     consume_provider_metrics,
 )
 from app.ai.llm.provider import LLMProvider
-from app.ai.feedback import retrieve_operator_feedback
 from app.ai.persistence import InvestigationPersistenceError, persist_investigation
 from app.ai.routers import route_after_analysis
 from app.ai.state import InvestigationState
@@ -413,8 +412,7 @@ class InvestigationNodes:
         }
 
     def build_recommendation(self, state: InvestigationState) -> dict:
-        feedback_items = retrieve_operator_feedback(self.runtime.session, state)
-        evidence = list(state["evidence"]) + feedback_items
+        evidence = list(state["evidence"])
         payload = {
             "trigger": _json(state["trigger"]),
             "conclusion": _json(state["conclusion"]),

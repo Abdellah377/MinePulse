@@ -291,7 +291,7 @@ def test_initial_telemetry_trends_reach_the_provider_payload_unchanged():
     ]
 
 
-def test_recommendation_stage_attaches_operator_feedback_not_as_fact(monkeypatch):
+def test_recommendation_stage_does_not_inject_operator_feedback(monkeypatch):
     feedback = EvidenceItem(
         evidence_id="ev-feedback",
         kind=EvidenceKind.OPERATOR_FEEDBACK,
@@ -301,14 +301,12 @@ def test_recommendation_stage_attaches_operator_feedback_not_as_fact(monkeypatch
         value={"decisionType": "REJECTED", "authoritativeFactsWin": True},
         notes="Historical operator decision",
     )
-    monkeypatch.setattr("app.ai.nodes.retrieve_operator_feedback", lambda session, state: [feedback])
+    monkeypatch.setattr("app.ai.feedback.retrieve_operator_feedback", lambda session, state: [feedback])
     provider = ScriptedProvider([_diagnosis()])
     result, _, _ = _run(provider)
     kinds = [item["kind"] for item in provider.recommend_payloads[0]["evidence"]]
-    assert "OPERATOR_FEEDBACK" in kinds
-    assert result["evidence"][-1].kind == EvidenceKind.OPERATOR_FEEDBACK
-    assert result["evidence"][-1].kind != EvidenceKind.FACT
-    assert result["evidence"][-1].source_service.endswith("retrieve_operator_feedback")
+    assert "OPERATOR_FEEDBACK" not in kinds
+    assert all(item.kind != EvidenceKind.OPERATOR_FEEDBACK for item in result["evidence"])
 
 
 def test_graph_gathers_requested_evidence_then_reanalyzes():

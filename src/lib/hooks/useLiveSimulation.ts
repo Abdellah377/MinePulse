@@ -2,6 +2,7 @@ import { useEffect } from "react"
 
 import { fetchBootstrap, fetchEquipmentLive, useApiMode } from "@/lib/api/client"
 import { pollCatchError } from "@/lib/store/apiSync"
+import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 
 /** Poll backend when API mode; otherwise client-side mock tick. */
@@ -24,6 +25,7 @@ export function useLiveSimulation(intervalMs = 2200) {
         const current = useOpsStore.getState()
         return !cancelled && current.selectedSiteId === ctx.siteCode && current.selectedShiftId === ctx.shiftId
       }
+      void useAlertFeedStore.getState().loadFirst(ctx).catch(() => undefined)
       const poll = async () => {
         while (!cancelled) {
           try {
@@ -32,10 +34,12 @@ export function useLiveSimulation(intervalMs = 2200) {
               if (!isCurrentContext()) return
               if (payload.error) throw new Error(payload.error)
               hydrateWorld(payload)
+              void useAlertFeedStore.getState().refreshHead(ctx)
             } else {
               const equipment = await fetchEquipmentLive(ctx)
               if (!isCurrentContext()) return
               hydrateFromApi({ equipment })
+              if (n % 5 === 1) void useAlertFeedStore.getState().refreshHead(ctx)
             }
             n += 1
           } catch {

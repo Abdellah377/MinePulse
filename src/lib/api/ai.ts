@@ -1,5 +1,5 @@
 /** Transport only. Diagnosis, confidence and recommendations belong to LangGraph. */
-import { ApiError, fetchJson, useApiMode } from "@/lib/api/client"
+import { ApiError, fetchJson, opsQueryString, useApiMode } from "@/lib/api/client"
 import type { InvestigationResult, InvestigationTriggerInput } from "@/lib/api/types/ai"
 import type { InvestigationDebugTrace } from "@/lib/api/types/aiDebug"
 import type {
@@ -66,6 +66,34 @@ export const aiApi = {
       body: JSON.stringify(body),
       timeoutMs: 60_000,
     })
+  },
+  listInbox(params?: { cursor?: string | null; limit?: number }, ctx?: { siteCode?: string; shiftId?: string }): Promise<import("./types/optimization").ActionsInboxPage> {
+    requireApi()
+    const extra: Record<string, string | boolean | undefined> = { limit: String(params?.limit ?? 20) }
+    if (params?.cursor) extra.cursor = params.cursor
+    return fetchJson(`/actions/inbox${opsQueryString(ctx, extra)}`)
+  },
+  getInboxDetail(alertId: string, ctx?: { siteCode?: string; shiftId?: string }): Promise<import("./types/optimization").ActionsInboxDetail> {
+    requireApi()
+    return fetchJson(`/actions/inbox/${encodeURIComponent(alertId)}${opsQueryString(ctx)}`)
+  },
+  putInboxDecision(alertId: string, body: RecommendationDecisionRequest, ctx?: { siteCode?: string; shiftId?: string }): Promise<RecommendationDecisionRecord> {
+    requireApi()
+    return fetchJson(`/actions/inbox/${encodeURIComponent(alertId)}/decision${opsQueryString(ctx)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    })
+  },
+  createOptimizationRun(alertId: string, ctx?: { siteCode?: string; shiftId?: string }): Promise<import("./types/optimization").OptimizationRun> {
+    requireApi()
+    return fetchJson(`/optimization/runs${opsQueryString(ctx)}`, {
+      method: "POST",
+      body: JSON.stringify({ alert_id: alertId }),
+    })
+  },
+  listOptimizationRuns(alertId: string): Promise<import("./types/optimization").OptimizationRun[]> {
+    requireApi()
+    return fetchJson(`/optimization/runs?alert_id=${encodeURIComponent(alertId)}`)
   },
 }
 

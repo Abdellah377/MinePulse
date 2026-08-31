@@ -68,6 +68,7 @@ it("labels persisted automatic monitoring results without starting a frontend in
 it("Pourquoi ? is available without an investigation and does not POST", () => {
   const html = renderToStaticMarkup(createElement(AlertesIA))
   expect(html).toContain("Pourquoi ?")
+  expect(html).toContain("Voir dans Actions IA")
   expect(html).toContain("Investiguer")
   expect(html).toContain("Analyse IA non lancée")
   expect(mocks.start).not.toHaveBeenCalled()
@@ -121,8 +122,11 @@ it("Actions IA Pourquoi and decisions do not start investigations; only discussi
   expect(source).toMatch(/DECISION_STATUS_LABEL/)
   expect(source).toMatch(/FOLLOW_UP_STATUS_LABEL/)
   expect(source).toMatch(/generate_reply: true/)
+  expect(source).toMatch(/Marquer comme traité/)
+  expect(source).toMatch(/Optimiser/)
+  expect(source).not.toMatch(/Ouvrir Alertes IA/)
   expect(source).not.toMatch(/saveDecision\("RESOLVED"\)/)
-  expect(source).not.toMatch(/aiApi\.create/)
+  expect(source).not.toMatch(/aiApi\.create\(/)
   expect(source).not.toMatch(/\.start\(/)
 })
 

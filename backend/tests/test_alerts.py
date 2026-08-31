@@ -63,6 +63,26 @@ def test_assigned_actor_label_persists_as_assigned_to_label():
     assert dto["createdAt"] == int(persisted_at.timestamp() * 1000)
 
 
+def test_mark_resolved_sets_resolved_at_and_keeps_the_row():
+    alert = Alert(
+        alert_id=42,
+        created_at=datetime(2026, 8, 31, 10, tzinfo=timezone.utc),
+        occurred_at=datetime(2026, 8, 31, 10, tzinfo=timezone.utc),
+        source=AlertSource.RULE,
+        severity=AlertSeverity.WARNING,
+        status=AlertStatus.NEW,
+        alert_type="CONGESTION_RISK",
+        title="unit",
+        metadata_={},
+    )
+    session = _FakeSession(alert)
+    out = update_alert(session, "alert-42", status="resolved", actor_label="Chef de poste")
+    assert out.status == AlertStatus.RESOLVED
+    assert out.resolved_at is not None
+    assert out.metadata_["last_actor_label"] == "Chef de poste"
+    assert session.get(Alert, 42) is out
+
+
 def test_prediction_alert_dto_preserves_source_and_does_not_invent_probability():
     alert = Alert(
         alert_id=7,

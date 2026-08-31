@@ -7,6 +7,7 @@ import { timeAgo } from "@/lib/format"
 import { operationalAlertTime } from "@/lib/alerts/order"
 import { alertWorkspaceContext } from "@/lib/alerts/notifications"
 import { useOpsStore } from "@/lib/store/useOpsStore"
+import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import { useUiStore } from "@/lib/store/useUiStore"
 import { useWorkspaceStore, useActiveWorkspace } from "@/lib/store/useWorkspaceStore"
 import type { WorkspaceModule, WorkspaceType } from "@/lib/workspace/types"
@@ -78,6 +79,8 @@ export function BrandHeader() {
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
   const setSelectedSite = useOpsStore((s) => s.setSelectedSite)
   const alerts = useOpsStore((s) => s.alerts)
+  const feedAlerts = useAlertFeedStore((s) => s.orderedIds.map((id) => s.byId[id]).filter(Boolean))
+  const activeCount = useAlertFeedStore((s) => s.activeCount)
   const simNowIso = useOpsStore((s) => s.simNowIso)
   const apiPollError = useOpsStore((s) => s.apiPollError)
   const setCommandOpen = useUiStore((s) => s.setCommandOpen)
@@ -85,8 +88,9 @@ export function BrandHeader() {
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace)
   const active = useActiveWorkspace()
 
-  const unresolved = alerts.filter((a) => a.status !== "resolved").length
-  const recentAlerts = [...alerts]
+  const list = useApiMode ? feedAlerts : alerts
+  const unresolved = useApiMode ? activeCount : alerts.filter((a) => a.status !== "resolved").length
+  const recentAlerts = [...list]
     .filter((a) => a.status !== "resolved")
     .sort((a, b) => operationalAlertTime(b) - operationalAlertTime(a))
     .slice(0, 5)

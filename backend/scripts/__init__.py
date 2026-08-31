@@ -28,6 +28,7 @@ EXPECTED_TABLES = frozenset(
         "ai_investigations",
         "ai_recommendation_decisions",
         "ai_recommendation_discussion_messages",
+        "ai_optimization_runs",
         "tyre_telemetry",
         "operational_settings",
     }

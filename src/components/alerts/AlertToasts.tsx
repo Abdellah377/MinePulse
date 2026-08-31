@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 
 import { useOpsStore } from "@/lib/store/useOpsStore"
+import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
 import { SEVERITY_CONFIG } from "@/lib/status"
 import { cn } from "@/lib/utils"
@@ -16,7 +17,10 @@ const MAX_TOASTS = 4
 const DISMISS_MS = 8_000
 
 export function AlertToasts() {
-  const alerts = useOpsStore((s) => s.alerts)
+  const opsAlerts = useOpsStore((s) => s.alerts)
+  const feedIds = useAlertFeedStore((s) => s.orderedIds)
+  const feedById = useAlertFeedStore((s) => s.byId)
+  const alerts = feedIds.length ? feedIds.map((id) => feedById[id]).filter((row): row is NonNullable<typeof row> => row != null) : opsAlerts
   const equipment = useOpsStore((s) => s.equipment)
   const apiBootstrapped = useOpsStore((s) => s.apiBootstrapped)
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace)

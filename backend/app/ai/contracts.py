@@ -362,7 +362,8 @@ class RecommendationDecisionRequest(ContractModel):
 
 class RecommendationDecisionRecord(ContractModel):
     decision_id: UUID
-    investigation_id: UUID
+    investigation_id: UUID | None = None
+    alert_id: int | None = None
     site_id: int
     decision_type: RecommendationDecisionType
     follow_up_status: FollowUpStatus = FollowUpStatus.OPEN
@@ -380,7 +381,8 @@ class RecommendationDecisionRecord(ContractModel):
 
 
 class RecommendationDecisionView(ContractModel):
-    investigation_id: UUID
+    investigation_id: UUID | None = None
+    alert_id: int | None = None
     decision_type: RecommendationDecisionType
     follow_up_status: FollowUpStatus | None = None
     decision: RecommendationDecisionRecord | None = None

@@ -17,7 +17,8 @@ export type DiscussionRole = "OPERATOR" | "ASSISTANT"
 
 export type RecommendationDecisionRecord = {
   decision_id: string
-  investigation_id: string
+  investigation_id: string | null
+  alert_id?: number | null
   site_id: number
   decision_type: RecommendationDecisionType
   follow_up_status: FollowUpStatus
@@ -35,7 +36,8 @@ export type RecommendationDecisionRecord = {
 }
 
 export type RecommendationDecisionView = {
-  investigation_id: string
+  investigation_id: string | null
+  alert_id?: number | null
   decision_type: RecommendationDecisionType
   follow_up_status: FollowUpStatus | null
   decision: RecommendationDecisionRecord | null

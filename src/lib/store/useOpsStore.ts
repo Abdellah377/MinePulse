@@ -1,14 +1,7 @@
 import { create } from "zustand"
 
-import {
-  fetchBootstrap,
-  fetchOperationalSettings,
-  patchAlert,
-  patchOperationalSettings,
-  useApiMode,
-  type OpsContext,
-  type OperationalSettingsDto,
-} from "@/lib/api/client"
+import { fetchBootstrap, fetchOperationalSettings, patchAlert, patchOperationalSettings, useApiMode, type OpsContext, type OperationalSettingsDto } from "@/lib/api/client"
+import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import { mergeProductionByShift, type ProductionByShift } from "@/lib/production/mergeProduction"
 import {
   connectionAfterEquipmentPoll,
@@ -193,7 +186,7 @@ interface OpsState {
   setZones: (updater: (zones: Zone[]) => Zone[]) => void
   setRoutes: (updater: (routes: RoutePath[]) => RoutePath[]) => void
   setEquipment: (updater: (equipment: Equipment[]) => Equipment[]) => void
-  hydrateWorld: (payload: {
+    hydrateWorld: (payload: {
     sites?: Site[]
     shifts?: Shift[]
     zones?: Zone[]
@@ -201,6 +194,7 @@ interface OpsState {
     equipment?: Equipment[]
     operators?: Operator[]
     alerts?: Alert[]
+    activeCount?: number
     productionByShift?: OpsState["productionByShift"]
     timelineSegments?: TimelineSegment[]
     cycleTimeSamples?: OpsState["cycleTimeSamples"]
@@ -297,10 +291,12 @@ export const useOpsStore = create<OpsState>((set, get) => ({
 
   setSelectedSite: (id) => {
     if (id === get().selectedSiteId) return
+    if (useApiMode) useAlertFeedStore.getState().reset()
     set({ selectedSiteId: id, ...(useApiMode ? { ...emptyScope(), selectedShiftId: "", shifts: [], zones: [], routes: [] } : {}) })
   },
   setSelectedShift: (id) => {
     if (id === get().selectedShiftId) return
+    if (useApiMode) useAlertFeedStore.getState().reset()
     set({ selectedShiftId: id, ...(useApiMode ? emptyScope() : {}) })
   },
   setPeriodRange: (from, to) => {
@@ -338,6 +334,11 @@ export const useOpsStore = create<OpsState>((set, get) => ({
           alerts: s.alerts.map((a) => (a.id === dto.id ? dto : a)),
           apiPollError: withoutMatchingError(s.apiPollError, "Échec mise à jour alerte"),
         }))
+        useAlertFeedStore.getState().upsert(dto)
+        if (dto.status === "resolved") {
+          const current = useAlertFeedStore.getState().activeCount
+          useAlertFeedStore.getState().setActiveCount(Math.max(0, current - 1))
+        }
       })
       .catch(() => {
         set({ apiPollError: "Échec mise à jour alerte" })
@@ -373,6 +374,9 @@ export const useOpsStore = create<OpsState>((set, get) => ({
       const apiPollError = gotFull ? nextErrorAfterFullHydrate(s.apiPollError) : s.apiPollError
       const now = Date.now()
       const stamp = shouldStampSuccessfulSync({ fullWorldHydrated, apiPollError })
+      if (typeof payload.activeCount === "number") {
+        useAlertFeedStore.getState().setActiveCount(payload.activeCount)
+      }
       return {
         sites: payload.sites ?? s.sites,
         shifts: payload.shifts ?? s.shifts,
@@ -478,6 +482,7 @@ export async function bootstrapOpsFromApi() {
     if (payload.error) throw new Error(payload.error)
     if (ctx.siteCode !== useOpsStore.getState().selectedSiteId || ctx.shiftId !== useOpsStore.getState().selectedShiftId) return
     useOpsStore.getState().hydrateWorld(payload)
+    void useAlertFeedStore.getState().loadFirst(ctx).catch(() => undefined)
     const resolvedCtx = apiCtx(useOpsStore.getState())
     try {
       const settings = await fetchOperationalSettings()

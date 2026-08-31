@@ -6,11 +6,15 @@ import { getShiftAttainment } from "@/lib/mock/scenarioMetrics"
 import { shiftProductionRollup, formatPosteBarObjectif } from "@/lib/production/mergeProduction"
 import { shiftRemainingMinutes } from "@/lib/ops/shiftWindow"
 import { useOpsStore } from "@/lib/store/useOpsStore"
+import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 
 export function PosteBar() {
   const shifts = useOpsStore((s) => s.shifts)
   const selectedShiftId = useOpsStore((s) => s.selectedShiftId)
-  const alerts = useOpsStore((s) => s.alerts)
+  const opsAlerts = useOpsStore((s) => s.alerts)
+  const feedIds = useAlertFeedStore((s) => s.orderedIds)
+  const feedById = useAlertFeedStore((s) => s.byId)
+  const alerts = feedIds.length ? feedIds.map((id) => feedById[id]).filter((row): row is NonNullable<typeof row> => row != null) : opsAlerts
   const productionByShift = useOpsStore((s) => s.productionByShift)
   const simNowIso = useOpsStore((s) => s.simNowIso)
 

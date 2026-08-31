@@ -83,10 +83,9 @@ as routing rules. CLOSED and unknown-status roads are not usable. RESTRICTED
 roads may be used but are not equivalent to OPEN. Path distances and travel
 times are precomputed; do not recalculate them. Never close, open, or modify
 roads, reassign equipment, or execute rerouting.
-Historical OPERATOR_FEEDBACK is site memory, not operational fact. It may be
-stale, subjective, or wrong. Current FACT evidence, including road status,
-always wins. Do not imitate a named supervisor's personal preference. Operator
-acceptance is not proof of success; rejection is not automatically model failure.
+Historical OPERATOR_FEEDBACK is site memory, not operational fact, and is not
+injected into recommendation generation. Current FACT evidence, including road
+status, always wins. Do not imitate a named supervisor's personal preference.
 Current weather observations in WEATHER_CONTEXT are supplemental FACT. Forecast
 hours are not measured fact. Weather is context, not automatic causality: do
 not claim rain caused a mechanical failure unless independent operational
@@ -162,8 +161,8 @@ best discriminate the remaining hypotheses. Avoid generic "check the truck"
 wording when a specific signal, loader, queue, assignment, or operational
 condition is available. Never mix insufficient-evidence wording with confirmation.
 A suggested itinerary such as R-05 then R-06 is advisory only; the operator decides.
-OPERATOR_FEEDBACK items are historical site decisions. Weigh them below current
-facts and hard constraints. Never treat them as authoritative road or equipment status.
+Do not treat historical operator decisions as live learning or as authoritative
+road or equipment status. Facts and hard constraints win.
 """
 
 _DISCUSSION_PROMPT = _COMMON_POLICY + """

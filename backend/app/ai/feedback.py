@@ -136,6 +136,7 @@ def to_decision_record(row: AiRecommendationDecision) -> RecommendationDecisionR
     return RecommendationDecisionRecord(
         decision_id=row.decision_id,
         investigation_id=row.investigation_id,
+        alert_id=getattr(row, "alert_id", None),
         site_id=row.site_id,
         decision_type=recorded_decision_type(row),
         follow_up_status=recorded_follow_up_status(row),
@@ -159,6 +160,23 @@ def load_decision_row(session: Session, investigation_id: UUID) -> AiRecommendat
             AiRecommendationDecision.investigation_id == investigation_id
         )
     )
+
+
+def load_decision_row_for_alert(session: Session, alert_id: int) -> AiRecommendationDecision | None:
+    return session.scalar(
+        select(AiRecommendationDecision).where(AiRecommendationDecision.alert_id == alert_id)
+    )
+
+
+def _alert_id_from_investigation(investigation: AiInvestigation) -> int | None:
+    trigger = investigation.trigger_data or {}
+    raw = str(trigger.get("source_record_id") or "")
+    if raw.startswith("alert-"):
+        raw = raw[6:]
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def get_decision_view(session: Session, investigation_id: UUID) -> RecommendationDecisionView:
@@ -203,6 +221,7 @@ def upsert_decision(
         row = AiRecommendationDecision(
             decision_id=uuid4(),
             investigation_id=investigation.investigation_id,
+            alert_id=_alert_id_from_investigation(investigation),
             site_id=investigation.site_id,
             original_recommendation=dict(investigation.recommendation),
             context_tags=extract_context_tags(investigation),
@@ -225,6 +244,55 @@ def upsert_decision(
         row.original_recommendation = dict(investigation.recommendation)
     if not row.context_tags:
         row.context_tags = extract_context_tags(investigation)
+    session.commit()
+    session.refresh(row)
+    return to_decision_record(row)
+
+
+def upsert_alert_decision(
+    session: Session,
+    alert_id: int,
+    request: RecommendationDecisionRequest,
+    *,
+    site_id: int,
+    original_recommendation: dict,
+    investigation_id: UUID | None = None,
+) -> RecommendationDecisionRecord:
+    now = datetime.now(timezone.utc)
+    row = load_decision_row_for_alert(session, alert_id)
+    if row is None and investigation_id is not None:
+        row = load_decision_row(session, investigation_id)
+    operator_action = None
+    if request.decision_type == RecommendationDecisionType.MODIFIED:
+        operator_action = {"text": request.alternative_action or request.reason_text or ""}
+    if row is None:
+        row = AiRecommendationDecision(
+            decision_id=uuid4(),
+            investigation_id=investigation_id,
+            alert_id=alert_id,
+            site_id=site_id,
+            original_recommendation=dict(original_recommendation),
+            context_tags={},
+            created_at=now,
+            updated_at=now,
+            decision_type=request.decision_type.value,
+            follow_up_status=FollowUpStatus.OPEN.value,
+        )
+        session.add(row)
+    row.updated_at = now
+    row.alert_id = alert_id
+    if investigation_id is not None:
+        row.investigation_id = investigation_id
+    row.decision_type = request.decision_type.value
+    row.reason_category = request.reason_category.value if request.reason_category else None
+    row.reason_text = request.reason_text
+    row.alternative_action = request.alternative_action
+    row.operator_action = operator_action
+    row.actor_label = request.actor_label
+    if not getattr(row, "follow_up_status", None):
+        row.follow_up_status = FollowUpStatus.OPEN.value
+    if not row.original_recommendation:
+        row.original_recommendation = dict(original_recommendation)
     session.commit()
     session.refresh(row)
     return to_decision_record(row)

@@ -112,10 +112,13 @@ class AiRecommendationDecision(Base):
     __table_args__ = (UniqueConstraint("investigation_id"),)
 
     decision_id: Mapped[PythonUUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    investigation_id: Mapped[PythonUUID] = mapped_column(
+    investigation_id: Mapped[PythonUUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("ai_investigations.investigation_id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+    )
+    alert_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("alerts.alert_id", ondelete="SET NULL"), nullable=True
     )
     site_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("sites.site_id", ondelete="CASCADE"), nullable=False
@@ -133,6 +136,30 @@ class AiRecommendationDecision(Base):
     outcome_notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AiOptimizationRun(Base):
+    """Immutable dispatch-optimizer run attached to an alert. Never writes operations."""
+
+    __tablename__ = "ai_optimization_runs"
+
+    run_id: Mapped[PythonUUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    alert_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("alerts.alert_id", ondelete="CASCADE"), nullable=False
+    )
+    site_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sites.site_id", ondelete="CASCADE"), nullable=False
+    )
+    optimizer_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    weights: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    eligibility: Mapped[str] = mapped_column(String(40), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(40), nullable=False)
+    snapshot_digest: Mapped[str | None] = mapped_column(String(64))
+    candidates: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    recommended_candidate_id: Mapped[str | None] = mapped_column(String(80))
+    weather_status: Mapped[str | None] = mapped_column(String(40))
+    snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class AiRecommendationDiscussionMessage(Base):

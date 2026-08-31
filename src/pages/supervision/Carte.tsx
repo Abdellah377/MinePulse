@@ -8,6 +8,7 @@ import {
   useSiteScopedRoutes,
   useSiteScopedZones,
 } from "@/lib/store/useOpsStore"
+import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import { useUiStore } from "@/lib/store/useUiStore"
 import {
   EQUIPMENT_TYPE_LABEL,
@@ -214,7 +215,10 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
   const equipment = useSiteScopedEquipment()
   const zones = useSiteScopedZones()
   const routes = useSiteScopedRoutes()
-  const alerts = useOpsStore((s) => s.alerts)
+  const opsAlerts = useOpsStore((s) => s.alerts)
+  const feedIds = useAlertFeedStore((s) => s.orderedIds)
+  const feedById = useAlertFeedStore((s) => s.byId)
+  const alerts = feedIds.length ? feedIds.map((id) => feedById[id]).filter((row): row is NonNullable<typeof row> => row != null) : opsAlerts
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
   const selectedShiftId = useOpsStore((s) => s.selectedShiftId)
   const setZones = useOpsStore((s) => s.setZones)

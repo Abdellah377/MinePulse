@@ -1,5 +1,6 @@
 from app.db.models.ai import (
     AiInvestigation,
+    AiOptimizationRun,
     AiRecommendation,
     AiRecommendationDecision,
     AiRecommendationDiscussionMessage,
@@ -48,6 +49,7 @@ __all__ = [
     "AiRecommendationDecision",
     "AiRecommendationDiscussionMessage",
     "AiInvestigation",
+    "AiOptimizationRun",
     "TyreTelemetry",
     "OperationalSetting",
 ]
