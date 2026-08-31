@@ -10,10 +10,23 @@ COMMAND_REGISTRY = Path(__file__).resolve().parents[1] / "simulator" / "command_
 
 def test_ai_and_monitoring_do_not_import_road_mutations():
     forbidden = "app.services.operational.roads"
+    mutations = ("create_road", "update_road", "delete_road")
     for root in (AI_ROOT, MONITORING_ROOT):
         for path in root.rglob("*.py"):
             text = path.read_text(encoding="utf-8")
             assert forbidden not in text, path
+            for name in mutations:
+                assert name not in text, path
+
+
+def test_road_catalog_is_read_only():
+    source = (Path(__file__).resolve().parents[1] / "app" / "services" / "operational" / "road_catalog.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from app.services.operational.roads" not in source
+    assert "create_road" not in source
+    assert "update_road" not in source
+    assert "delete_road" not in source
 
 
 def test_simulator_close_road_does_not_write_haul_road_status():

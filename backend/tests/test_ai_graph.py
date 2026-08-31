@@ -279,6 +279,7 @@ def test_initial_telemetry_trends_reach_the_provider_payload_unchanged():
     assert "EQUIPMENT_TELEMETRY_TRENDS" in provider.diagnose_payloads[0][
         "approvedEvidenceRequestTypes"
     ]
+    assert "ROAD_NETWORK_CONTEXT" in provider.diagnose_payloads[0]["approvedEvidenceRequestTypes"]
     assert provider.diagnose_payloads[0]["approvedTelemetryMetricGroups"] == [
         "equipment",
         "mechanical",

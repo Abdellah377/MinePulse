@@ -31,6 +31,17 @@ _MECHANICAL_TRIGGER_TYPES = {
     TriggerType.MAINTENANCE_RISK,
     TriggerType.PREDICTED_MECHANICAL_FAILURE_RISK,
 }
+_ROAD_CONTEXT_TERMS = (
+    "road",
+    "route",
+    "piste",
+    "rerout",
+    "haul",
+    "blocage",
+    "fermée",
+    "fermee",
+    "closed",
+)
 
 
 class EvidenceToolRegistry:
@@ -50,6 +61,12 @@ class EvidenceToolRegistry:
         production_related = trigger.trigger_type == TriggerType.PRODUCTION_DEVIATION or any(
             term in trigger_text for term in ("production", "tonnage", "shortfall")
         )
+        mechanical = trigger.trigger_type in _MECHANICAL_TRIGGER_TYPES
+        explicit_road = any(term in trigger_text for term in _ROAD_CONTEXT_TERMS)
+        hauling_related = congestion_related or production_related or trigger.trigger_type in {
+            TriggerType.CONGESTION_RISK,
+            TriggerType.PRODUCTION_DEVIATION,
+        }
         tools: list[tuple[str, Callable[[], EvidenceItem]]] = [
             ("operational_context", lambda: operational.context_evidence(ctx)),
             ("shift_production", lambda: operational.shift_production(self.session, ctx)),
@@ -88,6 +105,18 @@ class EvidenceToolRegistry:
                     "equipment_timeline",
                     lambda: operational.equipment_timeline(
                         self.session, ctx, equipment_id=trigger.equipment_id
+                    ),
+                )
+            )
+        if (hauling_related and not mechanical) or explicit_road:
+            tools.append(
+                (
+                    "road_network_context",
+                    lambda: operational.road_network_context(
+                        self.session,
+                        ctx,
+                        equipment_id=trigger.equipment_id,
+                        zone_id=trigger.zone_id,
                     ),
                 )
             )
@@ -156,6 +185,13 @@ class EvidenceToolRegistry:
             ),
             EvidenceRequestType.ZONE_CONTEXT.value: lambda: operational.zone_context(
                 self.session, ctx, zone_id=request.zone_id
+            ),
+            EvidenceRequestType.ROAD_NETWORK_CONTEXT.value: lambda: operational.road_network_context(
+                self.session,
+                ctx,
+                equipment_id=request.equipment_id,
+                zone_id=request.zone_id,
+                parameters=request.parameters,
             ),
             EvidenceRequestType.OEM_CONNECTIVITY.value: lambda: oem.connectivity(self.session, ctx, request),
             EvidenceRequestType.OEM_DIAGNOSTICS.value: lambda: oem.diagnostics(self.session, ctx, request),

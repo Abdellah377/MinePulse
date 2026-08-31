@@ -514,3 +514,178 @@ def test_predicted_mechanical_failure_risk_uses_mechanical_evidence_and_model_pr
     assert "not a confirmed failure" in prediction.notes.casefold()
     assert requests[0].parameters == ["mechanical"]
     assert "equipment_telemetry_trends" in captured
+    assert "road_network_context" not in captured
+
+
+def _haul_catalog():
+    return [
+        {
+            "id": "R-03",
+            "name": "R-03",
+            "fromZoneId": "BANC_A",
+            "toZoneId": "CRUSHER",
+            "status": "CLOSED",
+            "distanceKm": 4.2,
+            "speedLimitKmh": 35,
+            "description": None,
+            "statusReason": "BLASTING",
+            "statusNote": None,
+            "points": [{"x": 0, "y": 0}],
+        },
+        {
+            "id": "R-05",
+            "name": "R-05",
+            "fromZoneId": "BANC_A",
+            "toZoneId": "PARKING",
+            "status": "OPEN",
+            "distanceKm": 3.4,
+            "speedLimitKmh": 38,
+            "description": None,
+            "statusReason": None,
+            "statusNote": None,
+        },
+        {
+            "id": "R-06",
+            "name": "R-06",
+            "fromZoneId": "PARKING",
+            "toZoneId": "CRUSHER",
+            "status": "OPEN",
+            "distanceKm": 2.8,
+            "speedLimitKmh": 35,
+            "description": None,
+            "statusReason": None,
+            "statusNote": None,
+        },
+    ]
+
+
+def test_road_network_context_is_approved_fact_evidence(monkeypatch):
+    zones = {
+        1: SimpleNamespace(zone_id=1, code="BANC_A", name="Banc A", type="PIT", description="loading face"),
+        2: SimpleNamespace(zone_id=2, code="CRUSHER", name="Crusher", type="CRUSHER", description=None),
+        3: SimpleNamespace(zone_id=3, code="PARKING", name="Parking", type="PARKING", description=None),
+    }
+    monkeypatch.setattr(
+        operational.road_catalog,
+        "list_road_catalog",
+        lambda session, ctx: (_haul_catalog(), zones),
+    )
+    monkeypatch.setattr(
+        operational.road_catalog,
+        "resolve_haul_endpoints",
+        lambda *args, **kwargs: ("BANC_A", "CRUSHER"),
+    )
+
+    evidence = operational.road_network_context(object(), _context(), equipment_id=7)
+
+    assert EvidenceRequestType.ROAD_NETWORK_CONTEXT.value == "ROAD_NETWORK_CONTEXT"
+    assert evidence.kind == EvidenceKind.FACT
+    assert evidence.source_tool == "road_network_context"
+    assert evidence.source_service == "app.services.operational.road_network.build_route_context"
+    assert evidence.available is True
+    assert evidence.value["reachable"] is True
+    assert evidence.value["candidatePaths"][0]["roadIds"] == ["R-05", "R-06"]
+    assert evidence.value["candidatePaths"][0]["totalDistanceKm"] == 6.2
+    assert len(evidence.value["candidatePaths"]) <= 2
+    assert evidence.value["zoneDescriptionIsNotARoutingRule"] is True
+    blob = evidence.model_dump_json()
+    assert "geometry" not in blob
+    assert '"points"' not in blob
+    assert "latitude" not in blob
+    assert "longitude" not in blob
+
+
+def test_road_network_context_unavailable_when_catalog_empty(monkeypatch):
+    monkeypatch.setattr(operational.road_catalog, "list_road_catalog", lambda session, ctx: ([], {}))
+
+    evidence = operational.road_network_context(object(), _context())
+
+    assert evidence.available is False
+    assert evidence.value is None
+    assert evidence.status == EvidenceStatus.UNAVAILABLE
+    assert evidence.kind == EvidenceKind.FACT
+
+
+def test_registry_dispatches_road_network_context(monkeypatch):
+    captured = {}
+
+    def fake_context(session, ctx, *, equipment_id=None, zone_id=None, parameters=None):
+        captured["parameters"] = parameters
+        return EvidenceItem(
+            kind=EvidenceKind.FACT,
+            source_tool="road_network_context",
+            source_service="app.services.operational.road_network.build_route_context",
+            metric="road_network_context",
+            value={"reachable": True, "candidatePaths": []},
+        )
+
+    monkeypatch.setattr(operational, "road_network_context", fake_context)
+    request = EvidenceRequest(
+        request_type=EvidenceRequestType.ROAD_NETWORK_CONTEXT,
+        parameters=["BANC_A", "CRUSHER"],
+        reason="Need haul-road alternatives after the primary route closed.",
+    )
+
+    evidence = EvidenceToolRegistry(object()).dispatch(_context(), request)
+
+    assert captured["parameters"] == ["BANC_A", "CRUSHER"]
+    assert evidence.source_tool == "road_network_context"
+    assert evidence.metadata["requestId"] == request.request_id
+
+
+def test_congestion_initial_evidence_includes_road_network_context(monkeypatch):
+    captured = []
+
+    def fake_safe(self, ctx, name, call, **kwargs):
+        captured.append(name)
+        return EvidenceItem(
+            kind=EvidenceKind.FACT,
+            source_tool=name,
+            source_service="test",
+            metric=name,
+            value={},
+        )
+
+    monkeypatch.setattr(EvidenceToolRegistry, "_safe_call", fake_safe)
+    trigger = InvestigationTrigger(
+        trigger_type=TriggerType.CONGESTION_RISK,
+        trigger_source=TriggerSource.AUTOMATIC_MONITORING,
+        site_id=1,
+        shift_id=2,
+        zone_id=4,
+        occurred_at=_context().sim_now,
+        payload={"reason": "queue inflation on haul to crusher"},
+    )
+
+    EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
+
+    assert "road_network_context" in captured
+
+
+def test_mechanical_anomaly_does_not_auto_include_road_network(monkeypatch):
+    captured = []
+
+    def fake_safe(self, ctx, name, call, **kwargs):
+        captured.append(name)
+        return EvidenceItem(
+            kind=EvidenceKind.FACT,
+            source_tool=name,
+            source_service="test",
+            metric=name,
+            value={},
+        )
+
+    monkeypatch.setattr(EvidenceToolRegistry, "_safe_call", fake_safe)
+    trigger = InvestigationTrigger(
+        trigger_type=TriggerType.EQUIPMENT_ANOMALY,
+        trigger_source=TriggerSource.EXISTING_ALERT,
+        site_id=1,
+        equipment_id=7,
+        occurred_at=_context().sim_now,
+        payload={"title": "Engine oil pressure low"},
+    )
+
+    EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
+
+    assert "road_network_context" not in captured
+

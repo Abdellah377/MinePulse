@@ -9,3 +9,8 @@ def test_provider_prompts_require_french_operator_fields_without_translating_cod
     for prompt in (_DIAGNOSIS_PROMPT, _CONCLUSION_PROMPT, _RECOMMENDATION_PROMPT):
         assert prompt.startswith(_COMMON_POLICY)
         assert "Never invent values" in prompt
+    assert "operational fact" in _COMMON_POLICY
+    assert "map appearance" in _COMMON_POLICY
+    assert "execute rerouting" in _COMMON_POLICY
+    assert "ROAD_NETWORK_CONTEXT" in _DIAGNOSIS_PROMPT
+    assert "advisory only" in _RECOMMENDATION_PROMPT

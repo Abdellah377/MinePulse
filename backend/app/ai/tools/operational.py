@@ -13,9 +13,11 @@ from app.services.operational import downtime as downtime_service
 from app.services.operational import equipment as equipment_service
 from app.services.operational import loading as loading_service
 from app.services.operational import production as production_service
+from app.services.operational import road_catalog
 from app.services.operational import timeline as timeline_service
 from app.services.operational import zones as zone_service
 from app.services.operational.context import OperationalContext
+from app.services.operational.road_network import build_route_context
 
 
 def _evidence(
@@ -387,4 +389,67 @@ def zone_context(
         value=value,
         zone_id=zone_id,
         source_record_ids=[f"zone:{z.zone_id}" for z in zones],
+    )
+
+
+def road_network_context(
+    session: Session,
+    ctx: OperationalContext,
+    *,
+    equipment_id: int | None = None,
+    zone_id: int | None = None,
+    parameters: list[str] | None = None,
+) -> EvidenceItem:
+    catalog, zone_by_id = road_catalog.list_road_catalog(session, ctx)
+    if not catalog:
+        return _evidence(
+            ctx,
+            kind=EvidenceKind.FACT,
+            tool="road_network_context",
+            service="app.services.operational.road_network.build_route_context",
+            metric="road_network_context",
+            value=None,
+            available=False,
+            equipment_id=equipment_id,
+            zone_id=zone_id,
+            notes="No haul roads are recorded for this site.",
+        )
+    origin, destination = road_catalog.resolve_haul_endpoints(
+        session,
+        ctx,
+        zone_by_id,
+        equipment_id=equipment_id,
+        zone_id=zone_id,
+        parameters=parameters,
+    )
+    payload = build_route_context(catalog, origin_zone_id=origin, destination_zone_id=destination)
+    codes = {zone.code: zone for zone in zone_by_id.values()}
+    if origin and origin in codes:
+        payload["originZone"] = road_catalog.zone_brief(codes[origin])
+    if destination and destination in codes:
+        payload["destinationZone"] = road_catalog.zone_brief(codes[destination])
+    payload["zoneDescriptionIsNotARoutingRule"] = True
+    notes = (
+        "Operational haul-road facts. CLOSED and unknown-status roads are not routable. "
+        "RESTRICTED roads may be used but are not equivalent to OPEN. "
+        "Zone descriptions are context only and do not override road status. "
+        "Candidate distances and travel times are precomputed; do not recalculate them."
+    )
+    if origin is None or destination is None:
+        notes += " Origin or destination could not be fully resolved."
+    return _evidence(
+        ctx,
+        kind=EvidenceKind.FACT,
+        tool="road_network_context",
+        service="app.services.operational.road_network.build_route_context",
+        metric="road_network_context",
+        value=payload,
+        equipment_id=equipment_id,
+        zone_id=zone_id,
+        source_record_ids=[f"road:{item['id']}" for item in payload.get("relevantRoads", []) if item.get("id")],
+        metadata={
+            "candidatePathCount": len(payload.get("candidatePaths") or []),
+            "relevantRoadCount": len(payload.get("relevantRoads") or []),
+        },
+        notes=notes,
     )

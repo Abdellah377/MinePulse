@@ -69,6 +69,13 @@ recommendation description, rationale, and operational_constraints.
 Keep equipment codes, OEM codes, metric names, evidence IDs, and enum values
 unchanged (TRK-010, SIM-BATT-VOLT-LOW, WAITING_LOADING). Do not translate
 canonical identifiers. Evidence values stay as supplied.
+Road-network evidence is supplied operational fact. Cite road status, closure
+reasons, and candidate paths only as given. Do not infer availability from map appearance,
+invent roads, distances, or travel times, or treat zone descriptions
+as routing rules. CLOSED and unknown-status roads are not usable. RESTRICTED
+roads may be used but are not equivalent to OPEN. Path distances and travel
+times are precomputed; do not recalculate them. Never close, open, or modify
+roads, reassign equipment, or execute rerouting.
 """.strip()
 
 _DIAGNOSIS_PROMPT = _COMMON_POLICY + """
@@ -97,6 +104,9 @@ Rank hypotheses by valid support, independent signals, temporal relevance, and
 contradictions; distinguish correlation from a supported mechanism and do not
 invent numeric probabilities. Confidence is confidence in the proposed cause,
 not confidence that the observed symptom exists.
+ROAD_NETWORK_CONTEXT is operational haul-road fact with precomputed candidate
+paths. Request it for congestion, haul access, blockage, or reroute questions.
+Do not request it for unrelated mechanical failures.
 """
 
 _CONCLUSION_PROMPT = _COMMON_POLICY + """
@@ -129,6 +139,7 @@ be checked and why. For an inconclusive result, request the evidence that would
 best discriminate the remaining hypotheses. Avoid generic "check the truck"
 wording when a specific signal, loader, queue, assignment, or operational
 condition is available. Never mix insufficient-evidence wording with confirmation.
+A suggested itinerary such as R-05 then R-06 is advisory only; the operator decides.
 """
 
 
