@@ -29,6 +29,7 @@ def patch_alert(alert_id: str, body: AlertPatchRequest, session: DbSession, ctx:
     alert = update_alert(
         session,
         alert_id,
+        site_id=ctx.site_id,
         status=body.status,
         assigned_to_operator_id=body.assigned_to_operator_id,
         actor_label=body.actor_label,

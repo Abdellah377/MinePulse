@@ -59,15 +59,19 @@ def update_alert(
     session: Session,
     alert_id: str,
     *,
+    site_id: int | None = None,
     status: str | None = None,
     assigned_to_operator_id: int | None = None,
     actor_label: str | None = None,
     resolution: str | None = None,
 ) -> Alert:
-    pk = _parse_alert_pk(alert_id)
-    alert = session.get(Alert, pk)
-    if not alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
+    if site_id is not None:
+        alert = get_site_alert_or_404(session, site_id, alert_id)
+    else:
+        pk = _parse_alert_pk(alert_id)
+        alert = session.get(Alert, pk)
+        if not alert:
+            raise HTTPException(status_code=404, detail="Alert not found")
 
     now = datetime.now(timezone.utc)
     meta = dict(alert.metadata_ or {})

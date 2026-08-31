@@ -1,6 +1,6 @@
 import { create } from "zustand"
 
-import { fetchBootstrap, fetchOperationalSettings, patchAlert, patchOperationalSettings, useApiMode, type OpsContext, type OperationalSettingsDto } from "@/lib/api/client"
+import { fetchBootstrap, fetchOperationalSettings, fetchActiveAlertCount, patchAlert, patchOperationalSettings, useApiMode, type OpsContext, type OperationalSettingsDto } from "@/lib/api/client"
 import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import { mergeProductionByShift, type ProductionByShift } from "@/lib/production/mergeProduction"
 import {
@@ -175,7 +175,7 @@ interface OpsState {
   setSelectedShift: (id: string) => void
   setPeriodRange: (from: string, to: string) => void
   tick: () => void
-  updateAlertStatus: (id: string, status: AlertStatus, assignedTo?: string) => void
+  updateAlertStatus: (id: string, status: AlertStatus, assignedTo?: string) => Promise<void>
   applyOperationalSettings: (dto: OperationalSettingsDto) => void
   patchOperationalSetting: (key: keyof OperationalSettingsDto, value: number) => Promise<void>
   setIdleAlertThreshold: (min: number) => void
@@ -313,7 +313,7 @@ export const useOpsStore = create<OpsState>((set, get) => ({
     set({ equipment: nextEquipment, lastSyncAt: Date.now() })
   },
 
-  updateAlertStatus: (id, status, assignedTo) => {
+  updateAlertStatus: async (id, status, assignedTo) => {
     if (!useApiMode) {
       set((s) => ({
         alerts: s.alerts.map((a) =>
@@ -324,25 +324,29 @@ export const useOpsStore = create<OpsState>((set, get) => ({
       }))
       return
     }
-    void patchAlert(
-      id,
-      { status, actor_label: assignedTo },
-      apiCtx(get())
-    )
-      .then((dto) => {
-        set((s) => ({
-          alerts: s.alerts.map((a) => (a.id === dto.id ? dto : a)),
-          apiPollError: withoutMatchingError(s.apiPollError, "Échec mise à jour alerte"),
-        }))
-        useAlertFeedStore.getState().upsert(dto)
-        if (dto.status === "resolved") {
+    try {
+      const dto = await patchAlert(
+        id,
+        { status, actor_label: assignedTo },
+        apiCtx(get())
+      )
+      set((s) => ({
+        alerts: s.alerts.map((a) => (a.id === dto.id ? dto : a)),
+        apiPollError: withoutMatchingError(s.apiPollError, "Échec mise à jour alerte"),
+      }))
+      useAlertFeedStore.getState().upsert(dto)
+      if (dto.status === "resolved") {
+        const count = await fetchActiveAlertCount(apiCtx(get())).catch(() => null)
+        if (count) useAlertFeedStore.getState().setActiveCount(count.activeCount)
+        else {
           const current = useAlertFeedStore.getState().activeCount
           useAlertFeedStore.getState().setActiveCount(Math.max(0, current - 1))
         }
-      })
-      .catch(() => {
-        set({ apiPollError: "Échec mise à jour alerte" })
-      })
+      }
+    } catch (error) {
+      set({ apiPollError: "Échec mise à jour alerte" })
+      throw error
+    }
   },
 
   applyOperationalSettings: (dto) =>

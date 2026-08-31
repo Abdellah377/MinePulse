@@ -53,4 +53,13 @@ describe("useAlertFeedStore", () => {
     expect(useAlertFeedStore.getState().orderedIds).toEqual(["alert-1"])
     expect(useAlertFeedStore.getState().byId["alert-1"].status).toBe("resolved")
   })
+
+  it("caps stored ids and does not duplicate on append", () => {
+    const rows = Array.from({ length: 12 }, (_, i) => alert(`alert-${i}`, i))
+    useAlertFeedStore.getState().appendPage({ items: rows, nextCursor: "c", hasMore: true, activeCount: 12 })
+    useAlertFeedStore.getState().appendPage({ items: rows.slice(0, 3), nextCursor: "c2", hasMore: false, activeCount: 12 })
+    const ids = useAlertFeedStore.getState().orderedIds
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids).toHaveLength(12)
+  })
 })

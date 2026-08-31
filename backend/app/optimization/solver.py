@@ -147,13 +147,20 @@ def generate_candidates(
         if not paths:
             continue
         wait = _wait_for_loader(loading, loader.equipment_id)
+        seen_paths: set[tuple] = set()
         for path in paths:
+            road_ids = tuple(path.get("roadIds") or [])
+            fingerprint = (loader.equipment_id, origin, dest, road_ids)
+            if fingerprint in seen_paths:
+                continue
+            seen_paths.add(fingerprint)
             travel = path.get("estimatedTravelMinutes")
             distance = path.get("totalDistanceKm")
+            path_notes = list(notes)
             if path.get("containsRestrictedRoad"):
-                notes.append("RESTRICTED")
+                path_notes.append("RESTRICTED")
             if travel is None:
-                notes.append("non évalué")
+                path_notes.append("non évalué")
             score = score_candidate(travel, wait, weights)
             index += 1
             candidates.append(
@@ -165,12 +172,12 @@ def generate_candidates(
                     "loaderCode": getattr(loader, "code", None),
                     "destZoneCode": dest,
                     "originZoneCode": origin,
-                    "roadIds": list(path.get("roadIds") or []),
+                    "roadIds": list(road_ids),
                     "distanceKm": distance,
                     "travelMinutes": travel,
                     "waitMinutes": wait,
                     "score": score,
-                    "constraintNotes": list(notes),
+                    "constraintNotes": path_notes,
                     "isCurrent": bool(current_loader_id == loader.equipment_id),
                     "rankReason": "score" if score is not None else "non évalué",
                 }

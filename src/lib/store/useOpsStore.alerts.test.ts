@@ -7,6 +7,7 @@ const patchAlertMock = vi.fn()
 vi.mock("@/lib/api/client", () => ({
   fetchBootstrap: vi.fn(),
   fetchOperationalSettings: vi.fn(),
+  fetchActiveAlertCount: vi.fn(async () => ({ activeCount: 0 })),
   patchAlert: patchAlertMock,
   patchOperationalSettings: vi.fn(),
   useApiMode: true,
@@ -69,5 +70,21 @@ describe("updateAlertStatus in API mode", () => {
 
     expect(useOpsStore.getState().alerts[0]).toEqual(updated)
     expect(useOpsStore.getState().apiPollError).toBeNull()
+  })
+
+  it("resolved PATCH keeps the row in history and uses backend activeCount", async () => {
+    const { useOpsStore } = await import("./useOpsStore")
+    const { useAlertFeedStore } = await import("./useAlertFeedStore")
+    const { fetchActiveAlertCount } = await import("@/lib/api/client")
+    useAlertFeedStore.getState().reset()
+    useAlertFeedStore.getState().setActiveCount(10)
+    patchAlertMock.mockResolvedValueOnce({ ...baseAlert, status: "resolved", updatedAt: 2 })
+    vi.mocked(fetchActiveAlertCount).mockResolvedValueOnce({ activeCount: 9 })
+
+    await useOpsStore.getState().updateAlertStatus("alert-1", "resolved", "Chef de poste")
+
+    expect(useAlertFeedStore.getState().activeCount).toBe(9)
+    expect(useAlertFeedStore.getState().byId["alert-1"].status).toBe("resolved")
+    expect(useAlertFeedStore.getState().orderedIds).toContain("alert-1")
   })
 })

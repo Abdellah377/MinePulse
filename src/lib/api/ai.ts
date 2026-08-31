@@ -91,9 +91,9 @@ export const aiApi = {
       body: JSON.stringify({ alert_id: alertId }),
     })
   },
-  listOptimizationRuns(alertId: string): Promise<import("./types/optimization").OptimizationRun[]> {
+  listOptimizationRuns(alertId: string, ctx?: { siteCode?: string; shiftId?: string }): Promise<import("./types/optimization").OptimizationRun[]> {
     requireApi()
-    return fetchJson(`/optimization/runs?alert_id=${encodeURIComponent(alertId)}`)
+    return fetchJson(`/optimization/runs${opsQueryString(ctx, { alert_id: alertId })}`)
   },
 }
 

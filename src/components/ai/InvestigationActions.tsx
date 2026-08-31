@@ -3,12 +3,14 @@ import { AlertTriangle, MessageSquare } from "lucide-react"
 import { useInvestigationStore } from "@/lib/store/useInvestigationStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
 import { useOpsStore } from "@/lib/store/useOpsStore"
+import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import type { WorkspacePanelProps } from "@/components/workspace/WorkspaceHost"
 import { InvestigationResultView } from "./InvestigationResultView"
 import { Chip } from "./InvestigationLayout"
 import { AiExplanationBlock, AiExplanationPanel, AiWhyButton } from "./AiExplanation"
 import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
 import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
+import { mergeInboxItems, pickInboxSelection, removeInboxItem } from "@/lib/ai/actionsInbox"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
@@ -17,6 +19,7 @@ import { aiApi } from "@/lib/api/ai"
 import type { InvestigationResult, JsonValue } from "@/lib/api/types/ai"
 import type {
   DiscussionThread,
+  FollowUpStatus,
   RecommendationDecisionType,
   RecommendationDecisionView,
   RejectionReasonCategory,
@@ -26,6 +29,7 @@ import type { ActionsInboxItem, OptimizationCandidate, OptimizationRun } from "@
 import { SEVERITY_CONFIG } from "@/lib/status"
 import { operationalAlertTime } from "@/lib/alerts/order"
 import { timeAgo } from "@/lib/format"
+import { ALERT_STATUS_LABEL } from "@/lib/mock/types"
 
 const REASON_OPTIONS = Object.keys(REJECTION_REASON_LABEL) as RejectionReasonCategory[]
 
@@ -62,8 +66,16 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace)
   const activateTab = useWorkspaceStore((s) => s.activateTab)
   const updateAlertStatus = useOpsStore((s) => s.updateAlertStatus)
+  const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
+  const selectedShiftId = useOpsStore((s) => s.selectedShiftId)
+  const activeCount = useAlertFeedStore((s) => s.activeCount)
   const [inbox, setInbox] = useState<ActionsInboxItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(contextAlertId ?? null)
+  const [resolvedOverlay, setResolvedOverlay] = useState<ActionsInboxItem | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [run, setRun] = useState<OptimizationRun | null>(null)
   const [decisionView, setDecisionView] = useState<RecommendationDecisionView | null>(null)
   const [thread, setThread] = useState<DiscussionThread | null>(null)
@@ -79,21 +91,42 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  const selected = inbox.find((row) => row.id === selectedId) ?? inbox[0]
+  const selected = inbox.find((row) => row.id === selectedId)
+    ?? (resolvedOverlay?.id === selectedId ? resolvedOverlay : null)
+    ?? inbox[0]
   const alertId = selected?.id ?? contextAlertId ?? null
   const id = selected?.investigationId ?? investigationId
 
   useEffect(() => {
     let cancelled = false
-    void aiApi.listInbox({ limit: 20 }, opsCtx()).then((page) => {
+    setLoadError(null)
+    setResolvedOverlay(null)
+    void aiApi.listInbox({ limit: 20 }, opsCtx()).then(async (page) => {
       if (cancelled) return
-      setInbox(page.items)
-      setSelectedId((current) => current ?? contextAlertId ?? page.items[0]?.id ?? null)
+      let items = page.items
+      setHasMore(page.hasMore)
+      setNextCursor(page.nextCursor)
+      if (contextAlertId && !items.some((row) => row.id === contextAlertId)) {
+        try {
+          const detail = await aiApi.getInboxDetail(contextAlertId, opsCtx())
+          if (cancelled) return
+          if (detail.alert.status === "resolved") setResolvedOverlay(detail.alert)
+          else items = mergeInboxItems(items, [detail.alert], { prepend: true })
+        } catch {
+          if (!cancelled) setLoadError("Dossier introuvable.")
+        }
+      }
+      if (cancelled) return
+      setInbox(items)
+      setSelectedId(pickInboxSelection(items, contextAlertId) ?? (items[0]?.id ?? null))
     }).catch(() => {
-      if (!cancelled) setActionError("File Actions IA indisponible.")
+      if (!cancelled) {
+        setInbox([])
+        setLoadError("File Actions IA indisponible.")
+      }
     })
     return () => { cancelled = true }
-  }, [contextAlertId])
+  }, [contextAlertId, selectedSiteId, selectedShiftId, activeCount])
 
   useEffect(() => {
     if (contextAlertId) setSelectedId(contextAlertId)
@@ -105,13 +138,14 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     let cancelled = false
     void aiApi.getInboxDetail(alertId, opsCtx()).then((detail) => {
       if (cancelled) return
+      setActionError(null)
       if (detail.latestRun) {
         setRun({
           runId: detail.latestRun.runId,
           alertId,
           siteId: 0,
           optimizerVersion: detail.latestRun.optimizerVersion,
-          weights: {},
+          weights: (detail.latestRun.weights ?? {}) as Record<string, number>,
           eligibility: detail.latestRun.eligibility,
           outcome: detail.latestRun.outcome,
           snapshotDigest: null,
@@ -132,7 +166,12 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
           decision: detail.decision,
         })
       }
-    }).catch(() => undefined)
+    }).catch(() => {
+      if (!cancelled) {
+        setRun(null)
+        setActionError("Dossier alerte indisponible.")
+      }
+    })
     return () => { cancelled = true }
   }, [alertId])
 
@@ -218,13 +257,30 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     setBusy(true)
     setActionError(null)
     try {
-      updateAlertStatus(alertId, "resolved", actorLabel || "Chef de poste")
-      setInbox((rows) => rows.filter((row) => row.id !== alertId))
-      setSelectedId((current) => (current === alertId ? inbox.find((row) => row.id !== alertId)?.id ?? null : current))
+      await updateAlertStatus(alertId, "resolved", actorLabel || "Chef de poste")
+      const { remaining, nextSelectedId } = removeInboxItem(inbox, alertId)
+      setInbox(remaining)
+      setSelectedId(nextSelectedId)
+      setResolvedOverlay(null)
     } catch {
       setActionError("Impossible de marquer le dossier comme traité.")
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function loadMoreInbox() {
+    if (!hasMore || !nextCursor || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const page = await aiApi.listInbox({ limit: 20, cursor: nextCursor }, opsCtx())
+      setInbox((rows) => mergeInboxItems(rows, page.items))
+      setHasMore(page.hasMore)
+      setNextCursor(page.nextCursor)
+    } catch {
+      setActionError("Chargement de la file impossible.")
+    } finally {
+      setLoadingMore(false)
     }
   }
 
@@ -265,8 +321,17 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
           <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-2">Actions IA</p>
           <p className="text-[12px] text-muted">{inbox.length} dossier{inbox.length > 1 ? "s" : ""} ouvert{inbox.length > 1 ? "s" : ""}</p>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {!inbox.length && (
+        <div
+          className="min-h-0 flex-1 overflow-y-auto"
+          onScroll={(event) => {
+            const node = event.currentTarget
+            if (node.scrollHeight - node.scrollTop - node.clientHeight < 80) void loadMoreInbox()
+          }}
+        >
+          {loadError && !inbox.length && (
+            <p role="alert" className="px-3 py-8 text-center text-[12px] text-danger">{loadError}</p>
+          )}
+          {!loadError && !inbox.length && (
             <p className="px-3 py-8 text-center text-[12px] text-muted">Aucun dossier non traité.</p>
           )}
           {inbox.map((row) => {
@@ -281,6 +346,8 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
                 <div className="flex items-center gap-1.5 text-[10px]">
                   <span className={cn("size-1.5 rounded-full", SEVERITY_CONFIG[row.severity].dot)} />
                   <span className={cn("font-semibold", SEVERITY_CONFIG[row.severity].color)}>{SEVERITY_CONFIG[row.severity].label}</span>
+                  <span className="text-muted-2">{ALERT_STATUS_LABEL[row.status]}</span>
+                  {row.latestRunOutcome && <span className="text-muted-2">{row.latestRunOutcome}</span>}
                   <span className="ml-auto tabular-nums text-muted-2">{timeAgo(operationalAlertTime(row))}</span>
                 </div>
                 <p className="text-[12px] font-medium text-foreground">{row.title}</p>
@@ -288,6 +355,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
               </button>
             )
           })}
+          {loadingMore && <p className="px-3 py-2 text-center text-[10px] text-muted-2">Chargement…</p>}
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -295,10 +363,13 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-2">Dossier alerte</p>
-              <h1 className="mt-0.5 text-[15px] font-semibold text-foreground">{selected?.title ?? "Actions IA"}</h1>
+              <h1 className="mt-0.5 text-[15px] font-semibold text-foreground">{selected?.title ?? (inbox.length || loadError ? "Actions IA" : "Aucun dossier")}</h1>
               <p className="mt-1 max-w-2xl text-[12px] text-muted">{selected?.description ?? (result?.conclusion?.summary ? operatorText(result.conclusion.summary) : "Sélectionnez un dossier. Aucun appel IA à l’ouverture.")}</p>
             </div>
-            <Badge variant="outline" className="shrink-0">Confiance {confidence}</Badge>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              {selected && <Badge variant="outline">{ALERT_STATUS_LABEL[selected.status]}</Badge>}
+              <Badge variant="outline" className="shrink-0">Confiance {confidence}</Badge>
+            </div>
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
             <Chip>Pourquoi : {result?.conclusion ? `${DIAGNOSIS_STATUS_LABEL[result.conclusion.diagnosis_status]}${result.conclusion.root_cause ? ` — ${compactOperatorText(result.conclusion.root_cause, 80)}` : ""}` : "Cause non déterminée"}</Chip>
@@ -306,9 +377,9 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
             {id && <Chip>Investigation {id}</Chip>}
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={backToAlert}>Retour aux alertes</Button>
             {id && <Button size="sm" variant="outline" disabled={entry?.phase === "loading"} onClick={() => void retrieve(id, true)}>Actualiser</Button>}
             <Button size="sm" disabled={!alertId || handled || busy} onClick={() => void markHandled()}>Marquer comme traité</Button>
+            <Button size="sm" variant="ghost" onClick={backToAlert}>Voir l’alerte</Button>
           </div>
           {failure && <p role="alert" className="mt-2 text-xs text-danger">{failure}</p>}
           {actionError && <p role="alert" className="mt-2 text-xs text-danger">{actionError}</p>}
@@ -441,7 +512,7 @@ function DecisionControls({
   actorLabel: string
   setActorLabel: (value: string) => void
   record: RecommendationDecisionView["decision"]
-  followUp: string | null
+  followUp: FollowUpStatus | null
   closeFollowUp: () => void
 }) {
   return (
@@ -490,12 +561,28 @@ function DecisionControls({
 }
 
 function OptimizationPlans({ run, whyOpen, onToggleWhy }: { run: OptimizationRun; whyOpen: boolean; onToggleWhy: () => void }) {
-  const top = (run.candidates ?? []).slice(0, 3)
+  const plans = run.candidates ?? []
+  const weights = run.explanation?.weights ?? run.weights
+  const weightLabel = `travel ${weights?.w_travel ?? 1} · attente ${weights?.w_wait ?? 1}`
+  const outcomeLabel =
+    run.outcome === "FEASIBLE" ? "Plan évalué"
+      : run.outcome === "NO_FEASIBLE_PLAN" ? "Aucun plan faisable"
+        : run.outcome === "INSUFFICIENT_DATA" ? "Données insuffisantes"
+          : run.outcome === "NOT_APPLICABLE" ? "Non applicable"
+            : run.outcome === "ERROR" ? "Optimiseur en échec"
+              : String(run.outcome)
   return (
     <div className="mt-2 space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant="outline">{outcomeLabel}</Badge>
+        {run.recommendedCandidateId && <Badge variant="outline">recommandé {run.recommendedCandidateId}</Badge>}
+      </div>
       <p className="text-[11px] text-muted">{run.explanation?.why ?? (run.outcome === "NOT_APPLICABLE" ? "Optimisation de dispatch non applicable." : `Résultat : ${run.outcome}`)}</p>
       {run.weatherStatus && <p className="text-[10px] text-muted-2">Météo : {run.weatherStatus} (affichage uniquement, non notée)</p>}
-      {top.map((plan: OptimizationCandidate) => (
+      {!plans.length && run.outcome !== "FEASIBLE" && (
+        <p className="text-[11px] text-muted">Aucun candidat de dispatch à afficher. Aucun impact n’est inventé.</p>
+      )}
+      {plans.map((plan: OptimizationCandidate) => (
         <article key={plan.candidateId} className={cn("rounded-md border px-3 py-2", plan.candidateId === run.recommendedCandidateId ? "border-accent/40 bg-accent-soft/30" : "border-border")}>
           <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
             <Badge variant="outline">{plan.isCurrent ? "Plan actuel" : "Candidat"}</Badge>
@@ -514,7 +601,7 @@ function OptimizationPlans({ run, whyOpen, onToggleWhy }: { run: OptimizationRun
       <AiWhyButton expanded={whyOpen} onClick={onToggleWhy} />
       <AiExplanationPanel open={whyOpen}>
         <AiExplanationBlock label="Moteur">Optimiseur déterministe {run.optimizerVersion}. Pas de LLM.</AiExplanationBlock>
-        <AiExplanationBlock label="Score">{`score = w_travel × travel + w_wait × attente si les deux sont connus. Poids : ${JSON.stringify(run.explanation?.weights ?? run.weights)}`}</AiExplanationBlock>
+        <AiExplanationBlock label="Score">{`score = w_travel × travel + w_wait × attente si les deux sont connus. Poids : ${weightLabel}`}</AiExplanationBlock>
         <AiExplanationBlock label="Contraintes">CLOSED/UNKNOWN non routables. Destination actuelle conservée. Météo non notée.</AiExplanationBlock>
       </AiExplanationPanel>
     </div>

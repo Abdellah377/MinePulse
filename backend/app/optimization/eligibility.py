@@ -34,7 +34,7 @@ def _monitoring(alert: Any) -> dict:
 def eligibility_for_alert(alert: Any) -> str:
     alert_type = str(getattr(alert, "alert_type", "") or "")
     monitoring = _monitoring(alert)
-    detector = str(monitoring.get("detector_id") or "")
+    detector = str(monitoring.get("detectorId") or monitoring.get("detector_id") or "")
     if alert_type in OPTIMIZABLE_ALERT_TYPES or detector in OPTIMIZABLE_DETECTORS:
         return OPTIMIZABLE
     if alert_type == "OPERATIONAL_EVENT":
