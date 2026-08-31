@@ -64,6 +64,10 @@ import {
 import { buildRecentTrail, useMapLiveSimulation } from "@/features/map/map.simulation"
 import { useApiMode, createZone, deleteZone, patchZone } from "@/lib/api/client"
 import { withoutMatchingError } from "@/lib/store/apiSync"
+import {
+  mapCameraForEquipment,
+  mapFocusEpoch,
+} from "@/features/map/map.focus"
 
 const ALL_TYPES = Object.keys(EQUIPMENT_TYPE_LABEL) as EquipmentType[]
 const ALL_GROUPS = Object.keys(FILM_STATE_GROUP_LABEL) as FilmStateGroup[]
@@ -75,19 +79,54 @@ function emptyDraft(): ZoneDraft {
 function MapFlyTo({
   equipmentId,
   equipment,
+  focusRequestId,
 }: {
   equipmentId: string | null
   equipment: ReturnType<typeof useSiteScopedEquipment>
+  focusRequestId?: number | string | null
 }) {
   const { map, ready } = useMineMap()
+  const lastEpoch = useRef<string | null>(null)
+  const target = equipment.find((e) => e.id === equipmentId)
+  const camera = mapCameraForEquipment(target)
+  const cameraRef = useRef(camera)
+  cameraRef.current = camera
+  const hasPosition = camera != null
   useEffect(() => {
     if (!map || !ready || !equipmentId) return
-    const eq = equipment.find((e) => e.id === equipmentId)
-    if (!eq) return
-    if (!eq?.position) return
-    const [lng, lat] = workspaceToLngLat(eq.position)
-    map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 15.5), duration: 600 })
-  }, [map, ready, equipmentId]) // eslint-disable-line react-hooks/exhaustive-deps -- fly once on selection
+    const next = cameraRef.current
+    const epoch = mapFocusEpoch(equipmentId, next != null, focusRequestId)
+    if (!epoch || epoch === lastEpoch.current || !next) return
+    lastEpoch.current = epoch
+    map.easeTo({
+      center: next.center,
+      zoom: Math.max(map.getZoom(), next.zoom),
+      duration: 600,
+    })
+  }, [map, ready, equipmentId, focusRequestId, hasPosition])
+  return null
+}
+
+function FitOnReady({
+  equipment,
+  skip,
+}: {
+  equipment: ReturnType<typeof useSiteScopedEquipment>
+  skip: boolean
+}) {
+  const { map, ready } = useMineMap()
+  const didFit = useRef(false)
+  useEffect(() => {
+    if (!map || !ready || didFit.current) return
+    if (skip) {
+      didFit.current = true
+      return
+    }
+    const bounds = fitBoundsFromEquipment(equipment)
+    if (!bounds) return
+    map.fitBounds(bounds, { padding: 64, duration: 0, maxZoom: 15.5 })
+    didFit.current = true
+  }, [map, ready, equipment, skip])
   return null
 }
 
@@ -104,19 +143,6 @@ function FlyToZone({ zone }: { zone: Zone | null }) {
     map.fitBounds(bounds, { padding: 80, duration: 500, maxZoom: 17 })
   }, [map, ready, zone])
 
-  return null
-}
-
-function FitOnReady({ equipment }: { equipment: ReturnType<typeof useSiteScopedEquipment> }) {
-  const { map, ready } = useMineMap()
-  const didFit = useRef(false)
-  useEffect(() => {
-    if (!map || !ready || didFit.current) return
-    const bounds = fitBoundsFromEquipment(equipment)
-    if (!bounds) return
-    map.fitBounds(bounds, { padding: 64, duration: 0, maxZoom: 15.5 })
-    didFit.current = true
-  }, [map, ready, equipment])
   return null
 }
 
@@ -794,13 +820,20 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
               color={draft?.color}
               onPointsChange={setEditingVertices}
             />
-            <MapFlyTo equipmentId={selectedEquipmentId} equipment={equipment} />
+            <MapFlyTo
+              equipmentId={selectedEquipmentId}
+              equipment={equipment}
+              focusRequestId={typeof tab?.context.mapFocusAt === "number" ? tab.context.mapFocusAt : null}
+            />
             <FlyToZone
               zone={
                 focusZoneId ? (zones.find((z) => z.id === focusZoneId) ?? null) : null
               }
             />
-            <FitOnReady equipment={filteredEquipment} />
+            <FitOnReady
+              equipment={filteredEquipment}
+              skip={Boolean(selectedEquipmentId && mapCameraForEquipment(equipment.find((e) => e.id === selectedEquipmentId)))}
+            />
             <MapControls
               basemap={basemap}
               onBasemapChange={setBasemap}

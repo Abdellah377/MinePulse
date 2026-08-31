@@ -65,6 +65,12 @@ it("API-mode inspector does not import mock world generator for the score", () =
   expect(source).toContain("useApiMode")
   expect(source).toContain("demoFailureRisk")
   expect(source).toMatch(/useApiMode\s*\?\s*apiFailureRisk/)
+  const apercu = source.slice(source.indexOf('value="apercu"'), source.indexOf('value="cycle"'))
+  const ia = source.slice(source.indexOf('value="ia"'))
+  expect(apercu).not.toContain("FailureRiskCard")
+  expect(ia).toContain("FailureRiskCard")
+  expect(source).toContain("Voir sur la carte")
+  expect(source).toContain("openMapForTarget")
 })
 
 it("demo helper stays labeled prototype and is not a live API substitute", () => {

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils"
 import { useApiMode } from "@/lib/api/client"
 import { timeAgo } from "@/lib/format"
 import { operationalAlertTime } from "@/lib/alerts/order"
+import { alertWorkspaceContext } from "@/lib/alerts/notifications"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 import { useUiStore } from "@/lib/store/useUiStore"
 import { useWorkspaceStore, useActiveWorkspace } from "@/lib/store/useWorkspaceStore"
@@ -223,7 +224,7 @@ export function BrandHeader() {
                   onClick={() => {
                     openWorkspace({
                       type: "alerts",
-                      context: { alertId: alert.id },
+                      context: alertWorkspaceContext(alert),
                       title: alert.title,
                     })
                     navigate("/alertes")

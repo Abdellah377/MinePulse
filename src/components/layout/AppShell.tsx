@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react"
 import { BrandHeader } from "@/components/layout/BrandHeader"
 import { CommandPalette } from "@/components/layout/CommandPalette"
 import { EquipmentDetailDrawer } from "@/components/equipment/EquipmentDetailDrawer"
+import { AlertToasts } from "@/components/alerts/AlertToasts"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
 import { useApiMode } from "@/lib/api/client"
@@ -93,6 +94,7 @@ export function AppShell() {
       </div>
       <CommandPalette />
       <EquipmentDetailDrawer />
+      <AlertToasts />
     </TooltipProvider>
   )
 }

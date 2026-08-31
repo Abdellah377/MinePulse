@@ -45,6 +45,7 @@ export interface WorkspaceContext {
   investigationId?: string
   oemFamily?: OemFamily
   oemView?: OemView
+  mapFocusAt?: number
   [key: string]: unknown
 }
 

@@ -4,6 +4,7 @@ import {
   Fuel,
   Power,
   MapPin,
+  Map as MapIcon,
   User,
   Wrench,
   TrendingUp,
@@ -21,6 +22,7 @@ import { FailureRiskCard } from "@/components/equipment/FailureRiskCard"
 import { shiftWindowBounds } from "@/lib/ops/shiftWindow"
 import { useUiStore } from "@/lib/store/useUiStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
+import { openMapForTarget } from "@/lib/workspace/openMapFocus"
 import { STATE_CONFIG } from "@/lib/status"
 import { EquipmentTypeIcon } from "@/components/equipment/EquipmentTypeIcon"
 import type { EquipmentState } from "@/lib/mock/types"
@@ -235,6 +237,22 @@ export function EquipmentDetailContent({
             variant="outline"
             onClick={() => {
               closeEquipmentDrawer()
+              openMapForTarget({
+                equipmentId: eq.id,
+                equipmentCode: eq.code,
+                zoneId: eq.zoneId ?? undefined,
+                zoneName: zone?.name,
+              })
+            }}
+          >
+            <MapIcon className="size-3.5" />
+            Voir sur la carte
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              closeEquipmentDrawer()
               openWorkspace({
                 type: "timeline",
                 context: { equipmentId: eq.id, equipmentCode: eq.code },
@@ -282,7 +300,6 @@ export function EquipmentDetailContent({
           </div>
 
           <TabsContent value="apercu" className="flex flex-col gap-4 px-5 py-4">
-            {eq.type === "haul_truck" && failureRisk && <FailureRiskCard prediction={failureRisk} />}
             <div className="grid grid-cols-2 gap-2.5">
               <TelemetryStat icon={Gauge} label="Vitesse" value={eq.speedKmh != null ? `${eq.speedKmh.toFixed(0)} km/h` : "—"} />
               <TelemetryStat
@@ -432,6 +449,7 @@ export function EquipmentDetailContent({
           </TabsContent>
 
           <TabsContent value="ia" className="flex flex-col gap-3 px-5 py-4">
+            {eq.type === "haul_truck" && failureRisk && <FailureRiskCard prediction={failureRisk} />}
             <AiSlot insight={insight} label="Pourquoi" />
           </TabsContent>
         </Tabs>

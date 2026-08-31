@@ -11,6 +11,7 @@ import { useOpsStore, useSiteScopedEquipment, useSiteScopedZones } from "@/lib/s
 import { useApiMode } from "@/lib/api/client"
 import { useUiStore } from "@/lib/store/useUiStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
+import { openMapForTarget } from "@/lib/workspace/openMapFocus"
 import { SEVERITY_CONFIG } from "@/lib/status"
 import { cn } from "@/lib/utils"
 import type { AlertSeverity } from "@/lib/mock/types"
@@ -286,16 +287,11 @@ function DemoAlertesIA({ tab }: Partial<WorkspacePanelProps> = {}) {
                   variant="outline"
                   className="justify-start"
                   onClick={() =>
-                    openWorkspace({
-                      type: "map",
-                      investigationId: `inv-${selected.id}`,
-                      context: {
-                        equipmentId: selected.equipmentId ?? undefined,
-                        equipmentCode: selected.equipmentCode ?? undefined,
-                        zoneId: selected.zoneId ?? undefined,
-                        zoneName: selected.zoneName ?? undefined,
-                        investigationId: `inv-${selected.id}`,
-                      },
+                    openMapForTarget({
+                      equipmentId: selected.equipmentId ?? undefined,
+                      equipmentCode: selected.equipmentCode ?? undefined,
+                      zoneId: selected.zoneId ?? undefined,
+                      zoneName: selected.zoneName ?? undefined,
                     })
                   }
                 >
