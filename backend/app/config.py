@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     monitoring_production_deviation_pct: float = Field(default=20, ge=1, le=100)
     monitoring_cycle_duration_multiplier: float = Field(default=1.5, ge=1.05, le=10)
 
+    # External weather context. Unset/none disables fetches; MinePulse still starts.
+    weather_provider: str | None = None
+    weather_timeout_seconds: float = Field(default=5, ge=1, le=30)
+    weather_cache_ttl_seconds: float = Field(default=600, ge=30, le=3600)
+    weather_forecast_hours: int = Field(default=3, ge=1, le=3)
+
     @model_validator(mode="after")
     def validate_monitoring_threshold_order(self) -> "Settings":
         if self.monitoring_communication_critical_threshold > self.monitoring_communication_quality_threshold:

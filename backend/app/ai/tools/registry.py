@@ -22,6 +22,7 @@ from app.ai.contracts import (
 )
 from app.ai.debug import DebugEventType, InvestigationDebugSink, NullDebugRecorder
 from app.ai.tools import oem, operational
+from app.ai.tools import external as external_tools
 from app.services.operational.context import OperationalContext
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,22 @@ _ROAD_CONTEXT_TERMS = (
     "fermée",
     "fermee",
     "closed",
+)
+_WEATHER_CONTEXT_TERMS = (
+    "weather",
+    "météo",
+    "meteo",
+    "rain",
+    "pluie",
+    "vent",
+    "visib",
+    "fog",
+    "brouillard",
+    "dust",
+    "chaleur",
+    "orage",
+    "storm",
+    "precip",
 )
 
 
@@ -63,6 +80,7 @@ class EvidenceToolRegistry:
         )
         mechanical = trigger.trigger_type in _MECHANICAL_TRIGGER_TYPES
         explicit_road = any(term in trigger_text for term in _ROAD_CONTEXT_TERMS)
+        explicit_weather = any(term in trigger_text for term in _WEATHER_CONTEXT_TERMS)
         hauling_related = congestion_related or production_related or trigger.trigger_type in {
             TriggerType.CONGESTION_RISK,
             TriggerType.PRODUCTION_DEVIATION,
@@ -118,6 +136,13 @@ class EvidenceToolRegistry:
                         equipment_id=trigger.equipment_id,
                         zone_id=trigger.zone_id,
                     ),
+                )
+            )
+        if (hauling_related and not mechanical) or explicit_road or explicit_weather:
+            tools.append(
+                (
+                    "weather_context",
+                    lambda: external_tools.weather_context(self.session, ctx),
                 )
             )
         if trigger.equipment_id is not None:
@@ -192,6 +217,9 @@ class EvidenceToolRegistry:
                 equipment_id=request.equipment_id,
                 zone_id=request.zone_id,
                 parameters=request.parameters,
+            ),
+            EvidenceRequestType.WEATHER_CONTEXT.value: lambda: external_tools.weather_context(
+                self.session, ctx
             ),
             EvidenceRequestType.OEM_CONNECTIVITY.value: lambda: oem.connectivity(self.session, ctx, request),
             EvidenceRequestType.OEM_DIAGNOSTICS.value: lambda: oem.diagnostics(self.session, ctx, request),

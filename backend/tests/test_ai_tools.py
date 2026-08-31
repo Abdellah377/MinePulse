@@ -660,6 +660,7 @@ def test_congestion_initial_evidence_includes_road_network_context(monkeypatch):
     EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
 
     assert "road_network_context" in captured
+    assert "weather_context" in captured
 
 
 def test_mechanical_anomaly_does_not_auto_include_road_network(monkeypatch):
@@ -688,4 +689,5 @@ def test_mechanical_anomaly_does_not_auto_include_road_network(monkeypatch):
     EvidenceToolRegistry(object()).gather_initial(_context(), trigger)
 
     assert "road_network_context" not in captured
+    assert "weather_context" not in captured
 

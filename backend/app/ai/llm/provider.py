@@ -87,6 +87,13 @@ Historical OPERATOR_FEEDBACK is site memory, not operational fact. It may be
 stale, subjective, or wrong. Current FACT evidence, including road status,
 always wins. Do not imitate a named supervisor's personal preference. Operator
 acceptance is not proof of success; rejection is not automatically model failure.
+Current weather observations in WEATHER_CONTEXT are supplemental FACT. Forecast
+hours are not measured fact. Weather is context, not automatic causality: do
+not claim rain caused a mechanical failure unless independent operational
+evidence supports that mechanism. Heavy rain or low visibility may support
+cautious language such as "heavy rain may affect travel conditions" but must
+never rewrite haul-road status, close or open roads, invent travel times, or
+override CLOSED, UNKNOWN, or RESTRICTED facts. Authoritative road status wins.
 """.strip()
 
 _DIAGNOSIS_PROMPT = _COMMON_POLICY + """
@@ -118,6 +125,10 @@ not confidence that the observed symptom exists.
 ROAD_NETWORK_CONTEXT is operational haul-road fact with precomputed candidate
 paths. Request it for congestion, haul access, blockage, or reroute questions.
 Do not request it for unrelated mechanical failures.
+WEATHER_CONTEXT is supplemental site weather. Request it for congestion, haul,
+visibility, or weather-impact questions. Do not request it for unrelated
+mechanical sensor or OEM diagnostic issues. Do not treat forecast as current
+observation.
 """
 
 _CONCLUSION_PROMPT = _COMMON_POLICY + """

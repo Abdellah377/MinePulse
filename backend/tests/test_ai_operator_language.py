@@ -20,6 +20,10 @@ def test_provider_prompts_require_french_operator_fields_without_translating_cod
     assert "execute rerouting" in _COMMON_POLICY
     assert "OPERATOR_FEEDBACK" in _COMMON_POLICY
     assert "ROAD_NETWORK_CONTEXT" in _DIAGNOSIS_PROMPT
+    assert "WEATHER_CONTEXT" in _COMMON_POLICY
+    assert "WEATHER_CONTEXT" in _DIAGNOSIS_PROMPT
+    assert "not automatic causality" in _COMMON_POLICY
+    assert "Authoritative road status wins" in _COMMON_POLICY
     assert "advisory only" in _RECOMMENDATION_PROMPT
     assert "OPERATOR_INPUT" in _DISCUSSION_PROMPT
     assert "chain-of-thought" in _DISCUSSION_PROMPT
