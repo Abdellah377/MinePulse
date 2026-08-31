@@ -10,7 +10,7 @@ from app.db.models import Alert, Equipment, Zone
 from app.mappers.dto import alert_to_dto
 from app.optimization.eligibility import OPTIMIZABLE, eligibility_for_alert
 from app.optimization.persistence import latest_run_for_alert
-from app.services.operational.alerts import ALERT_PAGE_DEFAULT, page_site_alerts
+from app.services.operational.alerts import ALERT_PAGE_DEFAULT, get_site_alert_or_404, page_site_alerts
 from app.services.operational.context import OperationalContext
 from app.ai.feedback import load_decision_row, load_decision_row_for_alert, to_decision_record
 
@@ -58,14 +58,8 @@ def list_inbox(session: Session, ctx: OperationalContext, *, cursor: str | None 
 
 
 def inbox_detail(session: Session, ctx: OperationalContext, alert_id: str) -> dict:
-    from app.services.operational.alerts import _parse_alert_pk
-
-    pk = _parse_alert_pk(alert_id)
-    alert = session.get(Alert, pk)
-    if alert is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Alert not found")
+    alert = get_site_alert_or_404(session, ctx.site_id, alert_id)
+    pk = alert.alert_id
     equip_codes, zone_codes = _code_maps(session, ctx)
     dto = alert_to_dto(alert, equip_codes, zone_codes, session=session)
     flags = _inbox_flags(session, alert, ctx)

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.enums import EquipmentType
-from app.db.models import Alert, Equipment
 from app.optimization.eligibility import NOT_APPLICABLE as ELIG_NOT_APPLICABLE
 from app.optimization.eligibility import eligibility_for_alert
 from app.optimization.persistence import latest_run_for_alert, list_runs_for_alert, persist_run, run_to_dict
@@ -25,7 +25,7 @@ from app.optimization.solver import (
     snapshot_digest,
 )
 from app.services.external_context.weather import get_weather_context
-from app.services.operational.alerts import _parse_alert_pk
+from app.services.operational.alerts import get_site_alert_or_404
 from app.services.operational.assignments import current_assignment
 from app.services.operational.context import OperationalContext
 from app.services.operational.equipment import list_site_equipment
@@ -36,12 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 def create_optimization_run(session: Session, ctx: OperationalContext, alert_id: str) -> dict:
-    pk = _parse_alert_pk(alert_id)
-    alert = session.get(Alert, pk)
-    if alert is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Alert not found")
+    alert = get_site_alert_or_404(session, ctx.site_id, alert_id)
+    pk = alert.alert_id
     eligibility = eligibility_for_alert(alert)
     weights = dict(DEFAULT_WEIGHTS)
     weather_status = None
@@ -143,6 +139,8 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
         payload = run_to_dict(row)
         payload["explanation"] = explanation
         return payload
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("optimization run failed alert_id=%s", pk)
         row = persist_run(
@@ -170,9 +168,9 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
         return payload
 
 
-def list_optimization_runs(session: Session, alert_id: str) -> list[dict]:
-    pk = _parse_alert_pk(alert_id)
-    return [run_to_dict(row) for row in list_runs_for_alert(session, pk)]
+def list_optimization_runs(session: Session, ctx: OperationalContext, alert_id: str) -> list[dict]:
+    alert = get_site_alert_or_404(session, ctx.site_id, alert_id)
+    return [run_to_dict(row) for row in list_runs_for_alert(session, alert.alert_id)]
 
 
 def latest_optimization_outcome(session: Session, alert_id: int) -> str | None:

@@ -148,6 +148,30 @@ def _site_scope(site_id: int):
     )
 
 
+def alert_belongs_to_site(session: Session, site_id: int, alert: Alert) -> bool:
+    """Same membership as :func:`_site_scope`: site_id, equipment-linked, or zone-linked."""
+    if alert.site_id == site_id:
+        return True
+    if alert.equipment_id is not None:
+        equipment = session.get(Equipment, alert.equipment_id)
+        if equipment is not None and equipment.site_id == site_id:
+            return True
+    if alert.zone_id is not None:
+        zone = session.get(Zone, alert.zone_id)
+        if zone is not None and zone.site_id == site_id:
+            return True
+    return False
+
+
+def get_site_alert_or_404(session: Session, site_id: int, alert_id: str) -> Alert:
+    """Load an alert by id only if it belongs to the current site. Cross-site is 404."""
+    pk = _parse_alert_pk(alert_id)
+    alert = session.get(Alert, pk)
+    if alert is None or not alert_belongs_to_site(session, site_id, alert):
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
+
+
 def count_active_alerts(session: Session, site_id: int) -> int:
     """Site-scoped unresolved count. Badge source of truth."""
     value = session.scalar(

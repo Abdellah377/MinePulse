@@ -19,5 +19,9 @@ def post_optimization_run(body: OptimizationRunRequest, session: DbSession, ctx:
 
 
 @router.get("/runs")
-def get_optimization_runs(session: DbSession, alert_id: str = Query(min_length=1, max_length=80)):
-    return list_optimization_runs(session, alert_id)
+def get_optimization_runs(
+    session: DbSession,
+    ctx: Ctx,
+    alert_id: str = Query(min_length=1, max_length=80),
+):
+    return list_optimization_runs(session, ctx, alert_id)
