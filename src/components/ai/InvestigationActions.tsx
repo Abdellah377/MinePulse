@@ -21,7 +21,7 @@ import type {
   RecommendationDecisionView,
   RejectionReasonCategory,
 } from "@/lib/api/types/actionsIa"
-import { DECISION_STATUS_LABEL, REJECTION_REASON_LABEL } from "@/lib/api/types/actionsIa"
+import { DECISION_STATUS_LABEL, FOLLOW_UP_STATUS_LABEL, REJECTION_REASON_LABEL } from "@/lib/api/types/actionsIa"
 
 const REASON_OPTIONS = Object.keys(REJECTION_REASON_LABEL) as RejectionReasonCategory[]
 
@@ -86,6 +86,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const impact = useMemo(() => roadImpact(result), [result])
   const status = decisionView?.decision_type ?? "PENDING"
   const record = decisionView?.decision ?? null
+  const followUp = record?.follow_up_status ?? decisionView?.follow_up_status ?? null
 
   function backToAlert() {
     const existing = useWorkspaceStore.getState().tabs.find((t) => t.type === "alerts" && t.context.alertId === tab?.context.alertId)
@@ -108,10 +109,24 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
         alternative_action: type === "REJECTED" || type === "MODIFIED" ? alternative || null : null,
         actor_label: actorLabel || null,
       })
-      setDecisionView({ investigation_id: id, decision_type: saved.decision_type, decision: saved })
+      setDecisionView({ investigation_id: id, decision_type: saved.decision_type, follow_up_status: saved.follow_up_status, decision: saved })
       setFormMode(null)
     } catch {
       setActionError("Enregistrement de la décision impossible.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function closeFollowUp() {
+    if (!id) return
+    setBusy(true)
+    setActionError(null)
+    try {
+      const saved = await aiApi.patchFollowUp(id, { follow_up_status: "RESOLVED" })
+      setDecisionView({ investigation_id: id, decision_type: saved.decision_type, follow_up_status: saved.follow_up_status, decision: saved })
+    } catch {
+      setActionError("Clôture du suivi impossible.")
     } finally {
       setBusy(false)
     }
@@ -147,8 +162,8 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     <div className="grid min-h-0 flex-1 gap-3 overflow-hidden p-4 lg:grid-cols-12">
       <main className="flex min-h-0 flex-col gap-2 overflow-y-auto lg:col-span-7">
         <h2 className="text-[12px] font-semibold text-foreground">Recommandation IA</h2>
-        {rec ? <article className={cn("rounded-md border px-3.5 py-3", status === "ACCEPTED" || status === "RESOLVED" ? "border-success/30 bg-success/5" : "border-border bg-surface")}>
-          <div className="flex flex-wrap items-center gap-1.5"><Badge variant="outline" className="text-[10px]">Recommandation consultative</Badge><Badge variant="outline">{DECISION_STATUS_LABEL[status]}</Badge><span className="ml-auto text-[10px] text-muted-2">Confiance {confidence}</span></div>
+        {rec ? <article className={cn("rounded-md border px-3.5 py-3", status === "ACCEPTED" ? "border-success/30 bg-success/5" : "border-border bg-surface")}>
+          <div className="flex flex-wrap items-center gap-1.5"><Badge variant="outline" className="text-[10px]">Recommandation consultative</Badge><Badge variant="outline">{DECISION_STATUS_LABEL[status]}</Badge>{followUp && <Badge variant="outline">{FOLLOW_UP_STATUS_LABEL[followUp]}</Badge>}<span className="ml-auto text-[10px] text-muted-2">Confiance {confidence}</span></div>
           <h3 className="mt-1.5 text-[13px] font-semibold text-foreground">{operatorText(rec.description)}</h3>
           <p className="mt-1 text-[11px] text-muted"><span className="font-medium text-foreground">Pourquoi :</span> {operatorText(rec.rationale)}</p>
           <ul className="mt-2 list-inside list-disc text-[11px] text-muted">{rec.operational_constraints.map((c, i) => <li key={i}>{operatorText(c)}</li>)}</ul>
@@ -192,9 +207,10 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
           {record && status !== "PENDING" && (
             <div className="mt-3 border-t border-border pt-3 text-[11px] text-muted">
               <p className="font-semibold text-foreground">{DECISION_STATUS_LABEL[status]}</p>
+              {followUp && <p className="mt-1">{FOLLOW_UP_STATUS_LABEL[followUp]}</p>}
               <p className="mt-1">{formatWhen(record.updated_at)}{record.actor_label ? ` · ${record.actor_label}` : ""}</p>
               {record.reason_text && <p className="mt-1">{record.reason_text}</p>}
-              {status !== "RESOLVED" && <Button className="mt-2" size="sm" variant="outline" disabled={busy} onClick={() => void saveDecision("RESOLVED")}>Clôturer</Button>}
+              {followUp !== "RESOLVED" && <Button className="mt-2" size="sm" variant="outline" disabled={busy} onClick={() => void closeFollowUp()}>Clôturer</Button>}
             </div>
           )}
         </article> : <p className="py-8 text-center text-xs text-muted">Recommandation non évaluée ou indisponible.</p>}

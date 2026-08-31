@@ -10,6 +10,8 @@ from app.ai.contracts import (
     DiscussionPostRequest,
     EvidenceItem,
     EvidenceKind,
+    FollowUpStatus,
+    FollowUpStatusRequest,
     RecommendationDecisionRequest,
     RecommendationDecisionType,
     RecommendationDiscussionReply,
@@ -25,6 +27,7 @@ from app.ai.feedback import (
     get_decision_view,
     is_relevant_feedback,
     retrieve_operator_feedback,
+    set_follow_up_status,
     upsert_decision,
 )
 from app.db.models import AiInvestigation, AiRecommendationDecision, AiRecommendationDiscussionMessage
@@ -215,6 +218,7 @@ def test_site_scoping_and_pending_view(monkeypatch):
     _wire(monkeypatch, session)
     view = get_decision_view(session, inv.investigation_id)
     assert view.decision_type == RecommendationDecisionType.PENDING
+    assert view.follow_up_status is None
     assert view.decision is None
     record = upsert_decision(
         session,
@@ -395,6 +399,7 @@ def test_closed_road_not_eligible_because_of_operator_preference():
 def test_decision_api_routes_are_registered():
     paths = {route.path for route in app.routes}
     assert "/api/ai/investigations/{investigation_id}/decision" in paths
+    assert "/api/ai/investigations/{investigation_id}/decision/follow-up" in paths
     assert "/api/ai/investigations/{investigation_id}/discussion" in paths
 
 
@@ -416,6 +421,217 @@ def test_put_decision_does_not_invoke_provider(monkeypatch):
         )
         assert response.status_code == 200
         assert response.json()["decision_type"] == "ACCEPTED"
+        assert response.json()["follow_up_status"] == "OPEN"
         assert response.json()["original_recommendation"]["description"] == inv.recommendation["description"]
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def _reject(session, inv, actor="Chef A"):
+    return upsert_decision(
+        session,
+        inv.investigation_id,
+        RecommendationDecisionRequest(
+            decision_type=RecommendationDecisionType.REJECTED,
+            reason_category=RejectionReasonCategory.CONTRAINTE_NON_CONNUE_PAR_IA,
+            reason_text="R-05 indisponible pour les camions chargés.",
+            alternative_action="Attendre au parking.",
+            actor_label=actor,
+        ),
+    )
+
+
+def test_resolving_rejected_feedback_preserves_operator_context(monkeypatch):
+    inv = _investigation()
+    session = MemorySession(inv)
+    _wire(monkeypatch, session)
+    original = dict(inv.recommendation)
+    rejected = _reject(session, inv)
+    created_at = session.decision.created_at
+    context_tags = dict(session.decision.context_tags)
+    operator_action = session.decision.operator_action
+
+    resolved = set_follow_up_status(
+        session,
+        inv.investigation_id,
+        FollowUpStatusRequest(follow_up_status=FollowUpStatus.RESOLVED),
+    )
+    assert resolved.decision_type == RecommendationDecisionType.REJECTED
+    assert resolved.follow_up_status == FollowUpStatus.RESOLVED
+    assert resolved.reason_category == RejectionReasonCategory.CONTRAINTE_NON_CONNUE_PAR_IA
+    assert resolved.reason_text == "R-05 indisponible pour les camions chargés."
+    assert resolved.alternative_action == "Attendre au parking."
+    assert resolved.operator_action == operator_action
+    assert resolved.original_recommendation == original
+    assert resolved.actor_label == "Chef A"
+    assert resolved.context_tags == context_tags
+    assert session.decision.created_at == created_at
+    assert session.decision.decision_type == "REJECTED"
+    assert session.decision.follow_up_status == "RESOLVED"
+    assert inv.recommendation == original
+    assert rejected.original_recommendation == original
+
+
+def test_resolving_modified_and_accepted_preserves_decision_type(monkeypatch):
+    inv = _investigation()
+    session = MemorySession(inv)
+    _wire(monkeypatch, session)
+    original = dict(inv.recommendation)
+    modified = upsert_decision(
+        session,
+        inv.investigation_id,
+        RecommendationDecisionRequest(
+            decision_type=RecommendationDecisionType.MODIFIED,
+            reason_category=RejectionReasonCategory.MEILLEURE_ALTERNATIVE,
+            reason_text="Garder le parking 15 minutes.",
+            alternative_action="Attendre la réouverture de R-03.",
+            actor_label="Chef B",
+        ),
+    )
+    closed = set_follow_up_status(
+        session,
+        inv.investigation_id,
+        FollowUpStatusRequest(follow_up_status=FollowUpStatus.RESOLVED),
+    )
+    assert closed.decision_type == RecommendationDecisionType.MODIFIED
+    assert closed.follow_up_status == FollowUpStatus.RESOLVED
+    assert closed.operator_action == {"text": "Attendre la réouverture de R-03."}
+    assert closed.reason_text == modified.reason_text
+    assert closed.alternative_action == modified.alternative_action
+    assert closed.original_recommendation == original
+
+    inv_accept = _investigation()
+    session_accept = MemorySession(inv_accept)
+    _wire(monkeypatch, session_accept)
+    accepted = upsert_decision(
+        session_accept,
+        inv_accept.investigation_id,
+        RecommendationDecisionRequest(decision_type=RecommendationDecisionType.ACCEPTED, actor_label="Chef C"),
+    )
+    closed_accept = set_follow_up_status(
+        session_accept,
+        inv_accept.investigation_id,
+        FollowUpStatusRequest(follow_up_status=FollowUpStatus.RESOLVED),
+    )
+    assert closed_accept.decision_type == RecommendationDecisionType.ACCEPTED
+    assert closed_accept.follow_up_status == FollowUpStatus.RESOLVED
+    assert closed_accept.actor_label == "Chef C"
+    assert closed_accept.original_recommendation == accepted.original_recommendation
+
+
+def test_cannot_resolve_without_a_decision(monkeypatch):
+    inv = _investigation()
+    session = MemorySession(inv)
+    _wire(monkeypatch, session)
+    try:
+        set_follow_up_status(
+            session,
+            inv.investigation_id,
+            FollowUpStatusRequest(follow_up_status=FollowUpStatus.RESOLVED),
+        )
+    except FeedbackConflict as exc:
+        assert exc.code == "AI_DECISION_REQUIRED"
+    else:
+        raise AssertionError("expected conflict")
+
+
+def test_resolving_does_not_call_llm(monkeypatch):
+    inv = _investigation()
+    session = MemorySession(inv)
+    _wire(monkeypatch, session)
+    _reject(session, inv)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("follow-up must not call the LLM")
+
+    monkeypatch.setattr("app.ai.discussion.create_llm_provider", boom)
+    monkeypatch.setattr("app.ai.llm.provider.create_llm_provider", boom)
+    set_follow_up_status(
+        session,
+        inv.investigation_id,
+        FollowUpStatusRequest(follow_up_status=FollowUpStatus.RESOLVED),
+    )
+
+
+def test_retrieval_keeps_rejected_type_after_follow_up_resolved():
+    row = SimpleNamespace(
+        decision_id=uuid4(),
+        investigation_id=uuid4(),
+        site_id=1,
+        decision_type="REJECTED",
+        follow_up_status="RESOLVED",
+        reason_category="CONTRAINTE_NON_CONNUE_PAR_IA",
+        reason_text="R-05 indisponible pour les camions chargés.",
+        alternative_action="Attendre au parking.",
+        context_tags={
+            "triggerType": "CONGESTION_RISK",
+            "equipmentId": 14,
+            "zoneId": 4,
+            "actionType": "CONSIDER_REASSIGNMENT",
+            "roadIds": ["R-05"],
+            "roadStatus": {"R-05": "OPEN"},
+        },
+        updated_at=NOW,
+    )
+    session = SimpleNamespace(execute=object())
+    state = {
+        "investigation_id": str(uuid4()),
+        "trigger": SimpleNamespace(
+            site_id=1,
+            trigger_type="CONGESTION_RISK",
+            equipment_id=14,
+            zone_id=4,
+        ),
+        "evidence": [],
+        "recommendation": None,
+    }
+    import app.ai.feedback as feedback_mod
+
+    original = feedback_mod.list_prior_decisions
+    feedback_mod.list_prior_decisions = lambda *args, **kwargs: [row]
+    try:
+        items = retrieve_operator_feedback(session, state)
+    finally:
+        feedback_mod.list_prior_decisions = original
+    assert items[0].value["decisionType"] == "REJECTED"
+    assert items[0].value["followUpStatus"] == "RESOLVED"
+    assert items[0].value["reasonText"] == "R-05 indisponible pour les camions chargés."
+
+
+def test_put_resolved_is_rejected_by_the_contract():
+    try:
+        RecommendationDecisionRequest(decision_type="RESOLVED")
+    except Exception:
+        return
+    raise AssertionError("RESOLVED must not be a recorded decision type")
+
+
+def test_patch_follow_up_does_not_invoke_provider(monkeypatch):
+    inv = _investigation()
+    session = MemorySession(inv)
+    _wire(monkeypatch, session)
+    _reject(session, inv)
+    app.dependency_overrides[get_db] = lambda: session
+    monkeypatch.setattr(
+        "app.ai.discussion.create_llm_provider",
+        lambda: (_ for _ in ()).throw(AssertionError("LLM")),
+    )
+    try:
+        client = TestClient(app)
+        wiped = client.put(
+            f"/api/ai/investigations/{inv.investigation_id}/decision",
+            json={"decision_type": "RESOLVED"},
+        )
+        assert wiped.status_code == 422
+        response = client.patch(
+            f"/api/ai/investigations/{inv.investigation_id}/decision/follow-up",
+            json={"follow_up_status": "RESOLVED"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["decision_type"] == "REJECTED"
+        assert body["follow_up_status"] == "RESOLVED"
+        assert body["reason_text"].startswith("R-05")
+        assert body["alternative_action"] == "Attendre au parking."
     finally:
         app.dependency_overrides.pop(get_db, None)

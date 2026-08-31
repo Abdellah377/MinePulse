@@ -318,6 +318,10 @@ class RecommendationDecisionType(str, Enum):
     ACCEPTED = "ACCEPTED"
     MODIFIED = "MODIFIED"
     REJECTED = "REJECTED"
+
+
+class FollowUpStatus(str, Enum):
+    OPEN = "OPEN"
     RESOLVED = "RESOLVED"
 
 
@@ -360,6 +364,7 @@ class RecommendationDecisionRecord(ContractModel):
     investigation_id: UUID
     site_id: int
     decision_type: RecommendationDecisionType
+    follow_up_status: FollowUpStatus = FollowUpStatus.OPEN
     reason_category: RejectionReasonCategory | None = None
     reason_text: str | None = None
     alternative_action: str | None = None
@@ -376,7 +381,12 @@ class RecommendationDecisionRecord(ContractModel):
 class RecommendationDecisionView(ContractModel):
     investigation_id: UUID
     decision_type: RecommendationDecisionType
+    follow_up_status: FollowUpStatus | None = None
     decision: RecommendationDecisionRecord | None = None
+
+
+class FollowUpStatusRequest(ContractModel):
+    follow_up_status: FollowUpStatus
 
 
 class DiscussionMessageRecord(ContractModel):

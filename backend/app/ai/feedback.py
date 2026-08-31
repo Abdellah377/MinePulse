@@ -18,6 +18,8 @@ from app.ai.contracts import (
     DiscussionThread,
     EvidenceItem,
     EvidenceKind,
+    FollowUpStatus,
+    FollowUpStatusRequest,
     RecommendationDecisionRecord,
     RecommendationDecisionRequest,
     RecommendationDecisionType,
@@ -34,7 +36,7 @@ _RECORDED_DECISIONS = frozenset(
         RecommendationDecisionType.ACCEPTED.value,
         RecommendationDecisionType.MODIFIED.value,
         RecommendationDecisionType.REJECTED.value,
-        RecommendationDecisionType.RESOLVED.value,
+        "RESOLVED",  # legacy rows before follow_up_status existed
     }
 )
 
@@ -45,6 +47,10 @@ class FeedbackNotFound(LookupError):
 
 class FeedbackConflict(RuntimeError):
     """Decision cannot be recorded (missing recommendation or invalid state)."""
+
+    def __init__(self, message: str, code: str = "AI_RECOMMENDATION_REQUIRED"):
+        super().__init__(message)
+        self.code = code
 
 
 def extract_road_facts(evidence: list | None) -> tuple[list[str], dict[str, str]]:
@@ -105,12 +111,34 @@ def _enum_or_none(cls, value):
     return cls(value) if not isinstance(value, cls) else value
 
 
+def recorded_decision_type(row) -> RecommendationDecisionType:
+    """Operator decision only. Legacy RESOLVED rows are remapped, never returned as RESOLVED."""
+    raw = getattr(row, "decision_type", None)
+    if raw == "RESOLVED":
+        if getattr(row, "operator_action", None):
+            return RecommendationDecisionType.MODIFIED
+        if getattr(row, "reason_category", None):
+            return RecommendationDecisionType.REJECTED
+        return RecommendationDecisionType.ACCEPTED
+    return RecommendationDecisionType(raw)
+
+
+def recorded_follow_up_status(row) -> FollowUpStatus:
+    raw = getattr(row, "follow_up_status", None)
+    if raw:
+        return FollowUpStatus(raw)
+    if getattr(row, "decision_type", None) == "RESOLVED":
+        return FollowUpStatus.RESOLVED
+    return FollowUpStatus.OPEN
+
+
 def to_decision_record(row: AiRecommendationDecision) -> RecommendationDecisionRecord:
     return RecommendationDecisionRecord(
         decision_id=row.decision_id,
         investigation_id=row.investigation_id,
         site_id=row.site_id,
-        decision_type=RecommendationDecisionType(row.decision_type),
+        decision_type=recorded_decision_type(row),
+        follow_up_status=recorded_follow_up_status(row),
         reason_category=_enum_or_none(RejectionReasonCategory, row.reason_category),
         reason_text=row.reason_text,
         alternative_action=row.alternative_action,
@@ -142,12 +170,15 @@ def get_decision_view(session: Session, investigation_id: UUID) -> Recommendatio
         return RecommendationDecisionView(
             investigation_id=investigation_id,
             decision_type=RecommendationDecisionType.PENDING,
+            follow_up_status=None,
             decision=None,
         )
+    record = to_decision_record(row)
     return RecommendationDecisionView(
         investigation_id=investigation_id,
-        decision_type=RecommendationDecisionType(row.decision_type),
-        decision=to_decision_record(row),
+        decision_type=record.decision_type,
+        follow_up_status=record.follow_up_status,
+        decision=record,
     )
 
 
@@ -178,6 +209,7 @@ def upsert_decision(
             created_at=now,
             updated_at=now,
             decision_type=request.decision_type.value,
+            follow_up_status=FollowUpStatus.OPEN.value,
         )
         session.add(row)
     row.updated_at = now
@@ -187,10 +219,32 @@ def upsert_decision(
     row.alternative_action = request.alternative_action
     row.operator_action = operator_action
     row.actor_label = request.actor_label
+    if not getattr(row, "follow_up_status", None):
+        row.follow_up_status = FollowUpStatus.OPEN.value
     if not row.original_recommendation:
         row.original_recommendation = dict(investigation.recommendation)
     if not row.context_tags:
         row.context_tags = extract_context_tags(investigation)
+    session.commit()
+    session.refresh(row)
+    return to_decision_record(row)
+
+
+def set_follow_up_status(
+    session: Session,
+    investigation_id: UUID,
+    request: FollowUpStatusRequest,
+) -> RecommendationDecisionRecord:
+    investigation = get_investigation(session, investigation_id)
+    if investigation is None:
+        raise FeedbackNotFound("investigation")
+    row = load_decision_row(session, investigation_id)
+    if row is None:
+        raise FeedbackConflict("decision missing", code="AI_DECISION_REQUIRED")
+    if row.decision_type == "RESOLVED":
+        row.decision_type = recorded_decision_type(row).value
+    row.follow_up_status = request.follow_up_status.value
+    row.updated_at = datetime.now(timezone.utc)
     session.commit()
     session.refresh(row)
     return to_decision_record(row)
@@ -358,7 +412,8 @@ def retrieve_operator_feedback(session, state) -> list[EvidenceItem]:
                 source_service="app.ai.feedback.retrieve_operator_feedback",
                 metric="site_decision_history",
                 value={
-                    "decisionType": row.decision_type,
+                    "decisionType": recorded_decision_type(row).value,
+                    "followUpStatus": recorded_follow_up_status(row).value,
                     "reasonCategory": row.reason_category,
                     "reasonText": row.reason_text,
                     "alternativeAction": row.alternative_action,

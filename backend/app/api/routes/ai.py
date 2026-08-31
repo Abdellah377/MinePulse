@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.ai.contracts import (
     DiscussionPostRequest,
     DiscussionThread,
+    FollowUpStatusRequest,
     InvestigationResult,
     InvestigationTrigger,
     RecommendationDecisionRequest,
@@ -22,6 +23,7 @@ from app.ai.feedback import (
     FeedbackNotFound,
     get_decision_view,
     get_discussion,
+    set_follow_up_status,
     upsert_decision,
 )
 from app.ai.llm.provider import ProviderConfigurationError
@@ -46,7 +48,7 @@ def investigation_errors(session, stage: str):
     except FeedbackConflict as exc:
         raise HTTPException(
             status_code=409,
-            detail={"code": "AI_RECOMMENDATION_REQUIRED", "stage": stage},
+            detail={"code": getattr(exc, "code", "AI_RECOMMENDATION_REQUIRED"), "stage": stage},
         ) from exc
     except ProviderConfigurationError as exc:
         logger.warning("Investigation rejected: provider configuration missing/invalid")
@@ -114,6 +116,12 @@ def retrieve_decision(investigation_id: UUID, session: DbSession):
 def record_decision(investigation_id: UUID, body: RecommendationDecisionRequest, session: DbSession):
     with investigation_errors(session, "decision"):
         return upsert_decision(session, investigation_id, body)
+
+
+@router.patch("/investigations/{investigation_id}/decision/follow-up", response_model=RecommendationDecisionRecord)
+def record_follow_up(investigation_id: UUID, body: FollowUpStatusRequest, session: DbSession):
+    with investigation_errors(session, "follow-up"):
+        return set_follow_up_status(session, investigation_id, body)
 
 
 @router.get("/investigations/{investigation_id}/discussion", response_model=DiscussionThread)

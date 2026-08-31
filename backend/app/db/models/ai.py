@@ -121,6 +121,7 @@ class AiRecommendationDecision(Base):
         BigInteger, ForeignKey("sites.site_id", ondelete="CASCADE"), nullable=False
     )
     decision_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    follow_up_status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
     reason_category: Mapped[str | None] = mapped_column(String(60))
     reason_text: Mapped[str | None] = mapped_column(Text)
     alternative_action: Mapped[str | None] = mapped_column(Text)

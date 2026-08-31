@@ -53,3 +53,14 @@ it("decision GET/PUT and discussion GET do not start investigations", async () =
   expect(String(vi.mocked(fetch).mock.calls[2][0])).toContain("/discussion")
   expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false)
 })
+
+it("follow-up PATCH only sends follow_up_status", async () => {
+  await aiApi.patchFollowUp(result.investigation_id, { follow_up_status: "RESOLVED" })
+  const [path, init] = vi.mocked(fetch).mock.calls[0]
+  expect(String(path)).toContain("/decision/follow-up")
+  expect(init?.method).toBe("PATCH")
+  expect(JSON.parse(String(init?.body))).toEqual({ follow_up_status: "RESOLVED" })
+  expect(JSON.parse(String(init?.body))).not.toHaveProperty("reason_category")
+  expect(JSON.parse(String(init?.body))).not.toHaveProperty("reason_text")
+  expect(JSON.parse(String(init?.body))).not.toHaveProperty("decision_type")
+})

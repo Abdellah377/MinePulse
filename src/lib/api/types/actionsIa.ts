@@ -1,6 +1,8 @@
 import type { InvestigationRecommendation, JsonValue } from "@/lib/api/types/ai"
 
-export type RecommendationDecisionType = "PENDING" | "ACCEPTED" | "MODIFIED" | "REJECTED" | "RESOLVED"
+export type RecommendationDecisionType = "PENDING" | "ACCEPTED" | "MODIFIED" | "REJECTED"
+
+export type FollowUpStatus = "OPEN" | "RESOLVED"
 
 export type RejectionReasonCategory =
   | "IMPOSSIBLE_OPERATIONNELLEMENT"
@@ -18,6 +20,7 @@ export type RecommendationDecisionRecord = {
   investigation_id: string
   site_id: number
   decision_type: RecommendationDecisionType
+  follow_up_status: FollowUpStatus
   reason_category: RejectionReasonCategory | null
   reason_text: string | null
   alternative_action: string | null
@@ -34,6 +37,7 @@ export type RecommendationDecisionRecord = {
 export type RecommendationDecisionView = {
   investigation_id: string
   decision_type: RecommendationDecisionType
+  follow_up_status: FollowUpStatus | null
   decision: RecommendationDecisionRecord | null
 }
 
@@ -43,6 +47,10 @@ export type RecommendationDecisionRequest = {
   reason_text?: string | null
   alternative_action?: string | null
   actor_label?: string | null
+}
+
+export type FollowUpStatusRequest = {
+  follow_up_status: FollowUpStatus
 }
 
 export type DiscussionMessageRecord = {
@@ -81,5 +89,9 @@ export const DECISION_STATUS_LABEL: Record<RecommendationDecisionType, string> =
   ACCEPTED: "Recommandation acceptée",
   MODIFIED: "Action modifiée par l’opérateur",
   REJECTED: "Recommandation rejetée",
+}
+
+export const FOLLOW_UP_STATUS_LABEL: Record<FollowUpStatus, string> = {
+  OPEN: "Suivi ouvert",
   RESOLVED: "Suivi clôturé",
 }

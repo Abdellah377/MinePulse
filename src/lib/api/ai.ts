@@ -5,6 +5,7 @@ import type { InvestigationDebugTrace } from "@/lib/api/types/aiDebug"
 import type {
   DiscussionPostRequest,
   DiscussionThread,
+  FollowUpStatusRequest,
   RecommendationDecisionRecord,
   RecommendationDecisionRequest,
   RecommendationDecisionView,
@@ -44,6 +45,13 @@ export const aiApi = {
     requireApi()
     return fetchJson(`/ai/investigations/${encodeURIComponent(id)}/decision`, {
       method: "PUT",
+      body: JSON.stringify(body),
+    })
+  },
+  patchFollowUp(id: string, body: FollowUpStatusRequest): Promise<RecommendationDecisionRecord> {
+    requireApi()
+    return fetchJson(`/ai/investigations/${encodeURIComponent(id)}/decision/follow-up`, {
+      method: "PATCH",
       body: JSON.stringify(body),
     })
   },
