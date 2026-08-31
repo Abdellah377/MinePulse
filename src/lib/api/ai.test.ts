@@ -43,3 +43,13 @@ it("GET retrieves by UUID or by a site/shift-scoped alert ID", async () => {
   expect(String(vi.mocked(fetch).mock.calls[1][0])).toContain("site_id=17&source_record_id=alert-42&shift_id=29")
   expect(vi.mocked(fetch).mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true)
 })
+
+it("decision GET/PUT and discussion GET do not start investigations", async () => {
+  await aiApi.getDecision(result.investigation_id)
+  await aiApi.putDecision(result.investigation_id, { decision_type: "ACCEPTED" })
+  await aiApi.getDiscussion(result.investigation_id)
+  expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain("/decision")
+  expect(vi.mocked(fetch).mock.calls[1][1]?.method).toBe("PUT")
+  expect(String(vi.mocked(fetch).mock.calls[2][0])).toContain("/discussion")
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false)
+})

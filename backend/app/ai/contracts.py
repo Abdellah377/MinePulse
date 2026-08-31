@@ -54,6 +54,7 @@ class EvidenceKind(str, Enum):
     FACT = "FACT"
     DERIVED_METRIC = "DERIVED_METRIC"
     MODEL_PREDICTION = "MODEL_PREDICTION"
+    OPERATOR_FEEDBACK = "OPERATOR_FEEDBACK"
 
 
 class EvidenceStatus(str, Enum):
@@ -310,6 +311,99 @@ class InvestigationRecommendation(ContractModel):
     target_zone_id: int | None = Field(default=None, gt=0)
     operational_constraints: list[str] = Field(default_factory=list)
     human_validation_required: bool = True
+
+
+class RecommendationDecisionType(str, Enum):
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    MODIFIED = "MODIFIED"
+    REJECTED = "REJECTED"
+    RESOLVED = "RESOLVED"
+
+
+class RejectionReasonCategory(str, Enum):
+    IMPOSSIBLE_OPERATIONNELLEMENT = "IMPOSSIBLE_OPERATIONNELLEMENT"
+    CONTRAINTE_NON_CONNUE_PAR_IA = "CONTRAINTE_NON_CONNUE_PAR_IA"
+    RISQUE_SECURITE = "RISQUE_SECURITE"
+    MAUVAISE_PRIORITE_PRODUCTION = "MAUVAISE_PRIORITE_PRODUCTION"
+    INFORMATION_INCORRECTE = "INFORMATION_INCORRECTE"
+    MEILLEURE_ALTERNATIVE = "MEILLEURE_ALTERNATIVE"
+    AUTRE = "AUTRE"
+
+
+class DiscussionRole(str, Enum):
+    OPERATOR = "OPERATOR"
+    ASSISTANT = "ASSISTANT"
+
+
+class RecommendationDecisionRequest(ContractModel):
+    decision_type: RecommendationDecisionType
+    reason_category: RejectionReasonCategory | None = None
+    reason_text: str | None = Field(default=None, max_length=2000)
+    alternative_action: str | None = Field(default=None, max_length=1600)
+    actor_label: str | None = Field(default=None, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "RecommendationDecisionRequest":
+        if self.decision_type == RecommendationDecisionType.PENDING:
+            raise ValueError("PENDING is implicit until the operator records a decision")
+        if self.decision_type in {
+            RecommendationDecisionType.REJECTED,
+            RecommendationDecisionType.MODIFIED,
+        } and self.reason_category is None:
+            raise ValueError("reason_category is required for REJECTED and MODIFIED")
+        return self
+
+
+class RecommendationDecisionRecord(ContractModel):
+    decision_id: UUID
+    investigation_id: UUID
+    site_id: int
+    decision_type: RecommendationDecisionType
+    reason_category: RejectionReasonCategory | None = None
+    reason_text: str | None = None
+    alternative_action: str | None = None
+    original_recommendation: dict[str, JsonValue]
+    operator_action: dict[str, JsonValue] | None = None
+    actor_label: str | None = None
+    context_tags: dict[str, JsonValue] = Field(default_factory=dict)
+    outcome_status: str | None = None
+    outcome_notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecommendationDecisionView(ContractModel):
+    investigation_id: UUID
+    decision_type: RecommendationDecisionType
+    decision: RecommendationDecisionRecord | None = None
+
+
+class DiscussionMessageRecord(ContractModel):
+    message_id: UUID
+    investigation_id: UUID
+    role: DiscussionRole
+    content: str
+    actor_label: str | None = None
+    cited_evidence_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+
+class DiscussionPostRequest(ContractModel):
+    content: str = Field(min_length=1, max_length=2000)
+    actor_label: str | None = Field(default=None, max_length=120)
+    generate_reply: bool = True
+
+
+class DiscussionThread(ContractModel):
+    investigation_id: UUID
+    messages: list[DiscussionMessageRecord] = Field(default_factory=list)
+
+
+class RecommendationDiscussionReply(ContractModel):
+    reply: str = Field(min_length=1, max_length=2400)
+    cited_evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    operator_claims_unverified: list[str] = Field(default_factory=list, max_length=8)
 
 
 class InvestigationError(ContractModel):

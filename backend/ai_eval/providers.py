@@ -179,3 +179,11 @@ class DeterministicEvaluationProvider:
             evidence_ids=evidence_ids,
             human_validation_required=True,
         )
+
+    def discuss_recommendation(self, payload: dict):
+        from app.ai.contracts import RecommendationDiscussionReply
+        return RecommendationDiscussionReply(
+            reply="Historical evaluation double; operator input is not treated as fact.",
+            cited_evidence_ids=[],
+            operator_claims_unverified=[],
+        )

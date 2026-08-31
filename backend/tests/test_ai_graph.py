@@ -115,6 +115,7 @@ class ScriptedProvider:
         self.diagnoses = list(diagnoses)
         self.diagnose_calls = 0
         self.diagnose_payloads = []
+        self.recommend_payloads = []
 
     def diagnose(self, payload):
         self.diagnose_payloads.append(payload)
@@ -137,6 +138,7 @@ class ScriptedProvider:
         )
 
     def build_recommendation(self, payload):
+        self.recommend_payloads.append(payload)
         return InvestigationRecommendation(
             action_type=RecommendationAction.VERIFY_OPERATIONAL_CONDITION,
             description="Verify the recorded downtime condition with the shift supervisor.",
@@ -286,6 +288,26 @@ def test_initial_telemetry_trends_reach_the_provider_payload_unchanged():
         "fuel",
         "connectivity",
     ]
+
+
+def test_recommendation_stage_attaches_operator_feedback_not_as_fact(monkeypatch):
+    feedback = EvidenceItem(
+        evidence_id="ev-feedback",
+        kind=EvidenceKind.OPERATOR_FEEDBACK,
+        source_tool="operator_feedback_memory",
+        source_service="app.ai.feedback.retrieve_operator_feedback",
+        metric="site_decision_history",
+        value={"decisionType": "REJECTED", "authoritativeFactsWin": True},
+        notes="Historical operator decision",
+    )
+    monkeypatch.setattr("app.ai.nodes.retrieve_operator_feedback", lambda session, state: [feedback])
+    provider = ScriptedProvider([_diagnosis()])
+    result, _, _ = _run(provider)
+    kinds = [item["kind"] for item in provider.recommend_payloads[0]["evidence"]]
+    assert "OPERATOR_FEEDBACK" in kinds
+    assert result["evidence"][-1].kind == EvidenceKind.OPERATOR_FEEDBACK
+    assert result["evidence"][-1].kind != EvidenceKind.FACT
+    assert result["evidence"][-1].source_service.endswith("retrieve_operator_feedback")
 
 
 def test_graph_gathers_requested_evidence_then_reanalyzes():

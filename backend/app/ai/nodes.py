@@ -48,6 +48,7 @@ from app.ai.debug import (
     consume_provider_metrics,
 )
 from app.ai.llm.provider import LLMProvider
+from app.ai.feedback import retrieve_operator_feedback
 from app.ai.persistence import InvestigationPersistenceError, persist_investigation
 from app.ai.routers import route_after_analysis
 from app.ai.state import InvestigationState
@@ -412,10 +413,12 @@ class InvestigationNodes:
         }
 
     def build_recommendation(self, state: InvestigationState) -> dict:
+        feedback_items = retrieve_operator_feedback(self.runtime.session, state)
+        evidence = list(state["evidence"]) + feedback_items
         payload = {
             "trigger": _json(state["trigger"]),
             "conclusion": _json(state["conclusion"]),
-            "evidence": _json(state["evidence"]),
+            "evidence": _json(evidence),
             "allowedActions": [
                 "INSPECT_EQUIPMENT",
                 "VERIFY_OPERATIONAL_CONDITION",
@@ -438,7 +441,7 @@ class InvestigationNodes:
             )
             recommendation = proposed
             valid_evidence = {
-                item.evidence_id for item in state["evidence"] if item.available
+                item.evidence_id for item in evidence if item.available
             }
             valid_equipment_ids, valid_zone_ids = self._evidence_entity_ids(state)
             recommendation = recommendation.model_copy(
@@ -521,6 +524,7 @@ class InvestigationNodes:
         )
         return {
             "recommendation": recommendation,
+            "evidence": evidence,
             "status": (
                 InvestigationStatus.COMPLETED
                 if status == DiagnosisStatus.CONFIRMED

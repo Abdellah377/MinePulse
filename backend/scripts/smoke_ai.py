@@ -51,6 +51,10 @@ class SmokeProvider:
             description="Smoke test only. Do not use for operational decisions.",
             rationale="No real LLM was invoked.")
 
+    def discuss_recommendation(self, payload):
+        from app.ai.contracts import RecommendationDiscussionReply
+        return RecommendationDiscussionReply(reply="Smoke discussion only.", cited_evidence_ids=[], operator_claims_unverified=[])
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

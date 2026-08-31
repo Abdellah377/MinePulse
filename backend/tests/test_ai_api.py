@@ -27,6 +27,8 @@ def test_investigation_api_routes_are_registered():
     assert "/api/ai/investigations" in paths
     assert "/api/ai/investigations/{investigation_id}" in paths
     assert "/api/ai/investigations/{investigation_id}/debug" in paths
+    assert "/api/ai/investigations/{investigation_id}/decision" in paths
+    assert "/api/ai/investigations/{investigation_id}/discussion" in paths
 
 
 def test_missing_migration_returns_storage_error_not_provider_error(monkeypatch):

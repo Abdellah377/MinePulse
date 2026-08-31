@@ -1,4 +1,4 @@
-"""Minimal non-chat API for starting and retrieving investigations."""
+"""Investigation start/retrieve plus operator decision and discussion endpoints."""
 
 from uuid import UUID
 from contextlib import contextmanager
@@ -7,7 +7,23 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.ai.contracts import InvestigationResult, InvestigationTrigger
+from app.ai.contracts import (
+    DiscussionPostRequest,
+    DiscussionThread,
+    InvestigationResult,
+    InvestigationTrigger,
+    RecommendationDecisionRequest,
+    RecommendationDecisionRecord,
+    RecommendationDecisionView,
+)
+from app.ai.discussion import post_discussion
+from app.ai.feedback import (
+    FeedbackConflict,
+    FeedbackNotFound,
+    get_decision_view,
+    get_discussion,
+    upsert_decision,
+)
 from app.ai.llm.provider import ProviderConfigurationError
 from app.ai.persistence import InvestigationPersistenceError, find_investigations, get_investigation, record_to_result
 from app.ai.service import run_investigation
@@ -25,6 +41,13 @@ def investigation_errors(session, stage: str):
         yield
     except HTTPException:
         raise
+    except FeedbackNotFound as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+    except FeedbackConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "AI_RECOMMENDATION_REQUIRED", "stage": stage},
+        ) from exc
     except ProviderConfigurationError as exc:
         logger.warning("Investigation rejected: provider configuration missing/invalid")
         raise HTTPException(503, detail={"code": "AI_PROVIDER_NOT_CONFIGURED", "stage": "provider_configuration"}) from exc
@@ -79,3 +102,27 @@ def retrieve_investigation_debug(investigation_id: UUID, session: DbSession):
         if row is None or row.debug_trace is None:
             raise HTTPException(status_code=404, detail="Investigation debug trace not found")
         return row.debug_trace
+
+
+@router.get("/investigations/{investigation_id}/decision", response_model=RecommendationDecisionView)
+def retrieve_decision(investigation_id: UUID, session: DbSession):
+    with investigation_errors(session, "decision"):
+        return get_decision_view(session, investigation_id)
+
+
+@router.put("/investigations/{investigation_id}/decision", response_model=RecommendationDecisionRecord)
+def record_decision(investigation_id: UUID, body: RecommendationDecisionRequest, session: DbSession):
+    with investigation_errors(session, "decision"):
+        return upsert_decision(session, investigation_id, body)
+
+
+@router.get("/investigations/{investigation_id}/discussion", response_model=DiscussionThread)
+def retrieve_discussion(investigation_id: UUID, session: DbSession):
+    with investigation_errors(session, "discussion"):
+        return get_discussion(session, investigation_id)
+
+
+@router.post("/investigations/{investigation_id}/discussion", response_model=DiscussionThread)
+def record_discussion(investigation_id: UUID, body: DiscussionPostRequest, session: DbSession):
+    with investigation_errors(session, "discussion"):
+        return post_discussion(session, investigation_id, body)

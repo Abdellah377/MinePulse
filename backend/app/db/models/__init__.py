@@ -1,4 +1,10 @@
-from app.db.models.ai import AiInvestigation, AiRecommendation, Prediction
+from app.db.models.ai import (
+    AiInvestigation,
+    AiRecommendation,
+    AiRecommendationDecision,
+    AiRecommendationDiscussionMessage,
+    Prediction,
+)
 from app.db.models.equipment import Equipment, Material, Operator
 from app.db.models.events import Alert, DowntimeEvent, FuelEvent, MaintenanceEvent, SystemEvent
 from app.db.models.operations import (
@@ -39,6 +45,8 @@ __all__ = [
     "Alert",
     "Prediction",
     "AiRecommendation",
+    "AiRecommendationDecision",
+    "AiRecommendationDiscussionMessage",
     "AiInvestigation",
     "TyreTelemetry",
     "OperationalSetting",

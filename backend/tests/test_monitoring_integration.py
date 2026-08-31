@@ -58,6 +58,10 @@ class MonitoringMockProvider:
             human_validation_required=True,
         )
 
+    def discuss_recommendation(self, payload):
+        from app.ai.contracts import RecommendationDiscussionReply
+        return RecommendationDiscussionReply(reply="Monitoring mock discussion.", cited_evidence_ids=[], operator_claims_unverified=[])
+
 
 @requires_integration
 def test_site_level_monitoring_alert_is_visible_without_fake_equipment_scope():

@@ -10,6 +10,8 @@ from app.db.enums import AlertSource, EquipmentState, EquipmentType
 from app.db.models import (
     AiInvestigation,
     AiRecommendation,
+    AiRecommendationDecision,
+    AiRecommendationDiscussionMessage,
     Alert,
     Cycle,
     CycleStage,
@@ -77,6 +79,17 @@ def clear_simulation_run_data(session: Session, *, site_code: str = "MP-SIM-01")
         )
 
     counts: dict[str, int] = {}
+    investigation_ids = select(AiInvestigation.investigation_id).where(investigation_scope)
+    counts["ai_recommendation_discussion_messages"] = _execute_delete(
+        session,
+        AiRecommendationDiscussionMessage,
+        AiRecommendationDiscussionMessage.investigation_id.in_(investigation_ids),
+    )
+    counts["ai_recommendation_decisions"] = _execute_delete(
+        session,
+        AiRecommendationDecision,
+        AiRecommendationDecision.investigation_id.in_(investigation_ids),
+    )
     counts["ai_investigations"] = _execute_delete(session, AiInvestigation, investigation_scope)
     if alert_ids:
         counts["ai_recommendations"] = _execute_delete(

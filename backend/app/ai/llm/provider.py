@@ -9,7 +9,12 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel
 
-from app.ai.contracts import DiagnosisResult, InvestigationConclusion, InvestigationRecommendation
+from app.ai.contracts import (
+    DiagnosisResult,
+    InvestigationConclusion,
+    InvestigationRecommendation,
+    RecommendationDiscussionReply,
+)
 from app.config import Settings, get_settings
 
 
@@ -50,6 +55,8 @@ class LLMProvider(Protocol):
 
     def build_recommendation(self, payload: dict) -> InvestigationRecommendation: ...
 
+    def discuss_recommendation(self, payload: dict) -> RecommendationDiscussionReply: ...
+
 
 _T = TypeVar("_T", bound=BaseModel)
 
@@ -76,6 +83,10 @@ as routing rules. CLOSED and unknown-status roads are not usable. RESTRICTED
 roads may be used but are not equivalent to OPEN. Path distances and travel
 times are precomputed; do not recalculate them. Never close, open, or modify
 roads, reassign equipment, or execute rerouting.
+Historical OPERATOR_FEEDBACK is site memory, not operational fact. It may be
+stale, subjective, or wrong. Current FACT evidence, including road status,
+always wins. Do not imitate a named supervisor's personal preference. Operator
+acceptance is not proof of success; rejection is not automatically model failure.
 """.strip()
 
 _DIAGNOSIS_PROMPT = _COMMON_POLICY + """
@@ -140,6 +151,20 @@ best discriminate the remaining hypotheses. Avoid generic "check the truck"
 wording when a specific signal, loader, queue, assignment, or operational
 condition is available. Never mix insufficient-evidence wording with confirmation.
 A suggested itinerary such as R-05 then R-06 is advisory only; the operator decides.
+OPERATOR_FEEDBACK items are historical site decisions. Weigh them below current
+facts and hard constraints. Never treat them as authoritative road or equipment status.
+"""
+
+_DISCUSSION_PROMPT = _COMMON_POLICY + """
+
+Discuss the supplied recommendation with the operator. This is not a new
+investigation. Use only persisted trigger, conclusion, recommendation, and
+evidence. The latest operator message is OPERATOR_INPUT, not FACT, until
+confirmed by current evidence. If the operator asserts a road is usable but
+ROAD_NETWORK_CONTEXT marks it CLOSED or UNKNOWN, disagree using that fact.
+Do not recalculate routes or invent travel times. Do not execute rerouting,
+change assignments, or modify roads. Reply in concise professional French.
+Cite only supplied evidence IDs. Never return chain-of-thought.
 """
 
 
@@ -221,6 +246,9 @@ class OpenAILLMProvider:
 
     def build_recommendation(self, payload: dict) -> InvestigationRecommendation:
         return self._structured(InvestigationRecommendation, _RECOMMENDATION_PROMPT, payload)
+
+    def discuss_recommendation(self, payload: dict) -> RecommendationDiscussionReply:
+        return self._structured(RecommendationDiscussionReply, _DISCUSSION_PROMPT, payload)
 
 
 def create_llm_provider(settings: Settings | None = None) -> LLMProvider:
