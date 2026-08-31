@@ -11,6 +11,7 @@ import { AiExplanationBlock, AiExplanationPanel, AiWhyButton } from "./AiExplana
 import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure, investigationStatus } from "@/lib/ai/investigationPresentation"
 import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
 import { mergeInboxItems, pickInboxSelection, removeInboxItem } from "@/lib/ai/actionsInbox"
+import { visibleOptimizationPlans } from "@/lib/ai/optimizationDisplay"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
@@ -561,7 +562,7 @@ function DecisionControls({
 }
 
 function OptimizationPlans({ run, whyOpen, onToggleWhy }: { run: OptimizationRun; whyOpen: boolean; onToggleWhy: () => void }) {
-  const plans = run.candidates ?? []
+  const { visible: plans, hiddenCount } = visibleOptimizationPlans(run.candidates)
   const weights = run.explanation?.weights ?? run.weights
   const weightLabel = `travel ${weights?.w_travel ?? 1} · attente ${weights?.w_wait ?? 1}`
   const outcomeLabel =
@@ -598,6 +599,9 @@ function OptimizationPlans({ run, whyOpen, onToggleWhy }: { run: OptimizationRun
           {plan.constraintNotes.length > 0 && <p className="text-[10px] text-muted-2">{plan.constraintNotes.join(" · ")}</p>}
         </article>
       ))}
+      {hiddenCount > 0 && (
+        <p className="text-[10px] text-muted-2">+ {hiddenCount} autre{hiddenCount > 1 ? "s" : ""} candidat{hiddenCount > 1 ? "s" : ""} conservé{hiddenCount > 1 ? "s" : ""} dans l’historique</p>
+      )}
       <AiWhyButton expanded={whyOpen} onClick={onToggleWhy} />
       <AiExplanationPanel open={whyOpen}>
         <AiExplanationBlock label="Moteur">Optimiseur déterministe {run.optimizerVersion}. Pas de LLM.</AiExplanationBlock>
