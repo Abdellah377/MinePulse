@@ -44,6 +44,10 @@ class HaulRoad(Base):
     road_grade_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
     road_quality: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="OPEN")
+    description: Mapped[str | None] = mapped_column(Text)
+    status_reason: Mapped[str | None] = mapped_column(String(40))
+    status_note: Mapped[str | None] = mapped_column(Text)
+    status_changed_at: Mapped[datetime | None] = mapped_column()
     geometry = mapped_column(Geometry(geometry_type="LINESTRING", srid=4326), nullable=False)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
 

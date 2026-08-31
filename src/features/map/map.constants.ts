@@ -62,6 +62,7 @@ export const EQUIPMENT_MAP_STYLE = {
 } as const
 
 export const ZONES_STORAGE_KEY = "minepulse.prototype.zones"
+export const ROUTES_STORAGE_KEY = "minepulse.prototype.routes"
 
 export function getMapTilerApiKey(): string {
   return (import.meta.env.VITE_MAPTILER_API_KEY as string | undefined)?.trim() ?? ""

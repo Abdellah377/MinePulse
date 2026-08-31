@@ -16,6 +16,14 @@ MinePulse is a **development / demo** stack. The following are **not implemented
 | `PATCH /api/alerts/{id}` | Anyone on the network can change alert status |
 | `PATCH /api/settings/operational` | Threshold changes affect alert generation |
 | `POST/PATCH/DELETE /api/zones` | Geometry changes affect map and simulator |
+| `POST/PATCH/DELETE /api/roads` | Road geometry and OPEN/CLOSED/RESTRICTED status |
+
+Map configuration mutations (zone create/edit/delete, road create/edit/delete, road status changes) are isolated behind:
+
+- UI: Carte **Configurer la carte** (`configMode`) — supervision mode is read-only
+- API: `/api/zones` and `/api/roads` write routes
+
+A future `MAP_CONFIGURE` permission should wrap both the configuration-mode entry and those write endpoints. The AI, monitoring, and simulator inject paths must not call `app.services.operational.roads`.
 
 Optional `actor_label` on alert PATCH records a human-readable label until IAM exists. It is **not verified**.
 

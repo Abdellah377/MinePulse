@@ -1,6 +1,6 @@
 import type { EquipmentState, EquipmentType, ZoneType } from "@/lib/mock/types"
 
-export type MapTool = "select" | "polygon" | "vertex" | "delete"
+export type MapTool = "select" | "polygon" | "polyline" | "vertex" | "delete"
 
 export type BasemapId = "hybrid" | "dataviz"
 
@@ -50,10 +50,13 @@ export interface ZoneFeatureProps {
 
 export interface RoadFeatureProps {
   id: string
+  name: string
   roadClass: RoadClass
+  status: string
   fromZoneId: string
   toZoneId: string
   distanceKm: number | null
+  selected: number
 }
 
 export const MAP_SOURCE = {

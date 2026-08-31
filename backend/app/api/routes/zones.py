@@ -2,9 +2,11 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from app.api.deps import Ctx, DbSession
-from app.db.models import Alert, Equipment, HaulRoad, Zone
+from app.db.models import Alert, Equipment, Zone
 from app.mappers.dto import alert_to_dto, road_to_dto, zone_to_dto
+from app.schemas.roads import RoadCreateRequest, RoadPatchRequest
 from app.schemas.zones import ZoneCreateRequest, ZonePatchRequest
+from app.services.operational import roads as road_service
 from app.services.operational import zones as zone_service
 from app.services.operational.alerts import alert_operational_time_expression
 
@@ -66,8 +68,57 @@ def delete_zone(code: str, session: DbSession, ctx: Ctx):
 def list_roads(session: DbSession, ctx: Ctx):
     zones = session.scalars(select(Zone).where(Zone.site_id == ctx.site_id)).all()
     zone_codes = {z.zone_id: z.code for z in zones}
-    roads = session.scalars(select(HaulRoad).where(HaulRoad.site_id == ctx.site_id)).all()
-    return [road_to_dto(r, zone_codes, ctx.site_code) for r in roads]
+    return [road_to_dto(r, zone_codes, ctx.site_code) for r in road_service.list_roads(session, ctx)]
+
+
+@roads_router.post("")
+def create_road(body: RoadCreateRequest, session: DbSession, ctx: Ctx):
+    road = road_service.create_road(
+        session,
+        ctx,
+        code=body.code,
+        name=body.name,
+        points=[p.model_dump() for p in body.points],
+        from_zone_id=body.fromZoneId,
+        to_zone_id=body.toZoneId,
+        distance_km=body.distanceKm,
+        speed_limit_kmh=body.speedLimitKmh,
+        description=body.description,
+        status=body.status,
+        status_reason=body.statusReason,
+        status_note=body.statusNote,
+    )
+    zones = session.scalars(select(Zone).where(Zone.site_id == ctx.site_id)).all()
+    zone_codes = {z.zone_id: z.code for z in zones}
+    return road_to_dto(road, zone_codes, ctx.site_code)
+
+
+@roads_router.patch("/{code}")
+def patch_road(code: str, body: RoadPatchRequest, session: DbSession, ctx: Ctx):
+    road = road_service.update_road(
+        session,
+        ctx,
+        code,
+        name=body.name,
+        from_zone_id=body.fromZoneId,
+        to_zone_id=body.toZoneId,
+        points=[p.model_dump() for p in body.points] if body.points else None,
+        distance_km=body.distanceKm,
+        speed_limit_kmh=body.speedLimitKmh,
+        description=body.description,
+        status=body.status,
+        status_reason=body.statusReason,
+        status_note=body.statusNote,
+    )
+    zones = session.scalars(select(Zone).where(Zone.site_id == ctx.site_id)).all()
+    zone_codes = {z.zone_id: z.code for z in zones}
+    return road_to_dto(road, zone_codes, ctx.site_code)
+
+
+@roads_router.delete("/{code}")
+def delete_road(code: str, session: DbSession, ctx: Ctx):
+    road_service.delete_road(session, ctx, code)
+    return {"ok": True}
 
 
 @events_router.get("/events")

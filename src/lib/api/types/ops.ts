@@ -59,6 +59,32 @@ export type FailureRiskDto = {
   detail: string | null
 }
 
+export type RoadStatusDto = "OPEN" | "CLOSED" | "RESTRICTED"
+
+export type RoadStatusReasonDto =
+  | "BLASTING"
+  | "MAINTENANCE"
+  | "ROAD_DAMAGE"
+  | "FLOODING"
+  | "CONGESTION_CONTROL"
+  | "OTHER"
+
+export type HaulRoadDto = {
+  id: string
+  databaseId: number | null
+  name: string | null
+  fromZoneId: string
+  toZoneId: string
+  points: { x: number; y: number }[]
+  distanceKm: number | null
+  siteId: string
+  status: RoadStatusDto
+  speedLimitKmh: number | null
+  description: string | null
+  statusReason: RoadStatusReasonDto | null
+  statusNote: string | null
+}
+
 export type ProductionRecordDto = {
   label: string
   tonnage: number

@@ -28,29 +28,48 @@ log = get_sim_logger()
 SITE_CENTER = (-6.6735342, 32.6618173)
 
 ZONE_SPECS = [
-    ("BANC_A", "Banc A", ZoneType.LOADING_BENCH, (-6.682, 32.668), 3, "#2F6FED"),
-    ("BANC_B", "Banc B", ZoneType.LOADING_BENCH, (-6.675, 32.655), 3, "#2F6FED"),
-    ("CRUSHER", "Concasseur", ZoneType.CRUSHER, (-6.665, 32.662), 2, "#6B4FBF"),
-    ("DUMP_N", "Dump North", ZoneType.DUMP_AREA, (-6.662, 32.670), 4, "#D97706"),
-    ("DUMP_S", "Dump South", ZoneType.DUMP_AREA, (-6.668, 32.652), 4, "#D97706"),
-    ("FUEL", "Fuel Station", ZoneType.FUEL_STATION, (-6.670, 32.665), 2, "#5B7C99"),
-    ("WORKSHOP", "Workshop", ZoneType.MAINTENANCE_WORKSHOP, (-6.678, 32.663), 2, "#7C8B84"),
-    ("PARKING", "Parking", ZoneType.PARKING, (-6.672, 32.658), 8, "#00843D"),
+    ("BANC_A", "Banc A", ZoneType.LOADING_BENCH, (-6.682, 32.668), 3, "#2F6FED",
+     "Banc de chargement A. Destination prioritaire des camions affectés à l'excavatrice du panneau nord."),
+    ("BANC_B", "Banc B", ZoneType.LOADING_BENCH, (-6.675, 32.655), 3, "#2F6FED",
+     "Banc de chargement B. File d'attente camions sur le panneau sud."),
+    ("CRUSHER", "Concasseur", ZoneType.CRUSHER, (-6.665, 32.662), 2, "#6B4FBF",
+     "Concasseur primaire. Destination prioritaire du minerai haute teneur."),
+    ("DUMP_N", "Dump North", ZoneType.DUMP_AREA, (-6.662, 32.670), 4, "#D97706",
+     "Aire de déchargement nord — stériles et minerai hors spécification."),
+    ("DUMP_S", "Dump South", ZoneType.DUMP_AREA, (-6.668, 32.652), 4, "#D97706",
+     "Aire de déchargement sud — terril de stériles."),
+    ("FUEL", "Fuel Station", ZoneType.FUEL_STATION, (-6.670, 32.665), 2, "#5B7C99",
+     "Station fuel. Accès limité pendant le ravitaillement simultané de deux engins."),
+    ("WORKSHOP", "Workshop", ZoneType.MAINTENANCE_WORKSHOP, (-6.678, 32.663), 2, "#7C8B84",
+     "Atelier de maintenance mécanique. File d'attente hors production."),
+    ("PARKING", "Parking", ZoneType.PARKING, (-6.672, 32.658), 8, "#00843D",
+     "Parking engins — attente de poste et voie de report vers le concasseur."),
+    ("BLAST_PAD", "Aire de tir", ZoneType.RESTRICTED_AREA, (-6.685, 32.660), 0, "#C0392B",
+     "Aire de préparation de tir. Accès interdit pendant les opérations de minage."),
 ]
 
 # Catalog distance represents the driven haul road (not straight-line geometry).
 # road_quality is a documented simulator score from 0 (poor) to 100 (excellent).
 ROAD_SPECS = [
-    ("BANC_A", "CRUSHER", "RD-BA-CR", 4.2, 40, 4.0, 88),
-    ("BANC_B", "CRUSHER", "RD-BB-CR", 5.6, 36, 6.5, 76),
-    ("BANC_A", "DUMP_N", "RD-BA-DN", 7.4, 42, 3.0, 84),
-    ("BANC_B", "DUMP_S", "RD-BB-DS", 4.8, 38, 5.0, 80),
-    ("CRUSHER", "PARKING", "RD-CR-PK", 3.2, 35, 2.0, 90),
-    ("BANC_A", "FUEL", "RD-BA-FU", 3.6, 35, 3.0, 86),
-    ("BANC_B", "FUEL", "RD-BB-FU", 3.9, 34, 4.5, 78),
-    ("BANC_A", "WORKSHOP", "RD-BA-WS", 4.1, 32, 3.5, 82),
-    ("BANC_B", "WORKSHOP", "RD-BB-WS", 4.3, 32, 5.0, 74),
+    ("BANC_A", "CRUSHER", "RD-BA-CR", "R-03 Banc A — Concasseur", 4.2, 40, 4.0, 88),
+    ("BANC_B", "CRUSHER", "RD-BB-CR", "R-04 Banc B — Concasseur", 5.6, 36, 6.5, 76),
+    ("BANC_A", "DUMP_N", "RD-BA-DN", "R-07 Banc A — Dump nord", 7.4, 42, 3.0, 84),
+    ("BANC_B", "DUMP_S", "RD-BB-DS", "R-08 Banc B — Dump sud", 4.8, 38, 5.0, 80),
+    ("CRUSHER", "PARKING", "RD-CR-PK", "R-09 Concasseur — Parking", 3.2, 35, 2.0, 90),
+    ("BANC_A", "FUEL", "RD-BA-FU", "R-10 Banc A — Fuel", 3.6, 35, 3.0, 86),
+    ("BANC_B", "FUEL", "RD-BB-FU", "R-11 Banc B — Fuel", 3.9, 34, 4.5, 78),
+    ("BANC_A", "WORKSHOP", "RD-BA-WS", "R-12 Banc A — Atelier", 4.1, 32, 3.5, 82),
+    ("BANC_B", "WORKSHOP", "RD-BB-WS", "R-13 Banc B — Atelier", 4.3, 32, 5.0, 74),
+    ("BANC_A", "PARKING", "R-05", "R-05 Banc A — Parking", 3.4, 38, 2.5, 85),
+    ("PARKING", "CRUSHER", "R-06", "R-06 Parking — Concasseur", 2.8, 35, 2.0, 88),
 ]
+
+# Optional extra vertices so catalog lines are not only two-point sticks.
+ROAD_WAYPOINTS = {
+    "RD-BA-CR": [(-6.6735, 32.6655)],
+    "R-05": [(-6.677, 32.663)],
+    "R-06": [(-6.668, 32.660)],
+}
 
 
 def _box_polygon(lng: float, lat: float, d: float = 0.0018) -> WKTElement:
@@ -61,9 +80,9 @@ def _box_polygon(lng: float, lat: float, d: float = 0.0018) -> WKTElement:
     return WKTElement(wkt, srid=4326)
 
 
-def _line(lng1: float, lat1: float, lng2: float, lat2: float) -> WKTElement:
-    wkt = f"LINESTRING({lng1} {lat1}, {lng2} {lat2})"
-    return WKTElement(wkt, srid=4326)
+def _line(coords: list[tuple[float, float]]) -> WKTElement:
+    parts = ", ".join(f"{lng} {lat}" for lng, lat in coords)
+    return WKTElement(f"LINESTRING({parts})", srid=4326)
 
 
 def seed_static_world(session: Session) -> dict[str, int]:
@@ -108,9 +127,10 @@ def seed_static_world(session: Session) -> dict[str, int]:
 
     zone_ids: dict[str, int] = {}
     zone_coords: dict[str, tuple[float, float]] = {}
-    for code, name, ztype, (lng, lat), cap, color in ZONE_SPECS:
+    for code, name, ztype, (lng, lat), cap, color, description in ZONE_SPECS:
         existing = session.scalar(select(Zone).where(Zone.site_id == site.site_id, Zone.code == code))
         if existing:
+            existing.description = description
             zone_ids[code] = existing.zone_id
             zone_coords[code] = (lng, lat)
             continue
@@ -119,7 +139,7 @@ def seed_static_world(session: Session) -> dict[str, int]:
             code=code,
             name=name,
             type=ztype,
-            description=f"Zone opérationnelle {name}",
+            description=description,
             capacity=cap,
             status="ACTIVE",
             geometry=_box_polygon(lng, lat),
@@ -131,24 +151,27 @@ def seed_static_world(session: Session) -> dict[str, int]:
         zone_coords[code] = (lng, lat)
         log.info("Created zone %s", code)
 
-    for from_code, to_code, road_code, distance_km, speed_limit, grade_pct, quality in ROAD_SPECS:
+    for from_code, to_code, road_code, display_name, distance_km, speed_limit, grade_pct, quality in ROAD_SPECS:
         existing = session.scalar(
             select(HaulRoad).where(HaulRoad.site_id == site.site_id, HaulRoad.code == road_code)
         )
+        lng1, lat1 = zone_coords[from_code]
+        lng2, lat2 = zone_coords[to_code]
+        coords = [(lng1, lat1), *ROAD_WAYPOINTS.get(road_code, []), (lng2, lat2)]
         if existing:
             existing.distance_km = Decimal(str(distance_km))
             existing.speed_limit_kmh = Decimal(str(speed_limit))
             existing.road_grade_pct = Decimal(str(grade_pct))
             existing.road_quality = Decimal(str(quality))
+            existing.name = display_name
+            existing.geometry = _line(coords)
             existing.metadata_ = {**(existing.metadata_ or {}), "simulated_catalog": True}
             continue
-        lng1, lat1 = zone_coords[from_code]
-        lng2, lat2 = zone_coords[to_code]
         session.add(
             HaulRoad(
                 site_id=site.site_id,
                 code=road_code,
-                name=f"{from_code} → {to_code}",
+                name=display_name,
                 from_zone_id=zone_ids[from_code],
                 to_zone_id=zone_ids[to_code],
                 distance_km=Decimal(str(distance_km)),
@@ -156,7 +179,7 @@ def seed_static_world(session: Session) -> dict[str, int]:
                 road_grade_pct=Decimal(str(grade_pct)),
                 road_quality=Decimal(str(quality)),
                 status="OPEN",
-                geometry=_line(lng1, lat1, lng2, lat2),
+                geometry=_line(coords),
                 metadata_={"simulated_catalog": True},
             )
         )

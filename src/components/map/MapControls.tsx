@@ -5,8 +5,7 @@ import {
   Compass,
   Maximize2,
   Layers,
-  Pencil,
-  Plus,
+  Settings2,
   X,
 } from "lucide-react"
 
@@ -20,18 +19,14 @@ import type { Equipment } from "@/lib/mock/types"
 export function MapControls({
   basemap,
   onBasemapChange,
-  editMode,
-  onToggleEdit,
-  onAddZone,
-  isDrawing,
+  configMode,
+  onToggleConfig,
   fitEquipment,
 }: {
   basemap: BasemapId
   onBasemapChange: (id: BasemapId) => void
-  editMode: boolean
-  onToggleEdit: () => void
-  onAddZone?: () => void
-  isDrawing?: boolean
+  configMode: boolean
+  onToggleConfig: () => void
   fitEquipment: Equipment[]
 }) {
   const { map, mapRef } = useMineMap()
@@ -68,18 +63,13 @@ export function MapControls({
         >
           <Maximize2 className="size-3.5" />
         </CtrlBtn>
-        {onAddZone && (
-          <CtrlBtn label="Nouvelle zone" onClick={onAddZone} border active={isDrawing}>
-            <Plus className="size-3.5" />
-          </CtrlBtn>
-        )}
         <CtrlBtn
-          label={editMode ? "Quitter édition" : "Modifier les zones"}
-          onClick={onToggleEdit}
+          label={configMode ? "Quitter la configuration" : "Configurer la carte"}
+          onClick={onToggleConfig}
           border
-          active={editMode}
+          active={configMode}
         >
-          {editMode ? <X className="size-3.5" /> : <Pencil className="size-3.5" />}
+          {configMode ? <X className="size-3.5" /> : <Settings2 className="size-3.5" />}
         </CtrlBtn>
       </div>
 

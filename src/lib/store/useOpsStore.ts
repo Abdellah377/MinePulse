@@ -191,6 +191,7 @@ interface OpsState {
   setDensity: (d: Density) => void
   setUnit: (u: "metric" | "imperial") => void
   setZones: (updater: (zones: Zone[]) => Zone[]) => void
+  setRoutes: (updater: (routes: RoutePath[]) => RoutePath[]) => void
   setEquipment: (updater: (equipment: Equipment[]) => Equipment[]) => void
   hydrateWorld: (payload: {
     sites?: Site[]
@@ -362,6 +363,7 @@ export const useOpsStore = create<OpsState>((set, get) => ({
   setDensity: (d) => set({ density: d }),
   setUnit: (u) => set({ unit: u }),
   setZones: (updater) => set((s) => ({ zones: updater(s.zones) })),
+  setRoutes: (updater) => set((s) => ({ routes: updater(s.routes) })),
   setEquipment: (updater) => set((s) => ({ equipment: updater(s.equipment) })),
 
   hydrateWorld: (payload) =>

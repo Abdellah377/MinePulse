@@ -190,6 +190,56 @@ export function deleteZone(code: string, ctx?: OpsContext): Promise<{ ok: boolea
   })
 }
 
+export function createRoad(
+  body: {
+    code: string
+    name: string
+    fromZoneId?: string
+    toZoneId?: string
+    points: { x: number; y: number }[]
+    distanceKm?: number | null
+    speedLimitKmh?: number | null
+    description?: string | null
+    status?: string
+    statusReason?: string | null
+    statusNote?: string | null
+  },
+  ctx?: OpsContext
+): Promise<RoutePath> {
+  return fetchJson(`/roads${opsQueryString(ctx)}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export function patchRoad(
+  code: string,
+  body: Partial<{
+    name: string
+    fromZoneId: string
+    toZoneId: string
+    points: { x: number; y: number }[]
+    distanceKm: number | null
+    speedLimitKmh: number | null
+    description: string | null
+    status: string
+    statusReason: string | null
+    statusNote: string | null
+  }>,
+  ctx?: OpsContext
+): Promise<RoutePath> {
+  return fetchJson(`/roads/${encodeURIComponent(code)}${opsQueryString(ctx)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteRoad(code: string, ctx?: OpsContext): Promise<{ ok: boolean }> {
+  return fetchJson(`/roads/${encodeURIComponent(code)}${opsQueryString(ctx)}`, {
+    method: "DELETE",
+  })
+}
+
 export type EquipmentMaintenanceRow = {
   id: string
   date: number

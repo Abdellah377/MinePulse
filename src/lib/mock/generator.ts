@@ -20,6 +20,7 @@ import type {
 } from "./types"
 import { CYCLE_STAGE_ORDER, ZONE_TYPE_COLOR } from "./types"
 import { applyCoherentScenario } from "./scenario"
+import { buildDemoRoutes } from "@/lib/map/demoLayout"
 
 /** Deterministic PRNG so the initial mock world is stable across reloads. */
 function mulberry32(seed: number) {
@@ -122,11 +123,11 @@ function zoneCenter(points: Vec2[]): Vec2 {
 const ZONE_DESCRIPTIONS: Record<ZoneType, string> = {
   chargement: "Banc de chargement — pelle assignée, file d'attente camions.",
   dechargement: "Zone de mise à terril / stock stériles.",
-  concasseur: "Concasseur primaire — réception tout-venant.",
-  fuel: "Station de ravitaillement gasoil.",
-  atelier: "Atelier de maintenance mécanique.",
-  parking: "Parking engins — attente ou fin de poste.",
-  restreinte: "Zone restreinte — accès sécurité contrôlé.",
+  concasseur: "Concasseur primaire. Destination prioritaire du minerai haute teneur.",
+  fuel: "Station de ravitaillement gasoil. Accès limité pendant le ravitaillement.",
+  atelier: "Atelier de maintenance mécanique. File d'attente hors production.",
+  parking: "Parking engins — attente de poste et voie de report vers le concasseur.",
+  restreinte: "Aire de préparation de tir. Accès interdit pendant les opérations de minage.",
 }
 
 interface SiteBundle {
@@ -145,7 +146,7 @@ function buildZones(siteId: string): Zone[] {
     { name: "Atelier maintenance", type: "atelier", cx: 500, cy: 520, w: 100, h: 80, capacity: 6 },
     { name: "Station fuel", type: "fuel", cx: 500, cy: 60, w: 70, h: 55, capacity: 2 },
     { name: "Parking engins", type: "parking", cx: 300, cy: 540, w: 90, h: 60, capacity: 8 },
-    { name: "Zone restreinte — falaise Est", type: "restreinte", cx: 920, cy: 260, w: 80, h: 140, capacity: 0 },
+    { name: "Aire de tir", type: "restreinte", cx: 920, cy: 260, w: 80, h: 140, capacity: 0 },
   ]
   return specs.map((s, i) => ({
     id: `${siteId}-zone-${i}`,
@@ -160,33 +161,7 @@ function buildZones(siteId: string): Zone[] {
 }
 
 function buildRoutes(siteId: string, zones: Zone[]): RoutePath[] {
-  const byId = Object.fromEntries(zones.map((z) => [z.id, z]))
-  const link = (fromId: string, toId: string, id: string): RoutePath => {
-    const from = zoneCenter(byId[fromId].points)
-    const to = zoneCenter(byId[toId].points)
-    const mid: Vec2 = {
-      x: (from.x + to.x) / 2 + rand(-30, 30),
-      y: (from.y + to.y) / 2 + rand(-30, 30),
-    }
-    return {
-      id,
-      fromZoneId: fromId,
-      toZoneId: toId,
-      points: [from, mid, to],
-      distanceKm: Number(rand(1.2, 4.8).toFixed(1)),
-      siteId,
-    }
-  }
-  const loadA = zones.find((z) => z.type === "chargement")!.id
-  const loadB = zones.filter((z) => z.type === "chargement")[1]?.id ?? loadA
-  const crusher = zones.find((z) => z.type === "concasseur")!.id
-  const dump = zones.find((z) => z.type === "dechargement")!.id
-  return [
-    link(loadA, crusher, `${siteId}-r1`),
-    link(loadB, dump, `${siteId}-r2`),
-    link(loadA, dump, `${siteId}-r3`),
-    link(loadB, crusher, `${siteId}-r4`),
-  ]
+  return buildDemoRoutes(siteId, zones)
 }
 
 const STATE_WEIGHTS: [EquipmentState, number][] = [

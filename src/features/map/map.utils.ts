@@ -135,24 +135,15 @@ export function zonesToGeoJSON(
   }
 }
 
-function classifyRoad(route: RoutePath, zones: Zone[]): RoadClass {
-  // Neutral cartographic style, not a claim that a road is open/restricted.
-  if (useApiMode) return "secondary"
-  const from = zones.find((z) => z.id === route.fromZoneId)
-  const to = zones.find((z) => z.id === route.toZoneId)
-  if (from?.type === "restreinte" || to?.type === "restreinte") return "restricted"
-  if (
-    (from?.type === "chargement" || from?.type === "dechargement" || from?.type === "concasseur") &&
-    (to?.type === "chargement" || to?.type === "dechargement" || to?.type === "concasseur")
-  ) {
-    return "main"
-  }
-  return "secondary"
+function classifyRoad(route: RoutePath): RoadClass {
+  if (route.status === "CLOSED") return "closed"
+  if (route.status === "RESTRICTED") return "restricted"
+  return "main"
 }
 
 export function routesToGeoJSON(
   routes: RoutePath[],
-  zones: Zone[]
+  selectedId?: string | null
 ): FeatureCollection<LineString, RoadFeatureProps> {
   return {
     type: "FeatureCollection",
@@ -165,16 +156,22 @@ export function routesToGeoJSON(
       },
       properties: {
         id: r.id,
-        roadClass: classifyRoad(r, zones),
+        name: r.name ?? r.id,
+        roadClass: classifyRoad(r),
+        status: r.status ?? "OPEN",
         fromZoneId: r.fromZoneId,
         toZoneId: r.toZoneId,
         distanceKm: r.distanceKm,
+        selected: r.id === selectedId ? 1 : 0,
       },
     })),
   }
 }
 
-export function draftLngLatToGeoJSON(lngLatPoints: [number, number][]): FeatureCollection {
+export function draftLngLatToGeoJSON(
+  lngLatPoints: [number, number][],
+  options?: { polygon?: boolean }
+): FeatureCollection {
   if (lngLatPoints.length === 0) {
     return { type: "FeatureCollection", features: [] }
   }
@@ -193,7 +190,7 @@ export function draftLngLatToGeoJSON(lngLatPoints: [number, number][]): FeatureC
       })
     ),
   ]
-  if (lngLatPoints.length >= 3) {
+  if (options?.polygon !== false && lngLatPoints.length >= 3) {
     features.unshift({
       type: "Feature",
       properties: { closed: true },

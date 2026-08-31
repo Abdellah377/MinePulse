@@ -115,6 +115,10 @@ CREATE TABLE IF NOT EXISTS haul_roads (
   road_grade_pct NUMERIC(8,2),
   road_quality NUMERIC(6,2),
   status VARCHAR(30) NOT NULL DEFAULT 'OPEN',
+  description TEXT,
+  status_reason VARCHAR(40),
+  status_note TEXT,
+  status_changed_at TIMESTAMPTZ,
   geometry geometry(LineString,4326) NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   UNIQUE(site_id,code)

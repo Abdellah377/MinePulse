@@ -15,7 +15,7 @@ import {
   FILM_STATE_GROUP_LABEL,
   ZONE_TYPE_LABEL,
 } from "@/lib/mock/types"
-import type { EquipmentType, FilmStateGroup, Vec2, Zone } from "@/lib/mock/types"
+import type { EquipmentType, FilmStateGroup, RoutePath, Vec2, Zone } from "@/lib/mock/types"
 import { STATE_CONFIG } from "@/lib/status"
 import { EquipmentTypeIcon } from "@/components/equipment/EquipmentTypeIcon"
 import { cn } from "@/lib/utils"
@@ -43,7 +43,14 @@ import {
   ZonePropertiesPanel,
   type ZoneDraft,
 } from "@/components/map/ZoneEditorPanel"
-import { DEFAULT_BASEMAP, ZONES_STORAGE_KEY } from "@/features/map/map.constants"
+import {
+  RoadEditorToolbar,
+  RoadListPanel,
+  RoadPropertiesPanel,
+  emptyRoadDraft,
+  type RoadDraft,
+} from "@/components/map/RoadEditorPanel"
+import { DEFAULT_BASEMAP, ROUTES_STORAGE_KEY, ZONES_STORAGE_KEY } from "@/features/map/map.constants"
 import type { BasemapId, MapTool } from "@/features/map/map.types"
 import {
   draftLngLatToGeoJSON,
@@ -62,7 +69,8 @@ import {
   zoneConditionLabel,
 } from "@/features/map/map.geo"
 import { buildRecentTrail, useMapLiveSimulation } from "@/features/map/map.simulation"
-import { useApiMode, createZone, deleteZone, patchZone } from "@/lib/api/client"
+import { useApiMode, createRoad, createZone, deleteRoad, deleteZone, patchRoad, patchZone } from "@/lib/api/client"
+import { ROAD_STATUS_LABEL, ROAD_STATUS_REASON_LABEL, roadStatus } from "@/lib/map/roadNetwork"
 import { withoutMatchingError } from "@/lib/store/apiSync"
 import {
   mapCameraForEquipment,
@@ -201,6 +209,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
   const selectedShiftId = useOpsStore((s) => s.selectedShiftId)
   const setZones = useOpsStore((s) => s.setZones)
+  const setRoutes = useOpsStore((s) => s.setRoutes)
   const openEquipmentDrawer = useUiStore((s) => s.openEquipmentDrawer)
 
   const [basemap, setBasemap] = useState<BasemapId>(DEFAULT_BASEMAP)
@@ -209,44 +218,62 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
   const [zoneFilter, setZoneFilter] = useState<string>("all")
   const [search, setSearch] = useState("")
   const [showZonesLayer, setShowZonesLayer] = useState(true)
-  const [showRoadsLayer, setShowRoadsLayer] = useState(true)
+  const [showRoadsLayer, setShowRoadsLayer] = useState(false)
   const [showEquipmentLayer, setShowEquipmentLayer] = useState(true)
   const [onlyActiveEvents, setOnlyActiveEvents] = useState(false)
   const [showRecentPath, setShowRecentPath] = useState(false)
 
   const [selectedEquipmentId, setSelectedEquipmentId] = useState<string | null>(tab?.context.equipmentId ?? null)
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(tab?.context.zoneId ?? null)
+  const [selectedRoadId, setSelectedRoadId] = useState<string | null>(null)
   useEffect(() => {
     setSelectedEquipmentId(tab?.context.equipmentId ?? null)
     setSelectedZoneId(tab?.context.zoneId ?? null)
   }, [tab?.context.equipmentId, tab?.context.zoneId])
 
-  const [editMode, setEditMode] = useState(false)
+  const [configMode, setConfigMode] = useState(false)
+  const [configTab, setConfigTab] = useState<"zones" | "routes">("zones")
   const [activeTool, setActiveTool] = useState<MapTool>("select")
   const [draftPoints, setDraftPoints] = useState<Vec2[]>([])
   const [draftLngLat, setDraftLngLat] = useState<[number, number][]>([])
   const [draft, setDraft] = useState<ZoneDraft | null>(null)
+  const [roadDraft, setRoadDraft] = useState<RoadDraft | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [editingVertices, setEditingVertices] = useState<Vec2[] | null>(null)
   const [focusZoneId, setFocusZoneId] = useState<string | null>(null)
 
-  useMapLiveSimulation(!editMode && !useApiMode)
+  useMapLiveSimulation(!configMode && !useApiMode)
 
-  // Prototype zone persistence (mock mode only)
+  // Prototype zone/route persistence (mock mode only)
   useEffect(() => {
     if (useApiMode) return
     try {
       const raw = localStorage.getItem(ZONES_STORAGE_KEY)
-      if (!raw) return
-      const saved = JSON.parse(raw) as Zone[]
-      if (!Array.isArray(saved) || saved.length === 0) return
-      setZones((current) => {
-        const byId = new Map(current.map((z) => [z.id, z]))
-        for (const z of saved) {
-          if (z.siteId === selectedSiteId) byId.set(z.id, z)
+      if (raw) {
+        const saved = JSON.parse(raw) as Zone[]
+        if (Array.isArray(saved) && saved.length > 0) {
+          setZones((current) => {
+            const byId = new Map(current.map((z) => [z.id, z]))
+            for (const z of saved) {
+              if (z.siteId === selectedSiteId) byId.set(z.id, z)
+            }
+            return Array.from(byId.values())
+          })
         }
-        return Array.from(byId.values())
-      })
+      }
+      const roadsRaw = localStorage.getItem(ROUTES_STORAGE_KEY)
+      if (roadsRaw) {
+        const savedRoads = JSON.parse(roadsRaw) as RoutePath[]
+        if (Array.isArray(savedRoads) && savedRoads.length > 0) {
+          setRoutes((current) => {
+            const byId = new Map(current.map((r) => [r.id, r]))
+            for (const r of savedRoads) {
+              if (r.siteId === selectedSiteId) byId.set(r.id, r)
+            }
+            return Array.from(byId.values())
+          })
+        }
+      }
     } catch {
       /* ignore corrupt prototype store */
     }
@@ -279,6 +306,26 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     [setZones, selectedSiteId]
   )
 
+  const persistRoutes = useCallback(
+    (updater: (routes: RoutePath[]) => RoutePath[]) => {
+      setRoutes((rs) => {
+        const next = updater(rs)
+        if (!useApiMode) {
+          try {
+            localStorage.setItem(
+              ROUTES_STORAGE_KEY,
+              JSON.stringify(next.filter((r) => r.siteId === selectedSiteId))
+            )
+          } catch {
+            /* quota */
+          }
+        }
+        return next
+      })
+    },
+    [setRoutes, selectedSiteId]
+  )
+
   const removeZone = useCallback(
     async (id: string) => {
       if (useApiMode) {
@@ -299,6 +346,28 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
       persistZones((zs) => zs.filter((z) => z.id !== id))
     },
     [persistZones, setZones, zoneApiCtx]
+  )
+
+  const removeRoad = useCallback(
+    async (id: string) => {
+      if (useApiMode) {
+        try {
+          await deleteRoad(id, zoneApiCtx)
+          setRoutes((rs) => rs.filter((r) => r.id !== id))
+          useOpsStore.setState((s) => ({
+            apiPollError: withoutMatchingError(s.apiPollError, [
+              "Échec enregistrement route",
+              "Échec suppression route",
+            ]),
+          }))
+        } catch {
+          useOpsStore.setState({ apiPollError: "Échec suppression route" })
+        }
+        return
+      }
+      persistRoutes((rs) => rs.filter((r) => r.id !== id))
+    },
+    [persistRoutes, setRoutes, zoneApiCtx]
   )
 
   const equipmentWithEvents = useMemo(() => {
@@ -322,6 +391,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
 
   const selectedEquipment = equipment.find((e) => e.id === selectedEquipmentId) ?? null
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null
+  const selectedRoad = routes.find((r) => r.id === selectedRoadId) ?? null
 
   const equipmentGeo = useMemo(
     () => equipmentToGeoJSON(showEquipmentLayer ? filteredEquipment : [], zones, selectedEquipmentId),
@@ -331,8 +401,11 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     () => zonesToGeoJSON(zones, equipment, selectedZoneId),
     [zones, equipment, selectedZoneId]
   )
-  const roadsGeo = useMemo(() => routesToGeoJSON(routes, zones), [routes, zones])
-  const draftGeo = useMemo(() => draftLngLatToGeoJSON(draftLngLat), [draftLngLat])
+  const roadsGeo = useMemo(() => routesToGeoJSON(routes, selectedRoadId), [routes, selectedRoadId])
+  const draftGeo = useMemo(
+    () => draftLngLatToGeoJSON(draftLngLat, { polygon: configTab === "zones" }),
+    [draftLngLat, configTab]
+  )
   const recentGeo = useMemo(() => {
     if (useApiMode || !showRecentPath || !selectedEquipment) {
       return { type: "FeatureCollection" as const, features: [] }
@@ -363,36 +436,44 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     })
   }
 
-  function enterEditMode() {
-    setEditMode(true)
+  function resetDraftState() {
+    setDraft(null)
+    setRoadDraft(null)
+    setIsCreating(false)
+    setDraftPoints([])
+    setDraftLngLat([])
+    setEditingVertices(null)
+    setActiveTool("select")
+  }
+
+  function enterConfigMode(tab: "zones" | "routes" = "zones") {
+    setConfigMode(true)
+    setConfigTab(tab)
     setActiveTool("select")
     setSelectedEquipmentId(null)
     setShowRecentPath(false)
-    setDraft(null)
-    setIsCreating(false)
-    setDraftPoints([])
-    setDraftLngLat([])
-    setEditingVertices(null)
+    resetDraftState()
   }
 
-  function exitEditMode() {
-    setEditMode(false)
+  function exitConfigMode() {
+    if ((isCreating || editingVertices) && !window.confirm("Quitter la configuration ? Des modifications non enregistrées seront perdues.")) {
+      return
+    }
+    setConfigMode(false)
     setSelectedZoneId(null)
-    setDraft(null)
-    setIsCreating(false)
-    setDraftPoints([])
-    setDraftLngLat([])
-    setEditingVertices(null)
-    setActiveTool("select")
+    setSelectedRoadId(null)
+    resetDraftState()
   }
 
   function selectZoneForEdit(id: string) {
     const z = zones.find((zz) => zz.id === id)
     if (!z) return
     setSelectedZoneId(id)
+    setSelectedRoadId(null)
     setIsCreating(false)
     setDraftPoints([])
     setDraftLngLat([])
+    setRoadDraft(null)
     setDraft({
       name: z.name,
       type: z.type,
@@ -407,8 +488,35 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     }
   }
 
+  function selectRoadForEdit(id: string) {
+    const r = routes.find((rr) => rr.id === id)
+    if (!r) return
+    setSelectedRoadId(id)
+    setSelectedZoneId(null)
+    setSelectedEquipmentId(null)
+    setIsCreating(false)
+    setDraftPoints([])
+    setDraftLngLat([])
+    setDraft(null)
+    setEditingVertices(null)
+    setRoadDraft({
+      code: r.id,
+      name: r.name ?? r.id,
+      fromZoneId: r.fromZoneId,
+      toZoneId: r.toZoneId,
+      distanceKm: r.distanceKm,
+      speedLimitKmh: r.speedLimitKmh ?? null,
+      description: r.description ?? "",
+      status: roadStatus(r),
+      statusReason: r.statusReason ?? null,
+      statusNote: r.statusNote ?? "",
+    })
+  }
+
   function startNewZone() {
     setSelectedZoneId(null)
+    setSelectedRoadId(null)
+    setRoadDraft(null)
     setIsCreating(true)
     setActiveTool("polygon")
     setDraftPoints([])
@@ -417,19 +525,26 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     setDraft(emptyDraft())
   }
 
-  function handleAddZone() {
-    if (!editMode) {
-      setEditMode(true)
-      setSelectedEquipmentId(null)
-      setShowRecentPath(false)
-    }
-    startNewZone()
+  function startNewRoad() {
+    setSelectedRoadId(null)
+    setSelectedZoneId(null)
+    setDraft(null)
+    setIsCreating(true)
+    setActiveTool("polyline")
+    setDraftPoints([])
+    setDraftLngLat([])
+    setEditingVertices(null)
+    setRoadDraft(emptyRoadDraft())
   }
 
   function handleToolChange(tool: MapTool) {
     setActiveTool(tool)
     if (tool === "polygon") {
       startNewZone()
+      return
+    }
+    if (tool === "polyline") {
+      startNewRoad()
       return
     }
     setIsCreating(false)
@@ -449,7 +564,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
 
   const handleCanvasClick = useCallback(
     (lngLat: [number, number]) => {
-      if (isCreating && activeTool === "polygon") {
+      if (isCreating && (activeTool === "polygon" || activeTool === "polyline")) {
         setDraftLngLat((pts) => [...pts, lngLat])
         setDraftPoints((pts) => [...pts, lngLatToWorkspace(lngLat)])
       }
@@ -463,8 +578,10 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
   }
 
   function handleZoneClick(id: string) {
-    if (editMode) {
+    if (configMode) {
+      if (configTab !== "zones") return
       if (activeTool === "delete") {
+        if (!window.confirm("Supprimer cette zone ?")) return
         void removeZone(id)
         if (selectedZoneId === id) {
           setSelectedZoneId(null)
@@ -475,13 +592,35 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
       selectZoneForEdit(id)
     } else {
       setSelectedEquipmentId(null)
+      setSelectedRoadId(null)
       setSelectedZoneId(id)
     }
   }
 
-  function handleEquipmentClick(id: string) {
-    if (editMode) return
+  function handleRoadClick(id: string) {
+    if (configMode) {
+      if (configTab !== "routes") return
+      if (activeTool === "delete") {
+        if (!window.confirm("Supprimer cette route ?")) return
+        void removeRoad(id)
+        if (selectedRoadId === id) {
+          setSelectedRoadId(null)
+          setRoadDraft(null)
+        }
+        return
+      }
+      selectRoadForEdit(id)
+      return
+    }
+    setSelectedEquipmentId(null)
     setSelectedZoneId(null)
+    setSelectedRoadId(id)
+  }
+
+  function handleEquipmentClick(id: string) {
+    if (configMode) return
+    setSelectedZoneId(null)
+    setSelectedRoadId(null)
     setSelectedEquipmentId(id)
     openEquipmentDrawer(id)
   }
@@ -599,22 +738,137 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     }
   }
 
+  async function handleSaveRoad() {
+    if (!roadDraft) return
+    const minPoints = isCreating ? 2 : 0
+    if (isCreating && draftPoints.length < minPoints) return
+    const points = draftPoints.map((p) => ({ x: p.x, y: p.y }))
+    const code = (roadDraft.code.trim() || `R-${crypto.randomUUID().slice(0, 6)}`).toUpperCase()
+    const payload = {
+      name: roadDraft.name.trim() || code,
+      fromZoneId: roadDraft.fromZoneId || undefined,
+      toZoneId: roadDraft.toZoneId || undefined,
+      distanceKm: roadDraft.distanceKm,
+      speedLimitKmh: roadDraft.speedLimitKmh,
+      description: roadDraft.description || null,
+      status: roadDraft.status,
+      statusReason: roadDraft.status === "OPEN" ? null : roadDraft.statusReason,
+      statusNote: roadDraft.status === "OPEN" ? null : roadDraft.statusNote || null,
+    }
+    if (isCreating) {
+      if (useApiMode) {
+        try {
+          const created = await createRoad({ code, points, ...payload }, zoneApiCtx)
+          setRoutes((rs) => [...rs, created])
+          useOpsStore.setState((s) => ({
+            apiPollError: withoutMatchingError(s.apiPollError, "Échec enregistrement route"),
+          }))
+          setIsCreating(false)
+          setDraftPoints([])
+          setDraftLngLat([])
+          setSelectedRoadId(created.id)
+          setActiveTool("select")
+          setRoadDraft({
+            ...roadDraft,
+            code: created.id,
+            name: created.name ?? created.id,
+          })
+        } catch {
+          useOpsStore.setState({ apiPollError: "Échec enregistrement route" })
+        }
+        return
+      }
+      const created: RoutePath = {
+        id: code,
+        name: payload.name,
+        fromZoneId: roadDraft.fromZoneId,
+        toZoneId: roadDraft.toZoneId,
+        points: draftPoints.map((p) => ({ x: p.x, y: p.y })),
+        distanceKm: roadDraft.distanceKm,
+        siteId: selectedSiteId,
+        status: roadDraft.status,
+        speedLimitKmh: roadDraft.speedLimitKmh,
+        description: roadDraft.description || null,
+        statusReason: payload.statusReason,
+        statusNote: payload.statusNote,
+      }
+      persistRoutes((rs) => [...rs.filter((r) => r.id !== created.id), created])
+      setIsCreating(false)
+      setDraftPoints([])
+      setDraftLngLat([])
+      setSelectedRoadId(created.id)
+      setActiveTool("select")
+      return
+    }
+    if (!selectedRoadId) return
+    if (useApiMode) {
+      try {
+        const updated = await patchRoad(
+          selectedRoadId,
+          {
+            ...payload,
+            ...(points.length >= 2 ? { points } : {}),
+          },
+          zoneApiCtx
+        )
+        setRoutes((rs) => rs.map((r) => (r.id === selectedRoadId ? updated : r)))
+        useOpsStore.setState((s) => ({
+          apiPollError: withoutMatchingError(s.apiPollError, "Échec enregistrement route"),
+        }))
+      } catch {
+        useOpsStore.setState({ apiPollError: "Échec enregistrement route" })
+      }
+      return
+    }
+    persistRoutes((rs) =>
+      rs.map((r) =>
+        r.id === selectedRoadId
+          ? {
+              ...r,
+              name: payload.name,
+              fromZoneId: roadDraft.fromZoneId,
+              toZoneId: roadDraft.toZoneId,
+              points: points.length >= 2 ? draftPoints : r.points,
+              distanceKm: roadDraft.distanceKm,
+              status: roadDraft.status,
+              speedLimitKmh: roadDraft.speedLimitKmh,
+              description: roadDraft.description || null,
+              statusReason: payload.statusReason,
+              statusNote: payload.statusNote,
+            }
+          : r
+      )
+    )
+  }
+
   function handleCancelDraft() {
     setIsCreating(false)
     setDraftPoints([])
     setDraftLngLat([])
     setSelectedZoneId(null)
+    setSelectedRoadId(null)
     setDraft(null)
+    setRoadDraft(null)
     setEditingVertices(null)
     setActiveTool("select")
   }
 
   function handleDeleteZone() {
     if (!selectedZoneId) return
+    if (!window.confirm("Supprimer cette zone ?")) return
     void removeZone(selectedZoneId).then(() => {
       setSelectedZoneId(null)
       setDraft(null)
       setEditingVertices(null)
+    })
+  }
+
+  function handleDeleteRoad() {
+    if (!selectedRoadId) return
+    if (!window.confirm("Supprimer cette route ?")) return
+    void removeRoad(selectedRoadId).then(() => {
+      setSelectedRoadId(null)
+      setRoadDraft(null)
     })
   }
 
@@ -624,7 +878,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
   }
 
   useEffect(() => {
-    if (!editMode) return
+    if (!configMode) return
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")
@@ -633,32 +887,76 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
         e.preventDefault()
         undoLastPoint()
       } else if (e.key === "Escape") {
-        if (isCreating || draft) handleCancelDraft()
-        else exitEditMode()
-      } else if (e.key === "Enter" && isCreating && draftPoints.length >= 3 && draft) {
+        if (isCreating || draft || roadDraft) handleCancelDraft()
+        else exitConfigMode()
+      } else if (e.key === "Enter" && isCreating && configTab === "zones" && draftPoints.length >= 3 && draft) {
         handleSaveDraft()
+      } else if (e.key === "Enter" && isCreating && configTab === "routes" && draftPoints.length >= 2 && roadDraft) {
+        void handleSaveRoad()
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyboard shortcuts for edit session
-  }, [editMode, isCreating, draftPoints.length, draft])
+  }, [configMode, configTab, isCreating, draftPoints.length, draft, roadDraft])
 
   const isEditingVertices = activeTool === "vertex" && editingVertices !== null && !isCreating
+  const roadsVisible = showRoadsLayer || (configMode && configTab === "routes")
+  const drawing = isCreating && (activeTool === "polygon" || activeTool === "polyline")
 
   return (
     <div className="flex h-full flex-col">
-      {editMode && <ZoneEditorToolbar activeTool={activeTool} onToolChange={handleToolChange} />}
+      {configMode && configTab === "zones" && (
+        <ZoneEditorToolbar activeTool={activeTool} onToolChange={handleToolChange} />
+      )}
+      {configMode && configTab === "routes" && (
+        <RoadEditorToolbar activeTool={activeTool} onToolChange={handleToolChange} />
+      )}
       <div className="flex min-h-0 flex-1">
-        {editMode ? (
-          <div className="w-[220px] shrink-0 border-r border-border">
-            <ZoneListPanel
-              zones={zones}
-              selectedZoneId={selectedZoneId}
-              onSelectZone={selectZoneForEdit}
-              onNewZone={startNewZone}
-              creating={isCreating}
-            />
+        {configMode ? (
+          <div className="flex w-[220px] shrink-0 flex-col border-r border-border">
+            <div className="flex border-b border-border">
+              {(["zones", "routes"] as const).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => {
+                    if (isCreating || editingVertices) {
+                      if (!window.confirm("Changer d’onglet ? Le tracé en cours sera perdu.")) return
+                    }
+                    resetDraftState()
+                    setConfigTab(id)
+                    setSelectedZoneId(null)
+                    setSelectedRoadId(null)
+                  }}
+                  className={cn(
+                    "flex-1 py-2 text-[11px] font-medium",
+                    configTab === id ? "border-b-2 border-accent text-accent" : "text-muted hover:text-foreground"
+                  )}
+                >
+                  {id === "zones" ? "Zones" : "Routes"}
+                </button>
+              ))}
+            </div>
+            <div className="min-h-0 flex-1">
+              {configTab === "zones" ? (
+                <ZoneListPanel
+                  zones={zones}
+                  selectedZoneId={selectedZoneId}
+                  onSelectZone={selectZoneForEdit}
+                  onNewZone={startNewZone}
+                  creating={isCreating}
+                />
+              ) : (
+                <RoadListPanel
+                  roads={routes}
+                  selectedRoadId={selectedRoadId}
+                  onSelectRoad={selectRoadForEdit}
+                  onNewRoad={startNewRoad}
+                  creating={isCreating}
+                />
+              )}
+            </div>
           </div>
         ) : (
           <FilterDrawer title="Filtres" defaultCollapsed widthExpanded={200}>
@@ -785,9 +1083,14 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
             key={basemap}
             basemap={basemap}
             onReady={handleMapReady}
-            className={cn("h-full w-full", editMode && isCreating && activeTool === "polygon" && "mp-map-drawing")}
+            className={cn("h-full w-full", configMode && drawing && "mp-map-drawing")}
           >
-            <HaulRoadsLayer data={roadsGeo} visible={showRoadsLayer && !editMode} />
+            <HaulRoadsLayer
+              data={roadsGeo}
+              visible={roadsVisible}
+              interactive={!drawing}
+              onRoadClick={handleRoadClick}
+            />
             <OperationalZonesLayer
               data={zonesGeo}
               visible={showZonesLayer}
@@ -796,27 +1099,27 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
             />
             <EquipmentLayer
               data={equipmentGeo}
-              visible={showEquipmentLayer && !editMode}
-              interactive={!editMode}
+              visible={showEquipmentLayer && !configMode}
+              interactive={!configMode}
               onEquipmentClick={handleEquipmentClick}
             />
-            <RecentPathLayer data={recentGeo} visible={showRecentPath && !editMode} />
+            <RecentPathLayer data={recentGeo} visible={showRecentPath && !configMode} />
             <ZoneDraftLayer
               data={draftGeo}
-              enabled={editMode && isCreating && activeTool === "polygon"}
-              color={draft?.color}
+              enabled={configMode && drawing}
+              color={configTab === "zones" ? draft?.color : "#a89070"}
               onMapClick={handleCanvasClick}
               onDoubleClickFinish={() => {
-                /* contour closed visually at ≥3 pts — user saves from panel */
+                /* contour closed visually — user saves from panel */
               }}
               pointCount={draftPoints.length}
             />
             <MapInteractionLock
-              mode={editMode && isCreating && activeTool === "polygon" ? "draw" : "none"}
+              mode={configMode && drawing ? "draw" : "none"}
             />
             <ZoneVertexLayer
               points={editingVertices ?? []}
-              enabled={editMode && isEditingVertices}
+              enabled={configMode && isEditingVertices}
               color={draft?.color}
               onPointsChange={setEditingVertices}
             />
@@ -837,43 +1140,47 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
             <MapControls
               basemap={basemap}
               onBasemapChange={setBasemap}
-              editMode={editMode}
-              onToggleEdit={editMode ? exitEditMode : enterEditMode}
-              onAddZone={handleAddZone}
-              isDrawing={isCreating}
+              configMode={configMode}
+              onToggleConfig={configMode ? exitConfigMode : () => enterConfigMode(configTab)}
               fitEquipment={filteredEquipment}
             />
-            {!editMode && <MapLegend />}
+            {!configMode && <MapLegend showRoads={showRoadsLayer} />}
           </MineMap>
 
           <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-md border border-warning/30 bg-warning/15 px-2.5 py-1 text-[11px] font-medium text-foreground">
             {useApiMode ? "Données opérationnelles · API" : "Données simulées · Mode prototype"}
           </div>
 
-          {editMode && isCreating && (
+          {configMode && isCreating && (
             <div className="pointer-events-none absolute bottom-4 left-1/2 z-10 max-w-md -translate-x-1/2 rounded-md border border-border bg-surface/95 px-3 py-2 text-center text-[11px] shadow-sm">
-              <span className="font-medium text-foreground">Dessin de zone</span>
+              <span className="font-medium text-foreground">
+                {configTab === "routes" ? "Tracé de route" : "Dessin de zone"}
+              </span>
               <span className="text-muted">
                 {" "}
-                — cliquez pour placer les sommets ({draftPoints.length}/3 min.) · double-clic pour
-                terminer · Backspace pour annuler le dernier point
+                — cliquez pour placer les sommets ({draftPoints.length}/
+                {configTab === "routes" ? "2" : "3"} min.) · Backspace pour annuler le dernier point
               </span>
             </div>
           )}
 
-          {editMode && !isCreating && (
+          {configMode && !isCreating && (
             <div className="absolute right-3 top-12 z-10 rounded-md border border-border bg-surface/95 px-2.5 py-1.5 text-[11px] text-muted shadow-sm">
               {activeTool === "delete"
-                ? "Cliquez une zone sur la carte pour la supprimer"
+                ? configTab === "routes"
+                  ? "Cliquez une route sur la carte pour la supprimer"
+                  : "Cliquez une zone sur la carte pour la supprimer"
                 : activeTool === "vertex"
                   ? "Glissez les sommets pour ajuster la forme"
-                  : "Sélectionnez une zone ou appuyez + pour en créer une"}
+                  : configTab === "routes"
+                    ? "Sélectionnez une route ou tracez-en une nouvelle"
+                    : "Sélectionnez une zone ou appuyez + pour en créer une"}
             </div>
           )}
         </div>
 
         <div className="w-[280px] shrink-0 border-l border-border">
-          {editMode ? (
+          {configMode && configTab === "zones" ? (
             <ZonePropertiesPanel
               draft={draft}
               onChange={(patch) => setDraft((d) => (d ? { ...d, ...patch } : d))}
@@ -884,6 +1191,19 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
               isCreating={isCreating}
               isEditingVertices={isEditingVertices}
               canFinishDraft={draftPoints.length >= 3}
+              pointCount={draftPoints.length}
+            />
+          ) : configMode ? (
+            <RoadPropertiesPanel
+              draft={roadDraft}
+              zones={zones}
+              onChange={(patch) => setRoadDraft((d) => (d ? { ...d, ...patch } : d))}
+              onSave={() => void handleSaveRoad()}
+              onCancel={handleCancelDraft}
+              onDelete={handleDeleteRoad}
+              onUndoPoint={undoLastPoint}
+              isCreating={isCreating}
+              canFinishDraft={draftPoints.length >= 2}
               pointCount={draftPoints.length}
             />
           ) : (
@@ -902,6 +1222,15 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
                     onToggleRecentPath={() => setShowRecentPath((v) => !v)}
                     onOpenDetail={() => openEquipmentDrawer(selectedEquipment.id)}
                   />
+                ) : selectedRoad ? (
+                  <RoadQuickInfo
+                    road={selectedRoad}
+                    zones={zones}
+                    onConfigure={() => {
+                      enterConfigMode("routes")
+                      selectRoadForEdit(selectedRoad.id)
+                    }}
+                  />
                 ) : selectedZone ? (
                   <ZoneQuickInfo
                     zone={selectedZone}
@@ -909,13 +1238,13 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
                     equipmentInside={equipment.filter((e) => e.zoneId === selectedZone.id)}
                     avgWait={useApiMode ? null : avgWaitInZone(equipment, selectedZone.id)}
                     onEdit={() => {
-                      enterEditMode()
+                      enterConfigMode("zones")
                       selectZoneForEdit(selectedZone.id)
                     }}
                   />
                 ) : (
                   <p className="text-xs text-muted">
-                    Sélectionnez un engin ou une zone sur la carte pour afficher le détail.
+                    Sélectionnez un engin, une zone ou une piste sur la carte pour afficher le détail.
                   </p>
                 )}
               </div>
@@ -1062,7 +1391,49 @@ function ZoneQuickInfo({
       )}
       <Button size="sm" variant="outline" onClick={onEdit}>
         <Pencil className="size-3.5" />
-        Modifier les zones
+        Configurer la carte
+      </Button>
+    </div>
+  )
+}
+
+function RoadQuickInfo({
+  road,
+  zones,
+  onConfigure,
+}: {
+  road: RoutePath
+  zones: Zone[]
+  onConfigure: () => void
+}) {
+  const from = zones.find((z) => z.id === road.fromZoneId)
+  const to = zones.find((z) => z.id === road.toZoneId)
+  const status = roadStatus(road)
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <p className="font-mono text-sm font-semibold text-foreground">{road.id}</p>
+        {road.name && road.name !== road.id && (
+          <p className="text-[11px] text-muted">{road.name}</p>
+        )}
+      </div>
+      <QuickStat label="Statut" value={ROAD_STATUS_LABEL[status]} />
+      {from && <QuickStat label="De" value={from.name} />}
+      {to && <QuickStat label="Vers" value={to.name} />}
+      {road.distanceKm != null && <QuickStat label="Distance" value={`${road.distanceKm} km`} />}
+      {road.speedLimitKmh != null && (
+        <QuickStat label="Vitesse maximale" value={`${road.speedLimitKmh} km/h`} />
+      )}
+      {road.description ? <p className="text-xs leading-relaxed text-muted">{road.description}</p> : null}
+      {status !== "OPEN" && road.statusReason && road.statusReason in ROAD_STATUS_REASON_LABEL && (
+        <p className="text-xs text-muted">
+          Motif : {ROAD_STATUS_REASON_LABEL[road.statusReason]}
+          {road.statusNote ? ` — ${road.statusNote}` : ""}
+        </p>
+      )}
+      <Button size="sm" variant="outline" onClick={onConfigure}>
+        <Pencil className="size-3.5" />
+        Configurer la carte
       </Button>
     </div>
   )

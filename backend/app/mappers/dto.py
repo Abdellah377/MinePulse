@@ -102,6 +102,10 @@ def zone_to_dto(zone: Zone, site_code: str) -> dict:
     }
 
 
+def _nullable_float(value) -> float | None:
+    return float(value) if value is not None else None
+
+
 def road_to_dto(road: HaulRoad, zone_codes: dict[int, str], site_code: str) -> dict:
     points: list[dict[str, float]] = []
     try:
@@ -109,13 +113,22 @@ def road_to_dto(road: HaulRoad, zone_codes: dict[int, str], site_code: str) -> d
         points = [lng_lat_to_workspace(float(c[0]), float(c[1])) for c in line.coords]
     except Exception:
         pass
+    from_id = getattr(road, "from_zone_id", None)
+    to_id = getattr(road, "to_zone_id", None)
     return {
         "id": road.code,
-        "fromZoneId": zone_codes.get(road.from_zone_id, ""),
-        "toZoneId": zone_codes.get(road.to_zone_id, ""),
+        "databaseId": getattr(road, "road_id", None),
+        "name": road.name or None,
+        "fromZoneId": zone_codes.get(from_id, "") if from_id is not None else "",
+        "toZoneId": zone_codes.get(to_id, "") if to_id is not None else "",
         "points": points,
-        "distanceKm": float(road.distance_km) if road.distance_km is not None else None,
+        "distanceKm": _nullable_float(road.distance_km),
         "siteId": site_code,
+        "status": getattr(road, "status", None) or "OPEN",
+        "speedLimitKmh": _nullable_float(getattr(road, "speed_limit_kmh", None)),
+        "description": getattr(road, "description", None) or None,
+        "statusReason": getattr(road, "status_reason", None),
+        "statusNote": getattr(road, "status_note", None),
     }
 
 

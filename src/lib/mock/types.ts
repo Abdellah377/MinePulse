@@ -254,13 +254,30 @@ export interface Zone {
   siteId: string
 }
 
+export type RoadStatus = "OPEN" | "CLOSED" | "RESTRICTED"
+
+export type RoadStatusReason =
+  | "BLASTING"
+  | "MAINTENANCE"
+  | "ROAD_DAMAGE"
+  | "FLOODING"
+  | "CONGESTION_CONTROL"
+  | "OTHER"
+
 export interface RoutePath {
   id: string
+  databaseId?: number
+  name?: string | null
   fromZoneId: string
   toZoneId: string
   points: Vec2[]
   distanceKm: number | null
   siteId: string
+  status?: RoadStatus
+  speedLimitKmh?: number | null
+  description?: string | null
+  statusReason?: RoadStatusReason | null
+  statusNote?: string | null
 }
 
 export type AlertSeverity = "critical" | "warning" | "info"

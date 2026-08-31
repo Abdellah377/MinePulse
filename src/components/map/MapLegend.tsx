@@ -13,7 +13,7 @@ const TYPES: EquipmentType[] = [
 
 const GROUPS = Object.keys(FILM_STATE_GROUP_LABEL) as FilmStateGroup[]
 
-export function MapLegend() {
+export function MapLegend({ showRoads = false }: { showRoads?: boolean }) {
   return (
     <div className="absolute bottom-8 left-3 z-10 max-w-[220px] rounded-md border border-border bg-surface/95 px-2.5 py-2 shadow-sm backdrop-blur-sm">
       <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-2">
@@ -37,7 +37,28 @@ export function MapLegend() {
           )
         })}
       </div>
-      <p className="mt-1.5 text-[9px] text-muted-2">Icône = type · couleur = statut</p>
+      {showRoads && (
+        <div className="mt-2 border-t border-border pt-1.5">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-2">Pistes</p>
+          <div className="flex flex-col gap-0.5 text-[10px] text-foreground/80">
+            <span className="flex items-center gap-1.5">
+              <span className="h-0.5 w-4 shrink-0 bg-[#a89070]" />
+              Ouverte
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-0.5 w-4 shrink-0 border-t border-dashed border-[#c4a062]" />
+              Restreinte
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-0.5 w-4 shrink-0 border-t border-dashed border-[#6b7280]" />
+              Fermée
+            </span>
+          </div>
+        </div>
+      )}
+      <p className="mt-1.5 text-[9px] text-muted-2">
+        Icône = type · couleur = statut{showRoads ? " · trait = piste" : ""}
+      </p>
     </div>
   )
 }
