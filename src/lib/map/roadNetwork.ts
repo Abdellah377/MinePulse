@@ -1,6 +1,7 @@
 import type { RoutePath } from "@/lib/mock/types"
 
 export type RoadStatus = "OPEN" | "CLOSED" | "RESTRICTED"
+export type RoadOperationalStatus = RoadStatus | "UNKNOWN"
 
 export type RoadStatusReason =
   | "BLASTING"
@@ -10,10 +11,11 @@ export type RoadStatusReason =
   | "CONGESTION_CONTROL"
   | "OTHER"
 
-export const ROAD_STATUS_LABEL: Record<RoadStatus, string> = {
+export const ROAD_STATUS_LABEL: Record<RoadOperationalStatus, string> = {
   OPEN: "Ouverte",
   CLOSED: "Fermée",
   RESTRICTED: "Restreinte",
+  UNKNOWN: "Statut inconnu",
 }
 
 export const ROAD_STATUS_REASON_LABEL: Record<RoadStatusReason, string> = {
@@ -25,8 +27,16 @@ export const ROAD_STATUS_REASON_LABEL: Record<RoadStatusReason, string> = {
   OTHER: "Autre",
 }
 
-export function roadStatus(route: Pick<RoutePath, "status">): RoadStatus {
-  return route.status === "CLOSED" || route.status === "RESTRICTED" ? route.status : "OPEN"
+export const KNOWN_ROAD_STATUSES: RoadStatus[] = ["OPEN", "CLOSED", "RESTRICTED"]
+
+export function roadStatus(route: Pick<RoutePath, "status"> | { status?: string | null }): RoadOperationalStatus {
+  const status = route.status
+  if (status === "OPEN" || status === "CLOSED" || status === "RESTRICTED") return status
+  return "UNKNOWN"
+}
+
+export function isRoutableStatus(status: RoadOperationalStatus): status is Extract<RoadOperationalStatus, "OPEN" | "RESTRICTED"> {
+  return status === "OPEN" || status === "RESTRICTED"
 }
 
 export type RoutableEdge = {
@@ -38,18 +48,22 @@ export type RoutableEdge = {
   speedLimitKmh: number | null
 }
 
-/** Future routers MUST use this selector. CLOSED roads are never eligible. */
+/** Future routers MUST use this selector. CLOSED and UNKNOWN are never eligible. */
 export function routableEdges(roads: RoutePath[]): RoutableEdge[] {
-  return roads
-    .filter((road) => roadStatus(road) !== "CLOSED" && road.fromZoneId && road.toZoneId)
-    .map((road) => ({
-      id: road.id,
-      fromZoneId: road.fromZoneId,
-      toZoneId: road.toZoneId,
-      status: roadStatus(road),
-      distanceKm: road.distanceKm,
-      speedLimitKmh: road.speedLimitKmh ?? null,
-    }))
+  return roads.flatMap((road) => {
+    const status = roadStatus(road)
+    if (!isRoutableStatus(status) || !road.fromZoneId || !road.toZoneId) return []
+    return [
+      {
+        id: road.id,
+        fromZoneId: road.fromZoneId,
+        toZoneId: road.toZoneId,
+        status,
+        distanceKm: road.distanceKm,
+        speedLimitKmh: road.speedLimitKmh ?? null,
+      },
+    ]
+  })
 }
 
 export function canReach(fromZoneId: string, toZoneId: string, roads: RoutePath[]): boolean {

@@ -71,6 +71,15 @@ import {
 import { buildRecentTrail, useMapLiveSimulation } from "@/features/map/map.simulation"
 import { useApiMode, createRoad, createZone, deleteRoad, deleteZone, patchRoad, patchZone } from "@/lib/api/client"
 import { ROAD_STATUS_LABEL, ROAD_STATUS_REASON_LABEL, roadStatus } from "@/lib/map/roadNetwork"
+import {
+  canSaveRoadTrace,
+  copyVertices,
+  geometryToPersist,
+  insertMidpointOnLongestSegment,
+  polylineDistanceKm,
+  removeLastVertex,
+} from "@/lib/map/roadGeometry"
+import { ROAD_DRAFT_COLOR } from "@/lib/map/roadStyle"
 import { withoutMatchingError } from "@/lib/store/apiSync"
 import {
   mapCameraForEquipment,
@@ -240,6 +249,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
   const [roadDraft, setRoadDraft] = useState<RoadDraft | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [editingVertices, setEditingVertices] = useState<Vec2[] | null>(null)
+  const [roadEditingVertices, setRoadEditingVertices] = useState<Vec2[] | null>(null)
   const [focusZoneId, setFocusZoneId] = useState<string | null>(null)
 
   useMapLiveSimulation(!configMode && !useApiMode)
@@ -401,7 +411,13 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     () => zonesToGeoJSON(zones, equipment, selectedZoneId),
     [zones, equipment, selectedZoneId]
   )
-  const roadsGeo = useMemo(() => routesToGeoJSON(routes, selectedRoadId), [routes, selectedRoadId])
+  const roadsGeo = useMemo(() => {
+    const display =
+      roadEditingVertices && selectedRoadId
+        ? routes.map((r) => (r.id === selectedRoadId ? { ...r, points: roadEditingVertices } : r))
+        : routes
+    return routesToGeoJSON(display, selectedRoadId)
+  }, [routes, selectedRoadId, roadEditingVertices])
   const draftGeo = useMemo(
     () => draftLngLatToGeoJSON(draftLngLat, { polygon: configTab === "zones" }),
     [draftLngLat, configTab]
@@ -443,6 +459,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     setDraftPoints([])
     setDraftLngLat([])
     setEditingVertices(null)
+    setRoadEditingVertices(null)
     setActiveTool("select")
   }
 
@@ -456,7 +473,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
   }
 
   function exitConfigMode() {
-    if ((isCreating || editingVertices) && !window.confirm("Quitter la configuration ? Des modifications non enregistrées seront perdues.")) {
+    if ((isCreating || editingVertices || roadEditingVertices) && !window.confirm("Quitter la configuration ? Des modifications non enregistrées seront perdues.")) {
       return
     }
     setConfigMode(false)
@@ -474,6 +491,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     setDraftPoints([])
     setDraftLngLat([])
     setRoadDraft(null)
+    setRoadEditingVertices(null)
     setDraft({
       name: z.name,
       type: z.type,
@@ -499,6 +517,11 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     setDraftLngLat([])
     setDraft(null)
     setEditingVertices(null)
+    if (activeTool === "vertex") {
+      setRoadEditingVertices(copyVertices(r.points))
+    } else {
+      setRoadEditingVertices(null)
+    }
     setRoadDraft({
       code: r.id,
       name: r.name ?? r.id,
@@ -522,6 +545,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     setDraftPoints([])
     setDraftLngLat([])
     setEditingVertices(null)
+    setRoadEditingVertices(null)
     setDraft(emptyDraft())
   }
 
@@ -534,6 +558,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     setDraftPoints([])
     setDraftLngLat([])
     setEditingVertices(null)
+    setRoadEditingVertices(null)
     setRoadDraft(emptyRoadDraft())
   }
 
@@ -551,6 +576,17 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     setDraftPoints([])
     setDraftLngLat([])
     if (tool === "vertex") {
+      if (configTab === "routes") {
+        setEditingVertices(null)
+        if (selectedRoadId) {
+          const r = routes.find((rr) => rr.id === selectedRoadId)
+          if (r) setRoadEditingVertices(copyVertices(r.points))
+        } else {
+          setRoadEditingVertices(null)
+        }
+        return
+      }
+      setRoadEditingVertices(null)
       if (selectedZoneId) {
         const z = zones.find((zz) => zz.id === selectedZoneId)
         if (z) setEditingVertices([...z.points])
@@ -560,6 +596,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
       return
     }
     setEditingVertices(null)
+    setRoadEditingVertices(null)
   }
 
   const handleCanvasClick = useCallback(
@@ -740,22 +777,26 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
 
   async function handleSaveRoad() {
     if (!roadDraft) return
-    const minPoints = isCreating ? 2 : 0
-    if (isCreating && draftPoints.length < minPoints) return
-    const points = draftPoints.map((p) => ({ x: p.x, y: p.y }))
+    if (!canSaveRoadTrace({ isCreating, draftPoints, roadEditingVertices })) return
+    const points = geometryToPersist({ isCreating, draftPoints, roadEditingVertices })
     const code = (roadDraft.code.trim() || `R-${crypto.randomUUID().slice(0, 6)}`).toUpperCase()
+    const knownStatus = roadDraft.status === "UNKNOWN" ? undefined : roadDraft.status
     const payload = {
       name: roadDraft.name.trim() || code,
       fromZoneId: roadDraft.fromZoneId || undefined,
       toZoneId: roadDraft.toZoneId || undefined,
-      distanceKm: roadDraft.distanceKm,
       speedLimitKmh: roadDraft.speedLimitKmh,
       description: roadDraft.description || null,
-      status: roadDraft.status,
-      statusReason: roadDraft.status === "OPEN" ? null : roadDraft.statusReason,
-      statusNote: roadDraft.status === "OPEN" ? null : roadDraft.statusNote || null,
+      ...(knownStatus
+        ? {
+            status: knownStatus,
+            statusReason: knownStatus === "OPEN" ? null : roadDraft.statusReason,
+            statusNote: knownStatus === "OPEN" ? null : roadDraft.statusNote || null,
+          }
+        : {}),
     }
     if (isCreating) {
+      if (!points) return
       if (useApiMode) {
         try {
           const created = await createRoad({ code, points, ...payload }, zoneApiCtx)
@@ -766,6 +807,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
           setIsCreating(false)
           setDraftPoints([])
           setDraftLngLat([])
+          setRoadEditingVertices(null)
           setSelectedRoadId(created.id)
           setActiveTool("select")
           setRoadDraft({
@@ -783,19 +825,20 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
         name: payload.name,
         fromZoneId: roadDraft.fromZoneId,
         toZoneId: roadDraft.toZoneId,
-        points: draftPoints.map((p) => ({ x: p.x, y: p.y })),
-        distanceKm: roadDraft.distanceKm,
+        points,
+        distanceKm: polylineDistanceKm(points),
         siteId: selectedSiteId,
-        status: roadDraft.status,
+        status: knownStatus ?? "OPEN",
         speedLimitKmh: roadDraft.speedLimitKmh,
         description: roadDraft.description || null,
-        statusReason: payload.statusReason,
-        statusNote: payload.statusNote,
+        statusReason: knownStatus === "OPEN" ? null : roadDraft.statusReason,
+        statusNote: knownStatus === "OPEN" ? null : roadDraft.statusNote || null,
       }
       persistRoutes((rs) => [...rs.filter((r) => r.id !== created.id), created])
       setIsCreating(false)
       setDraftPoints([])
       setDraftLngLat([])
+      setRoadEditingVertices(null)
       setSelectedRoadId(created.id)
       setActiveTool("select")
       return
@@ -807,7 +850,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
           selectedRoadId,
           {
             ...payload,
-            ...(points.length >= 2 ? { points } : {}),
+            ...(points ? { points } : {}),
           },
           zoneApiCtx
         )
@@ -815,6 +858,8 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
         useOpsStore.setState((s) => ({
           apiPollError: withoutMatchingError(s.apiPollError, "Échec enregistrement route"),
         }))
+        setRoadEditingVertices(null)
+        setActiveTool("select")
       } catch {
         useOpsStore.setState({ apiPollError: "Échec enregistrement route" })
       }
@@ -828,17 +873,19 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
               name: payload.name,
               fromZoneId: roadDraft.fromZoneId,
               toZoneId: roadDraft.toZoneId,
-              points: points.length >= 2 ? draftPoints : r.points,
-              distanceKm: roadDraft.distanceKm,
-              status: roadDraft.status,
+              points: points ?? r.points,
+              distanceKm: points ? polylineDistanceKm(points) : r.distanceKm,
+              status: knownStatus ?? r.status,
               speedLimitKmh: roadDraft.speedLimitKmh,
               description: roadDraft.description || null,
-              statusReason: payload.statusReason,
-              statusNote: payload.statusNote,
+              statusReason: knownStatus === "OPEN" ? null : roadDraft.statusReason,
+              statusNote: knownStatus === "OPEN" ? null : roadDraft.statusNote || null,
             }
           : r
       )
     )
+    setRoadEditingVertices(null)
+    setActiveTool("select")
   }
 
   function handleCancelDraft() {
@@ -850,7 +897,20 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     setDraft(null)
     setRoadDraft(null)
     setEditingVertices(null)
+    setRoadEditingVertices(null)
     setActiveTool("select")
+  }
+
+  function startRoadTraceEdit() {
+    if (!selectedRoadId) return
+    const r = routes.find((rr) => rr.id === selectedRoadId)
+    if (!r) return
+    setIsCreating(false)
+    setDraftPoints([])
+    setDraftLngLat([])
+    setEditingVertices(null)
+    setActiveTool("vertex")
+    setRoadEditingVertices(copyVertices(r.points))
   }
 
   function handleDeleteZone() {
@@ -869,6 +929,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     void removeRoad(selectedRoadId).then(() => {
       setSelectedRoadId(null)
       setRoadDraft(null)
+      setRoadEditingVertices(null)
     })
   }
 
@@ -886,8 +947,11 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
       if (e.key === "Backspace" && isCreating && draftPoints.length > 0) {
         e.preventDefault()
         undoLastPoint()
+      } else if (e.key === "Backspace" && roadEditingVertices && roadEditingVertices.length > 2) {
+        e.preventDefault()
+        setRoadEditingVertices(removeLastVertex(roadEditingVertices))
       } else if (e.key === "Escape") {
-        if (isCreating || draft || roadDraft) handleCancelDraft()
+        if (isCreating || draft || roadDraft || roadEditingVertices) handleCancelDraft()
         else exitConfigMode()
       } else if (e.key === "Enter" && isCreating && configTab === "zones" && draftPoints.length >= 3 && draft) {
         handleSaveDraft()
@@ -898,11 +962,17 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyboard shortcuts for edit session
-  }, [configMode, configTab, isCreating, draftPoints.length, draft, roadDraft])
+  }, [configMode, configTab, isCreating, draftPoints.length, draft, roadDraft, roadEditingVertices])
 
   const isEditingVertices = activeTool === "vertex" && editingVertices !== null && !isCreating
+  const isEditingRoadVertices =
+    activeTool === "vertex" && roadEditingVertices !== null && !isCreating && configTab === "routes"
   const roadsVisible = showRoadsLayer || (configMode && configTab === "routes")
   const drawing = isCreating && (activeTool === "polygon" || activeTool === "polyline")
+  const canSaveCurrentRoad = canSaveRoadTrace({ isCreating, draftPoints, roadEditingVertices })
+  const roadPointCount = isCreating
+    ? draftPoints.length
+    : (roadEditingVertices?.length ?? selectedRoad?.points.length ?? 0)
 
   return (
     <div className="flex h-full flex-col">
@@ -921,7 +991,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
                   key={id}
                   type="button"
                   onClick={() => {
-                    if (isCreating || editingVertices) {
+                    if (isCreating || editingVertices || roadEditingVertices) {
                       if (!window.confirm("Changer d’onglet ? Le tracé en cours sera perdu.")) return
                     }
                     resetDraftState()
@@ -1088,7 +1158,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
             <HaulRoadsLayer
               data={roadsGeo}
               visible={roadsVisible}
-              interactive={!drawing}
+              interactive={!drawing && !isEditingRoadVertices}
               onRoadClick={handleRoadClick}
             />
             <OperationalZonesLayer
@@ -1107,7 +1177,7 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
             <ZoneDraftLayer
               data={draftGeo}
               enabled={configMode && drawing}
-              color={configTab === "zones" ? draft?.color : "#a89070"}
+              color={configTab === "zones" ? draft?.color : ROAD_DRAFT_COLOR}
               onMapClick={handleCanvasClick}
               onDoubleClickFinish={() => {
                 /* contour closed visually — user saves from panel */
@@ -1118,10 +1188,10 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
               mode={configMode && drawing ? "draw" : "none"}
             />
             <ZoneVertexLayer
-              points={editingVertices ?? []}
-              enabled={configMode && isEditingVertices}
-              color={draft?.color}
-              onPointsChange={setEditingVertices}
+              points={isEditingRoadVertices ? (roadEditingVertices ?? []) : (editingVertices ?? [])}
+              enabled={configMode && (isEditingVertices || isEditingRoadVertices)}
+              color={isEditingRoadVertices ? ROAD_DRAFT_COLOR : draft?.color}
+              onPointsChange={isEditingRoadVertices ? setRoadEditingVertices : setEditingVertices}
             />
             <MapFlyTo
               equipmentId={selectedEquipmentId}
@@ -1157,9 +1227,9 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
                 {configTab === "routes" ? "Tracé de route" : "Dessin de zone"}
               </span>
               <span className="text-muted">
-                {" "}
-                — cliquez pour placer les sommets ({draftPoints.length}/
-                {configTab === "routes" ? "2" : "3"} min.) · Backspace pour annuler le dernier point
+                {configTab === "routes"
+                  ? ` — cliquez sur la carte pour ajouter les sommets de la route. ${draftPoints.length} point${draftPoints.length !== 1 ? "s" : ""} défini${draftPoints.length !== 1 ? "s" : ""} (minimum 2). Enregistrez quand le tracé est complet.`
+                  : ` — cliquez pour placer les sommets (${draftPoints.length}/3 min.) · Backspace pour annuler le dernier point`}
               </span>
             </div>
           )}
@@ -1171,7 +1241,9 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
                   ? "Cliquez une route sur la carte pour la supprimer"
                   : "Cliquez une zone sur la carte pour la supprimer"
                 : activeTool === "vertex"
-                  ? "Glissez les sommets pour ajuster la forme"
+                  ? configTab === "routes"
+                    ? "Glissez les points du tracé, puis enregistrez"
+                    : "Glissez les sommets pour ajuster la forme"
                   : configTab === "routes"
                     ? "Sélectionnez une route ou tracez-en une nouvelle"
                     : "Sélectionnez une zone ou appuyez + pour en créer une"}
@@ -1202,9 +1274,17 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
               onCancel={handleCancelDraft}
               onDelete={handleDeleteRoad}
               onUndoPoint={undoLastPoint}
+              onEditTrace={startRoadTraceEdit}
+              onAddVertex={() =>
+                setRoadEditingVertices((pts) => (pts ? insertMidpointOnLongestSegment(pts) : pts))
+              }
+              onRemoveVertex={() =>
+                setRoadEditingVertices((pts) => (pts ? removeLastVertex(pts) : pts))
+              }
               isCreating={isCreating}
-              canFinishDraft={draftPoints.length >= 2}
-              pointCount={draftPoints.length}
+              isEditingTrace={isEditingRoadVertices}
+              canFinishDraft={canSaveCurrentRoad}
+              pointCount={roadPointCount}
             />
           ) : (
             <div className="flex h-full flex-col">

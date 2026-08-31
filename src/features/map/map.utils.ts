@@ -4,6 +4,7 @@ import type { Equipment, RoutePath, Vec2, Zone } from "@/lib/mock/types"
 import { useApiMode } from "@/lib/api/client"
 import { EQUIPMENT_STATE_LABEL, EQUIPMENT_TYPE_LABEL } from "@/lib/mock/types"
 import { SITE_GEO, STATE_HEX } from "@/features/map/map.constants"
+import { roadStatus } from "@/lib/map/roadNetwork"
 import type {
   EquipmentFeatureProps,
   RoadClass,
@@ -136,8 +137,10 @@ export function zonesToGeoJSON(
 }
 
 function classifyRoad(route: RoutePath): RoadClass {
-  if (route.status === "CLOSED") return "closed"
-  if (route.status === "RESTRICTED") return "restricted"
+  const status = roadStatus(route)
+  if (status === "CLOSED") return "closed"
+  if (status === "RESTRICTED") return "restricted"
+  if (status === "UNKNOWN") return "unknown"
   return "main"
 }
 
@@ -158,7 +161,7 @@ export function routesToGeoJSON(
         id: r.id,
         name: r.name ?? r.id,
         roadClass: classifyRoad(r),
-        status: r.status ?? "OPEN",
+        status: roadStatus(r),
         fromZoneId: r.fromZoneId,
         toZoneId: r.toZoneId,
         distanceKm: r.distanceKm,

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from app.mappers.dto import road_to_dto
 from app.services.operational.roads import ROAD_STATUSES, STATUS_REASONS, _validate_reason, _validate_status
-from simulator.seed import ROAD_SPECS, ZONE_SPECS
+from simulator.seed import ROAD_SPECS, ROAD_WAYPOINTS, ZONE_SPECS
 from app.services.operational.road_network import can_reach, routable_edges
 
 
@@ -30,6 +30,33 @@ def test_road_dto_keeps_nulls_and_status():
     assert dto["description"] is None
     assert dto["statusReason"] == "MAINTENANCE"
     assert dto["statusNote"] is None
+
+
+def test_road_dto_does_not_invent_open_status():
+    road = SimpleNamespace(
+        road_id=9,
+        code="R-05",
+        name="R-05 Banc A — Parking",
+        from_zone_id=1,
+        to_zone_id=2,
+        distance_km=None,
+        speed_limit_kmh=None,
+        status=None,
+        description=None,
+        status_reason=None,
+        status_note=None,
+        geometry=None,
+    )
+    dto = road_to_dto(road, {1: "BANC_A", 2: "PARKING"}, "MP-SIM-01")
+    assert dto["status"] is None
+
+
+def test_polyline_length_uses_full_path_not_shortcut():
+    from app.services.operational.roads import polyline_length_km
+
+    direct = [{"x": 0, "y": 0}, {"x": 400, "y": 0}]
+    bent = [{"x": 0, "y": 0}, {"x": 120, "y": 180}, {"x": 260, "y": -40}, {"x": 400, "y": 0}]
+    assert polyline_length_km(bent) > polyline_length_km(direct)
 
 
 def test_status_validation_accepts_operator_values_only():
@@ -63,6 +90,9 @@ def test_seed_layout_has_operational_zones_and_alternate_crusher_path():
     closed_primary = [{**r, "status": "CLOSED"} if r["id"] == "RD-BA-CR" else r for r in roads]
     assert can_reach("BANC_A", "CRUSHER", closed_primary)
     assert {e["id"] for e in routable_edges(closed_primary)} >= {"R-05", "R-06"}
+    assert len(ROAD_WAYPOINTS["R-05"]) >= 2
+    assert len(ROAD_WAYPOINTS["R-06"]) >= 2
+    assert len(ROAD_WAYPOINTS["RD-BA-CR"]) >= 2
 
 
 def test_seed_does_not_treat_description_as_zone_type():

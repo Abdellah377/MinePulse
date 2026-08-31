@@ -2,8 +2,11 @@ import { Plus, Save, Trash2, Undo2, X } from "lucide-react"
 
 import type { RoutePath, Zone } from "@/lib/mock/types"
 import {
+  KNOWN_ROAD_STATUSES,
   ROAD_STATUS_LABEL,
   ROAD_STATUS_REASON_LABEL,
+  roadStatus,
+  type RoadOperationalStatus,
   type RoadStatus,
   type RoadStatusReason,
 } from "@/lib/map/roadNetwork"
@@ -29,7 +32,7 @@ export interface RoadDraft {
   distanceKm: number | null
   speedLimitKmh: number | null
   description: string
-  status: RoadStatus
+  status: RoadOperationalStatus
   statusReason: RoadStatusReason | null
   statusNote: string
 }
@@ -37,6 +40,7 @@ export interface RoadDraft {
 const ROAD_TOOLS: { id: MapTool; label: string }[] = [
   { id: "select", label: "Sélection" },
   { id: "polyline", label: "Tracé" },
+  { id: "vertex", label: "Modifier le tracé" },
   { id: "delete", label: "Supprimer" },
 ]
 
@@ -103,7 +107,7 @@ export function RoadListPanel({
             )}
           >
             <span className="truncate font-medium">{r.name || r.id}</span>
-            <span className="text-[10px] text-muted-2">{ROAD_STATUS_LABEL[r.status ?? "OPEN"]}</span>
+            <span className="text-[10px] text-muted-2">{ROAD_STATUS_LABEL[roadStatus(r)]}</span>
           </button>
         ))}
       </div>
@@ -125,7 +129,11 @@ export function RoadPropertiesPanel({
   onCancel,
   onDelete,
   onUndoPoint,
+  onEditTrace,
+  onAddVertex,
+  onRemoveVertex,
   isCreating,
+  isEditingTrace,
   canFinishDraft,
   pointCount,
 }: {
@@ -136,7 +144,11 @@ export function RoadPropertiesPanel({
   onCancel: () => void
   onDelete?: () => void
   onUndoPoint?: () => void
+  onEditTrace?: () => void
+  onAddVertex?: () => void
+  onRemoveVertex?: () => void
   isCreating: boolean
+  isEditingTrace?: boolean
   canFinishDraft: boolean
   pointCount: number
 }) {
@@ -144,13 +156,15 @@ export function RoadPropertiesPanel({
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <p className="text-xs text-muted">
-          Sélectionnez une route, ou tracez une polyligne sur la carte (2 points minimum).
+          Sélectionnez une route, ou cliquez sur la carte pour ajouter les sommets du tracé (2 points
+          minimum).
         </p>
       </div>
     )
   }
 
-  const showReason = draft.status !== "OPEN"
+  const showReason = draft.status !== "OPEN" && draft.status !== "UNKNOWN"
+  const pointLabel = `${pointCount} point${pointCount !== 1 ? "s" : ""} défini${pointCount !== 1 ? "s" : ""}`
 
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3">
@@ -159,8 +173,9 @@ export function RoadPropertiesPanel({
         <div className="rounded-md border border-accent/25 bg-accent-soft px-2.5 py-2 text-[11px] text-accent">
           <p className="font-medium">Tracé en cours</p>
           <p className="mt-1 text-accent/90">
-            Cliquez sur la carte ({pointCount} point{pointCount !== 1 ? "s" : ""}, minimum 2).
+            Cliquez sur la carte pour ajouter les sommets de la route.
           </p>
+          <p className="mt-1 font-medium text-accent">{pointLabel} · minimum 2. Continuez avant d’enregistrer.</p>
           {pointCount > 0 && onUndoPoint && (
             <Button
               type="button"
@@ -174,6 +189,36 @@ export function RoadPropertiesPanel({
             </Button>
           )}
         </div>
+      )}
+      {isEditingTrace && !isCreating && (
+        <div className="rounded-md border border-border bg-surface-2 px-2.5 py-2 text-[11px] text-muted">
+          <p>Glissez les points du tracé, puis enregistrez. De / Vers ne recréent pas la géométrie.</p>
+          <p className="mt-1 font-medium text-foreground/80">{pointLabel} · minimum 2.</p>
+          <div className="mt-2 flex gap-2">
+            {onAddVertex && (
+              <Button type="button" variant="outline" size="sm" className="h-7 flex-1 text-[11px]" onClick={onAddVertex}>
+                Ajouter un point
+              </Button>
+            )}
+            {onRemoveVertex && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 flex-1 text-[11px]"
+                onClick={onRemoveVertex}
+                disabled={pointCount <= 2}
+              >
+                Retirer un point
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+      {!isCreating && !isEditingTrace && onEditTrace && (
+        <Button type="button" variant="outline" size="sm" className="h-8 text-[11px]" onClick={onEditTrace}>
+          Modifier le tracé
+        </Button>
       )}
       <div className="flex flex-col gap-1">
         <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-2">Code</label>
@@ -232,7 +277,7 @@ export function RoadPropertiesPanel({
       <div className="flex flex-col gap-1">
         <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-2">Statut</label>
         <div className="flex flex-col gap-1">
-          {(Object.keys(ROAD_STATUS_LABEL) as RoadStatus[]).map((status) => (
+          {(KNOWN_ROAD_STATUSES as RoadStatus[]).map((status) => (
             <label key={status} className="flex items-center gap-2 text-[11px]">
               <input
                 type="radio"
@@ -251,6 +296,9 @@ export function RoadPropertiesPanel({
             </label>
           ))}
         </div>
+        {draft.status === "UNKNOWN" && (
+          <p className="text-[10px] text-warning">Statut inconnu — choisissez un statut avant de l’exploiter pour le routage.</p>
+        )}
       </div>
       {showReason && (
         <>
@@ -287,7 +335,7 @@ export function RoadPropertiesPanel({
         <p className="text-[10px] text-muted-2">
           {useApiMode ? "Routes enregistrées par l’API opérationnelle." : "Routes de démonstration persistées localement."}
         </p>
-        <Button size="sm" onClick={onSave} disabled={isCreating && !canFinishDraft}>
+        <Button size="sm" onClick={onSave} disabled={!canFinishDraft}>
           <Save className="size-3.5" />
           {isCreating ? "Créer la route" : "Enregistrer"}
         </Button>

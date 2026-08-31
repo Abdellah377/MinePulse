@@ -1,6 +1,7 @@
 import { EQUIPMENT_TYPE_LABEL, type EquipmentType } from "@/lib/mock/types"
 import { FILM_GROUP_CONFIG } from "@/lib/status"
 import { FILM_STATE_GROUP_LABEL, type FilmStateGroup } from "@/lib/mock/types"
+import { ROAD_STATUS_PAINT } from "@/lib/map/roadStyle"
 
 const TYPES: EquipmentType[] = [
   "haul_truck",
@@ -42,15 +43,21 @@ export function MapLegend({ showRoads = false }: { showRoads?: boolean }) {
           <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-2">Pistes</p>
           <div className="flex flex-col gap-0.5 text-[10px] text-foreground/80">
             <span className="flex items-center gap-1.5">
-              <span className="h-0.5 w-4 shrink-0 bg-[#a89070]" />
+              <span className="h-0.5 w-4 shrink-0 rounded-sm" style={{ background: ROAD_STATUS_PAINT.OPEN.color }} />
               Ouverte
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-0.5 w-4 shrink-0 border-t border-dashed border-[#c4a062]" />
+              <span
+                className="w-4 shrink-0 border-t-2 border-dashed"
+                style={{ borderColor: ROAD_STATUS_PAINT.RESTRICTED.color }}
+              />
               Restreinte
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-0.5 w-4 shrink-0 border-t border-dashed border-[#6b7280]" />
+              <span
+                className="w-4 shrink-0 border-t-2 border-dashed"
+                style={{ borderColor: ROAD_STATUS_PAINT.CLOSED.color }}
+              />
               Fermée
             </span>
           </div>

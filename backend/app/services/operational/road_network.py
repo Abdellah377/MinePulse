@@ -1,7 +1,8 @@
 """Deterministic haul-road graph selectors.
 
 A future routing algorithm MUST use ``routable_edges`` (or an equivalent that
-excludes CLOSED roads). Do not re-encode road closure inside LangGraph prompts.
+excludes CLOSED and UNKNOWN roads). Do not re-encode road closure inside
+LangGraph prompts.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ from typing import Any, Iterable
 CLOSED = "CLOSED"
 RESTRICTED = "RESTRICTED"
 OPEN = "OPEN"
+UNKNOWN = "UNKNOWN"
+ROUTABLE_STATUSES = frozenset({OPEN, RESTRICTED})
 
 
 def road_status(road: Any) -> str:
@@ -19,7 +22,11 @@ def road_status(road: Any) -> str:
         status = road.get("status", status)
     if status in (CLOSED, RESTRICTED, OPEN):
         return status
-    return OPEN
+    return UNKNOWN
+
+
+def is_routable_status(status: str) -> bool:
+    return status in ROUTABLE_STATUSES
 
 
 def _field(road: Any, *names: str) -> Any:
@@ -35,10 +42,15 @@ def _field(road: Any, *names: str) -> Any:
 
 
 def routable_edges(roads: Iterable[Any]) -> list[dict[str, Any]]:
-    """Directed catalog edges that a router may traverse. CLOSED is never included."""
+    """Directed catalog edges that a router may traverse.
+
+    OPEN and RESTRICTED are eligible. CLOSED, UNKNOWN, missing, and invalid
+    status values are never included.
+    """
     edges: list[dict[str, Any]] = []
     for road in roads:
-        if road_status(road) == CLOSED:
+        status = road_status(road)
+        if not is_routable_status(status):
             continue
         from_zone = _field(road, "fromZoneId", "from_zone_id")
         to_zone = _field(road, "toZoneId", "to_zone_id")
@@ -49,7 +61,7 @@ def routable_edges(roads: Iterable[Any]) -> list[dict[str, Any]]:
                 "id": _field(road, "id", "code"),
                 "fromZoneId": from_zone,
                 "toZoneId": to_zone,
-                "status": road_status(road),
+                "status": status,
                 "distanceKm": _field(road, "distanceKm", "distance_km"),
                 "speedLimitKmh": _field(road, "speedLimitKmh", "speed_limit_kmh"),
             }

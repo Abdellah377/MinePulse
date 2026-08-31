@@ -31,16 +31,21 @@ export function buildDemoRoutes(siteId: string, zones: Zone[]): RoutePath[] {
     id: string,
     name: string,
     distanceKm: number,
-    extra?: Partial<RoutePath>
+    extra?: Partial<RoutePath> & { bend?: Array<[number, number, number]> }
   ): RoutePath => {
     const a = centers[from.id]
     const b = centers[to.id]
+    const { bend, points: customPoints, ...rest } = extra ?? {}
+    const offsets = bend ?? [
+      [0.32, 28, 46],
+      [0.68, -22, 24],
+    ]
     return {
       id,
       name,
       fromZoneId: from.id,
       toZoneId: to.id,
-      points: [a, via(a, b), b],
+      points: customPoints ?? [a, ...offsets.map(([t, dx, dy]) => via(a, b, t, dx, dy)), b],
       distanceKm,
       siteId,
       status: "OPEN",
@@ -48,14 +53,32 @@ export function buildDemoRoutes(siteId: string, zones: Zone[]): RoutePath[] {
       description: null,
       statusReason: null,
       statusNote: null,
-      ...extra,
+      ...rest,
     }
   }
 
   const routes: RoutePath[] = [
-    link(loadA, crusher, `${siteId}-RD-BA-CR`, "R-03 Chargement A — Concasseur", 4.2),
-    link(loadA, parking, `${siteId}-R-05`, "R-05 Chargement A — Parking", 3.4),
-    link(parking, crusher, `${siteId}-R-06`, "R-06 Parking — Concasseur", 2.8),
+    link(loadA, crusher, `${siteId}-RD-BA-CR`, "R-03 Chargement A — Concasseur", 4.2, {
+      bend: [
+        [0.28, 18, 52],
+        [0.55, -8, 38],
+        [0.8, 12, 16],
+      ],
+    }),
+    link(loadA, parking, `${siteId}-R-05`, "R-05 Chargement A — Parking", 3.4, {
+      bend: [
+        [0.22, 48, 70],
+        [0.5, -36, 110],
+        [0.78, 22, 28],
+      ],
+    }),
+    link(parking, crusher, `${siteId}-R-06`, "R-06 Parking — Concasseur", 2.8, {
+      bend: [
+        [0.3, 42, -36],
+        [0.58, -18, -22],
+        [0.82, 10, 14],
+      ],
+    }),
     link(loadA, dump, `${siteId}-r3`, "R-07 Chargement A — Dump", 3.1),
   ]
   if (loadB && loadB.id !== loadA.id) {

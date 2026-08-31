@@ -124,7 +124,7 @@ def road_to_dto(road: HaulRoad, zone_codes: dict[int, str], site_code: str) -> d
         "points": points,
         "distanceKm": _nullable_float(road.distance_km),
         "siteId": site_code,
-        "status": getattr(road, "status", None) or "OPEN",
+        "status": getattr(road, "status", None) or None,
         "speedLimitKmh": _nullable_float(getattr(road, "speed_limit_kmh", None)),
         "description": getattr(road, "description", None) or None,
         "statusReason": getattr(road, "status_reason", None),

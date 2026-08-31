@@ -47,4 +47,10 @@ it("includes operational connections and an alternate BANC_A to crusher path", (
   expect(canReach("load-a", "crusher", closedPrimary)).toBe(true)
   expect(routes.every((r) => r.status === "OPEN")).toBe(true)
   expect(routes.some((r) => r.speedLimitKmh == null)).toBe(false)
+  const alt = routes.filter(
+    (r) =>
+      (r.fromZoneId === "load-a" && r.toZoneId === "parking") ||
+      (r.fromZoneId === "parking" && r.toZoneId === "crusher")
+  )
+  expect(alt.every((r) => r.points.length >= 4)).toBe(true)
 })

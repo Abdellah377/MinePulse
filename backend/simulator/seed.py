@@ -64,11 +64,12 @@ ROAD_SPECS = [
     ("PARKING", "CRUSHER", "R-06", "R-06 Parking — Concasseur", 2.8, 35, 2.0, 88),
 ]
 
-# Optional extra vertices so catalog lines are not only two-point sticks.
+# Extra vertices so catalog lines follow a haul corridor rather than a stick.
 ROAD_WAYPOINTS = {
-    "RD-BA-CR": [(-6.6735, 32.6655)],
-    "R-05": [(-6.677, 32.663)],
-    "R-06": [(-6.668, 32.660)],
+    "RD-BA-CR": [(-6.6788, 32.6672), (-6.6736, 32.6658), (-6.6688, 32.6636)],
+    "R-05": [(-6.6794, 32.6658), (-6.6762, 32.6624), (-6.6734, 32.6596)],
+    "R-06": [(-6.6698, 32.6572), (-6.6672, 32.6588), (-6.6658, 32.6606)],
+    "RD-BB-CR": [(-6.6724, 32.6568), (-6.6686, 32.6584)],
 }
 
 

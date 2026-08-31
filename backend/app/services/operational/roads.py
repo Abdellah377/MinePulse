@@ -41,6 +41,12 @@ def _points_to_line(points: list[dict]) -> tuple[WKTElement, float]:
     return WKTElement(line.wkt, srid=4326), round(distance, 3)
 
 
+def polyline_length_km(points: list[dict]) -> float:
+    """Full-polyline haversine distance. Never origin–destination shortcut."""
+    _, distance = _points_to_line(points)
+    return distance
+
+
 def _zone_id(session: Session, ctx: OperationalContext, code: str | None) -> int | None:
     if not code:
         return None

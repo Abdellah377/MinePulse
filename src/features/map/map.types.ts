@@ -4,7 +4,7 @@ export type MapTool = "select" | "polygon" | "polyline" | "vertex" | "delete"
 
 export type BasemapId = "hybrid" | "dataviz"
 
-export type RoadClass = "main" | "secondary" | "restricted" | "closed"
+export type RoadClass = "main" | "secondary" | "restricted" | "closed" | "unknown"
 
 export interface SiteGeoConfig {
   id: string
@@ -69,6 +69,7 @@ export const MAP_SOURCE = {
 } as const
 
 export const MAP_LAYER = {
+  roadsCasing: "mp-roads-casing",
   roads: "mp-roads-line",
   zonesFill: "mp-zones-fill",
   zonesLine: "mp-zones-line",
