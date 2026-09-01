@@ -71,7 +71,11 @@ def test_supported_truck_preserves_probability_horizon_and_prototype_metadata(mo
     assert dto["status"] == "AVAILABLE"
     assert dto["dataClass"] == "synthetic_prototype"
     assert dto["modelType"] == "logistic"
+    assert dto["servedPredictor"] == "logistic"
+    assert dto["featureTimestamp"] is None
     assert "predictedFor" not in dto
+    assert "scenarioId" not in dto
+    assert "hiddenRootCause" not in dto
     assert dto["predictionTimestamp"] == NOW.isoformat()
 
 

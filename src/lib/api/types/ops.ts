@@ -46,12 +46,14 @@ export type FailureRiskDto = {
   equipmentId: number | null
   equipmentCode: string | null
   predictionTimestamp: string | null
+  featureTimestamp: string | null
   horizonMinutes: number
   riskProbability: number | null
   riskLevel: FailureRiskLevel | null
   modelVersion: string
   modelType: string | null
   servedPredictor: string | null
+  modelStatus: string | null
   threshold: number | null
   status: FailureRiskStatus
   dataClass: string

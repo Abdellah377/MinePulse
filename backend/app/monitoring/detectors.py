@@ -336,8 +336,9 @@ def detect_predicted_mechanical_failure_risk(
                 severity=Severity.WARNING,
                 title=f"Risque mécanique prédit — {equipment.code}",
                 reason=(
-                    f"{equipment.code} présente un risque prédit élevé d'entrer en arrêt "
-                    f"mécanique dans les {horizon} prochaines minutes."
+                    f"{equipment.code} : probabilité élevée d'arrêt mécanique prédit dans "
+                    f"les {horizon} prochaines minutes ({int(round(probability * 100))} %). "
+                    "Inspecter l'équipement ; décision opérateur."
                 ),
                 metric="failure_risk_probability",
                 value=probability,
@@ -350,6 +351,7 @@ def detect_predicted_mechanical_failure_risk(
                     "horizonMinutes": horizon,
                     "modelVersion": prediction.model_version,
                     "modelType": prediction.model_type or prediction.served_predictor,
+                    "servedPredictor": prediction.served_predictor,
                     "riskLevel": risk_level,
                     "dataClass": prediction.data_class or DATA_CLASS,
                     "topSignals": list(prediction.top_predictive_signals or []),

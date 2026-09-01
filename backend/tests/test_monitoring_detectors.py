@@ -255,7 +255,9 @@ def test_predicted_failure_risk_fires_at_artifact_threshold_with_predicted_copy(
     assert "Risque mécanique prédit" in finding.title
     assert "prédit" in finding.reason
     assert "60" in finding.reason
+    assert "Inspecter" in finding.reason
     assert "will fail" not in finding.reason.casefold()
+    assert "field-validated" not in finding.reason.casefold()
     assert finding.context["source"] == "FAILURE_RISK_V1"
     assert finding.context["dataClass"] == "synthetic_prototype"
     assert finding.context["modelVersion"] == "failure_risk_v1"
@@ -282,6 +284,15 @@ def test_predicted_failure_risk_ignores_unavailable_and_insufficient_history():
     )
     assert detect_predicted_mechanical_failure_risk(unavailable, _settings()) == []
     assert detect_predicted_mechanical_failure_risk(insufficient, _settings()) == []
+
+
+def test_predicted_failure_risk_does_not_treat_unavailable_zero_probability_as_risk():
+    snapshot = _snapshot(
+        failure_risk={10: _failure_risk_prediction(
+            status=FailureRiskStatus.UNAVAILABLE, risk_probability=0.0, risk_level=None,
+        )}
+    )
+    assert detect_predicted_mechanical_failure_risk(snapshot, _settings()) == []
 
 
 def test_predicted_failure_risk_skips_equipment_not_in_snapshot_map():

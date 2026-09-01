@@ -71,16 +71,19 @@ def current_failure_risk(
 
 def failure_risk_to_dto(prediction: FailureRiskPrediction) -> dict:
     timestamp = prediction.prediction_timestamp
+    feature_timestamp = prediction.feature_timestamp
     return {
         "equipmentId": prediction.equipment_id,
         "equipmentCode": prediction.equipment_code,
         "predictionTimestamp": timestamp.isoformat() if timestamp is not None else None,
+        "featureTimestamp": feature_timestamp.isoformat() if feature_timestamp is not None else None,
         "horizonMinutes": prediction.horizon_minutes,
         "riskProbability": prediction.risk_probability,
         "riskLevel": prediction.risk_level,
         "modelVersion": prediction.model_version,
         "modelType": prediction.model_type,
         "servedPredictor": prediction.served_predictor,
+        "modelStatus": prediction.model_status,
         "threshold": prediction.threshold,
         "status": prediction.status,
         "dataClass": prediction.data_class,

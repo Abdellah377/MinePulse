@@ -330,6 +330,8 @@ def _prediction_candidate():
             "context": {
                 "horizonMinutes": 60,
                 "modelVersion": "failure_risk_v1",
+                "modelType": "logistic",
+                "servedPredictor": "logistic",
                 "dataClass": "synthetic_prototype",
                 "topSignals": ["engine_temp_c"],
                 "source": "FAILURE_RISK_V1",
@@ -362,6 +364,7 @@ def test_predicted_failure_risk_alert_is_prediction_source_with_synthetic_metada
     assert monitoring["probability"] == 0.72
     assert monitoring["horizonMinutes"] == 60
     assert monitoring["modelVersion"] == "failure_risk_v1"
+    assert monitoring["servedPredictor"] == "logistic"
 
 
 def test_predicted_failure_risk_repeated_key_is_deduplicated(monkeypatch):

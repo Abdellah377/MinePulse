@@ -62,6 +62,10 @@ export function FailureRiskCard({
   const available =
     prediction.status === "AVAILABLE" && prediction.riskProbability != null
   const horizon = why.horizonMinutes
+  const unavailableCopy =
+    prediction.status === "INSUFFICIENT_HISTORY"
+      ? "Historique insuffisant pour prédire."
+      : "Prédiction indisponible."
 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2/40 px-3 py-3">
@@ -95,6 +99,9 @@ export function FailureRiskCard({
           </div>
           <p className="text-[11px] leading-snug text-muted">{FAILURE_RISK_WINDOW_COPY}</p>
           <p className="text-[10px] text-muted-2">Prochaines {horizon} minutes</p>
+          {why.evaluatedAt && (
+            <p className="text-[10px] text-muted-2">Télémétrie : {why.evaluatedAt}</p>
+          )}
           <AiWhyButton expanded={whyOpen} onClick={() => setWhyOpen((open) => !open)} />
           <AiExplanationPanel open={whyOpen}>
             <AiExplanationBlock label="Ce que l’IA a observé">
@@ -123,10 +130,13 @@ export function FailureRiskCard({
             </AiExplanationBlock>
           </AiExplanationPanel>
         </>
-      ) : prediction.status === "INSUFFICIENT_HISTORY" ? (
-        <p className="text-xs text-muted">Historique insuffisant pour prédire.</p>
       ) : (
-        <p className="text-xs text-muted">Prédiction indisponible.</p>
+        <>
+          <p className="text-xs text-muted">{unavailableCopy}</p>
+          {prediction.detail && (
+            <p className="text-[10px] leading-snug text-muted-2">{prediction.detail}</p>
+          )}
+        </>
       )}
     </div>
   )

@@ -224,6 +224,7 @@ class MonitoringService:
                 "horizonMinutes": context.get("horizonMinutes", 60),
                 "modelVersion": context.get("modelVersion"),
                 "modelType": context.get("modelType"),
+                "servedPredictor": context.get("servedPredictor"),
                 "dataClass": context.get("dataClass"),
                 "topSignals": context.get("topSignals"),
                 "source": context.get("source", "FAILURE_RISK_V1"),

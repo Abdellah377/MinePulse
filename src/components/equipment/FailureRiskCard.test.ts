@@ -18,12 +18,14 @@ function prediction(overrides: Partial<FailureRiskDto> = {}): FailureRiskDto {
     equipmentId: 10,
     equipmentCode: "TRK-010",
     predictionTimestamp: "2026-08-30T12:00:00+00:00",
+    featureTimestamp: "2026-08-30T11:59:00+00:00",
     horizonMinutes: 60,
     riskProbability: 0.74,
     riskLevel: "HIGH",
     modelVersion: "failure_risk_v1",
     modelType: "logistic",
     servedPredictor: "logistic",
+    modelStatus: "MODEL_BEATS_BASELINE",
     threshold: 0.41,
     status: "AVAILABLE",
     dataClass: "synthetic_prototype",
@@ -43,6 +45,9 @@ it("shows current probability, backend risk level, and 60-minute window wording"
   expect(html.toLowerCase()).not.toContain("failure in 60 minutes")
   expect(html).toContain(FAILURE_RISK_PROTOTYPE_LABEL)
   expect(html).toContain("Pourquoi ?")
+  expect(html).toContain("Télémétrie")
+  expect(html).not.toContain("class_weight")
+  expect(html).not.toContain("coefficient")
 })
 
 it("insufficient history and unavailable do not show a fake 0%", () => {
@@ -56,11 +61,18 @@ it("insufficient history and unavailable do not show a fake 0%", () => {
 
   const unavailable = renderToStaticMarkup(
     createElement(FailureRiskCard, {
-      prediction: prediction({ status: "UNAVAILABLE", riskProbability: null, riskLevel: null }),
+      prediction: prediction({
+        status: "UNAVAILABLE",
+        riskProbability: null,
+        riskLevel: null,
+        detail: "Latest telemetry is older than the 120-second sampling cadence.",
+      }),
     })
   )
   expect(unavailable).toContain("Prédiction indisponible.")
+  expect(unavailable).toContain("Latest telemetry is older than the 120-second sampling cadence.")
   expect(unavailable).not.toContain("0%")
+  expect(unavailable).not.toContain("74%")
 })
 
 it("pending prediction shows a skeleton without a fake percentage", () => {

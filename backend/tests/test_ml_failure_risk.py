@@ -486,6 +486,72 @@ def test_no_paid_api_imports_in_failure_risk_package():
             assert banned.isdisjoint(modules)
 
 
+def test_missing_logistic_does_not_fall_back_to_hgb():
+    rows = _balanced_rows()
+    artifact, _report = train_from_rows(rows)
+    artifact.served_predictor = "logistic"
+    artifact.logistic = None
+    resolved = resolve_artifact(artifact=artifact)
+    assert resolved.status == FailureRiskStatus.UNAVAILABLE
+    assert resolved.risk_probability is None
+    assert "logistic" in (resolved.detail or "").casefold()
+
+
+def test_disk_artifact_without_metadata_is_unavailable(tmp_path):
+    from app.ml.failure_risk.model import ARTIFACT_FILE, save_artifact
+
+    save_artifact(_inference_artifact(), tmp_path / ARTIFACT_FILE)
+    resolved = resolve_artifact(artifacts_dir=tmp_path)
+    assert resolved.status == FailureRiskStatus.UNAVAILABLE
+    assert resolved.risk_probability is None
+    assert "metadata" in (resolved.detail or "").casefold()
+
+
+def test_unreadable_artifact_is_unavailable_not_zero_risk(tmp_path):
+    from app.ml.failure_risk.model import ARTIFACT_FILE
+
+    (tmp_path / ARTIFACT_FILE).write_text("not-a-joblib", encoding="utf-8")
+    resolved = resolve_artifact(artifacts_dir=tmp_path)
+    assert resolved.status == FailureRiskStatus.UNAVAILABLE
+    assert resolved.risk_probability is None
+
+
+def test_wrong_feature_schema_is_unavailable():
+    artifact = _inference_artifact()
+    artifact.feature_names = ("engine_temp_c_latest",)
+    resolved = resolve_artifact(artifact=artifact)
+    assert resolved.status == FailureRiskStatus.UNAVAILABLE
+    assert resolved.risk_probability is None
+    assert "schema" in (resolved.detail or "").casefold()
+
+
+def test_runtime_does_not_rewrite_served_predictor_after_scoring():
+    artifact, _report = train_from_rows(_balanced_rows())
+    served = artifact.served_predictor
+    predict_from_snapshot(_snapshot(end_min=80), 1, _at(40), artifact)
+    assert artifact.served_predictor == served
+
+
+def test_served_logistic_scores_the_logistic_pipeline_not_hgb(monkeypatch):
+    from app.ml.failure_risk import inference as inference_mod
+
+    artifact, _report = train_from_rows(_balanced_rows())
+    artifact.served_predictor = "logistic"
+    used = []
+    original = inference_mod.predict_proba_positive
+
+    def wrapped(pipeline, rows, **kwargs):
+        used.append(pipeline)
+        return original(pipeline, rows, **kwargs)
+
+    monkeypatch.setattr(inference_mod, "predict_proba_positive", wrapped)
+    result = predict_from_snapshot(_snapshot(end_min=80), 1, _at(40), artifact)
+    assert result.status == FailureRiskStatus.AVAILABLE
+    assert used == [artifact.logistic]
+    assert artifact.hgb is not None
+    assert used[0] is not artifact.hgb
+
+
 def test_threshold_apply_helper():
     assert apply_threshold([0.1, 0.5, 0.9], 0.5) == [0, 1, 1]
 

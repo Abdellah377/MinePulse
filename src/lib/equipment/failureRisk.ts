@@ -32,6 +32,13 @@ export function signalLabel(name: string): string {
   return SIGNAL_LABELS[name] ?? name.replaceAll("_", " ")
 }
 
+export function formatFailureRiskTimestamp(value: string | null | undefined): string | null {
+  if (!value) return null
+  const parsed = Date.parse(value)
+  if (Number.isNaN(parsed)) return value
+  return new Date(parsed).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC")
+}
+
 export function failureRiskWhy(prediction: FailureRiskDto) {
   const signals = (prediction.topPredictiveSignals ?? []).map((name) => signalLabel(name))
   return {
@@ -42,6 +49,7 @@ export function failureRiskWhy(prediction: FailureRiskDto) {
     signalsAvailable: signals.length > 0,
     prototype: prediction.dataClass === "synthetic_prototype",
     modelVersion: prediction.modelVersion,
+    evaluatedAt: formatFailureRiskTimestamp(prediction.featureTimestamp ?? prediction.predictionTimestamp),
   }
 }
 
@@ -88,12 +96,14 @@ export function demoFailureRisk(equipmentId: string): FailureRiskDto {
     equipmentId: null,
     equipmentCode: equipmentId,
     predictionTimestamp: null,
+    featureTimestamp: null,
     horizonMinutes: 60,
     riskProbability: picked.riskProbability,
     riskLevel: picked.riskLevel,
     modelVersion: "failure_risk_v1",
     modelType: "logistic",
     servedPredictor: "logistic",
+    modelStatus: null,
     threshold: null,
     status: "AVAILABLE",
     dataClass: "synthetic_prototype",
