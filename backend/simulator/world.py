@@ -38,14 +38,11 @@ class SimWorld:
         for eid, code in equip_rows:
             rng = random.Random(stable_seed(seed, eid, code))
             n = int(code.split("-")[1])
-            bench = "BANC_B" if n % 2 == 0 else "BANC_A"
+            loader = ("EXC-001", "EXC-002", "EXC-003")[(n - 1) % 3]
+            bench = "BANC_B" if loader == "EXC-002" else "BANC_A"
             dest = "DUMP_N" if bench == "BANC_A" else "DUMP_S"
             if n % 3 == 0:
                 dest = "CRUSHER"
-            if bench == "BANC_B":
-                loader = "EXC-002"
-            else:
-                loader = "EXC-001" if n % 4 == 1 else "EXC-003"
             # A fresh cycle begins with the empty return leg at the dump point.
             lng, lat = centroids.get(dest, centroids.get(bench, (-6.682, 32.668)))
             self.trucks[code] = TruckRuntime(

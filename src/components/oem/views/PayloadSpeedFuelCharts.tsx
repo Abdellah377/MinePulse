@@ -1,14 +1,12 @@
 import { useOemApi } from "@/components/oem/oemViewUtils"
-import { useOpsStore } from "@/lib/store/useOpsStore"
 import { OemEmptyState } from "@/components/oem/OemEmptyState"
 import { OemSynchronizedCharts } from "@/components/oem/OemSyncedCharts"
-import { rangeParams, useOemLoad, type OemViewProps } from "@/components/oem/oemViewUtils"
+import { useAnalysisRangeParams, useOemLoad, type OemViewProps } from "@/components/oem/oemViewUtils"
 
 export function PayloadSpeedFuelCharts({ filters, refreshKey }: OemViewProps) {
   const oemApi = useOemApi()
-  const shifts = useOpsStore((s) => s.shifts)
   const code = filters.equipmentCodes[0]
-  const r = rangeParams(filters, shifts)
+  const r = useAnalysisRangeParams()
   const { data, error, loading } = useOemLoad(
     () =>
       code

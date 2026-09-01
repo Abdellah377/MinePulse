@@ -27,6 +27,7 @@ import { STATE_CONFIG } from "@/lib/status"
 import { EquipmentTypeIcon } from "@/components/equipment/EquipmentTypeIcon"
 import type { EquipmentState } from "@/lib/mock/types"
 import { timeAgo } from "@/lib/format"
+import { formatPosteName } from "@/lib/ops/shiftLabel"
 import { cn } from "@/lib/utils"
 import { cycleLongInsight, inspecteurInsight } from "@/lib/ai/placeholders"
 import { AiSlot } from "@/components/ai/AiSlot"
@@ -236,7 +237,7 @@ export function EquipmentDetailContent({
             <MapPin className="size-3.5 text-muted-2" />
             {zone ? zone.name : "Zone inconnue"}
           </span>
-          {shift && <Badge variant="outline">{shift.name}</Badge>}
+          {shift && <Badge variant="outline">{formatPosteName(shift.name)}</Badge>}
         </div>
 
         <div className="rounded-md border border-border bg-surface-2/50 px-3 py-2 text-xs text-foreground/90">

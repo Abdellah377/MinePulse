@@ -12,6 +12,7 @@ import {
   shiftProductionRollup,
 } from "@/lib/production/mergeProduction"
 import { cn } from "@/lib/utils"
+import { CANONICAL_POSTES } from "@/lib/ops/shiftLabel"
 import { StatusLegend } from "@/components/shared/StatusLegend"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -30,7 +31,6 @@ import {
 export default function Parametres() {
   const settingsLoaded = useOpsStore((s) => s.settingsLoaded)
   const sites = useOpsStore((s) => s.sites)
-  const shifts = useOpsStore((s) => s.shifts)
   const idleAlertThresholdMin = useOpsStore((s) => s.idleAlertThresholdMin)
   const setIdleAlertThreshold = useOpsStore((s) => s.setIdleAlertThreshold)
   const noCommThresholdMin = useOpsStore((s) => s.noCommThresholdMin)
@@ -38,8 +38,6 @@ export default function Parametres() {
   const cycleDurationThresholdMin = useOpsStore((s) => s.cycleDurationThresholdMin)
   const setCycleDurationThreshold = useOpsStore((s) => s.setCycleDurationThreshold)
   const patchOperationalSetting = useOpsStore((s) => s.patchOperationalSetting)
-  const density = useOpsStore((s) => s.density)
-  const setDensity = useOpsStore((s) => s.setDensity)
   const unit = useOpsStore((s) => s.unit)
   const setUnit = useOpsStore((s) => s.setUnit)
   const productionByShift = useOpsStore((s) => s.productionByShift)
@@ -170,32 +168,11 @@ export default function Parametres() {
           <CardHeader>
             <div>
               <CardTitle>Affichage</CardTitle>
-              <CardDescription>Densité et unités pour les écrans de supervision.</CardDescription>
+              <CardDescription>Unités pour les écrans de supervision.</CardDescription>
             </div>
             <Monitor className="size-4 text-muted-2" />
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-foreground/90">Densité des tables</p>
-                <p className="text-[11px] text-muted">Les lignes compactes affichent plus de données sur grands écrans.</p>
-              </div>
-              <div className="flex rounded-md border border-border-strong bg-surface-2 p-0.5">
-                {(["comfortable", "compact"] as const).map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => setDensity(d)}
-                    className={cn(
-                      "rounded-sm px-3 py-1 text-[11px] font-medium capitalize transition-colors",
-                      density === d ? "bg-surface-3 text-foreground" : "text-muted-2"
-                    )}
-                  >
-                    {d === "comfortable" ? "Confortable" : "Compact"}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Ruler className="size-3.5 text-muted-2" />
@@ -257,19 +234,21 @@ export default function Parametres() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {shifts.map((shift) => (
-                  <TableRow key={shift.id}>
-                    <TableCell className="text-foreground/90">{shift.name}</TableCell>
-                    <TableCell className="tabular-nums text-muted">
-                      {String(shift.startHour).padStart(2, "0")}:
-                      {String(shift.startMinute ?? 0).padStart(2, "0")}
-                    </TableCell>
-                    <TableCell className="tabular-nums text-muted">
-                      {String(shift.endHour).padStart(2, "0")}:
-                      {String(shift.endMinute ?? 0).padStart(2, "0")}
-                    </TableCell>
+                {CANONICAL_POSTES.map((poste) => {
+                  const hours =
+                    poste.id === "matin"
+                      ? { start: "06:00", end: "14:00" }
+                      : poste.id === "apres-midi"
+                        ? { start: "14:00", end: "22:00" }
+                        : { start: "22:00", end: "06:00" }
+                  return (
+                  <TableRow key={poste.id}>
+                    <TableCell className="text-foreground/90">{poste.name}</TableCell>
+                    <TableCell className="tabular-nums text-muted">{hours.start}</TableCell>
+                    <TableCell className="tabular-nums text-muted">{hours.end}</TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </CardContent>

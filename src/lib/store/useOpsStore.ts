@@ -15,6 +15,8 @@ import {
 import { sortEquipmentByCode } from "@/lib/equipmentOrder"
 import { SHIFTS, SITES, generateMockWorld } from "@/lib/mock/generator"
 import { SPOTLIGHT, SPOTLIGHT_CODES } from "@/lib/mock/scenario"
+import { clampPeriodRange, operationalDateFromIso } from "@/lib/ops/analysisWindow"
+import type { SelectedPoste } from "@/lib/ops/shiftLabel"
 import { zoneCentroid } from "@/lib/mock/types"
 import type {
   Alert,
@@ -136,16 +138,18 @@ function stepEquipment(eq: Equipment, zones: Zone[]): Equipment {
   }
 }
 
-export type Density = "comfortable" | "compact"
-
 interface OpsState {
   sites: Site[]
   shifts: Shift[]
   selectedSiteId: string
   selectedShiftId: string
-  /** Inclusive analysis window (YYYY-MM-DD). */
+  /** Inclusive analysis window (YYYY-MM-DD). Independent of live selectedShiftId. */
   periodFrom: string
   periodTo: string
+  selectedPoste: SelectedPoste
+  analysisPeriodTouched: boolean
+  analysisTimelineSegments: TimelineSegment[]
+  analysisProduction: ProductionByShift
   zones: Zone[]
   routes: RoutePath[]
   equipment: Equipment[]
@@ -160,7 +164,6 @@ interface OpsState {
   idleAlertThresholdMin: number
   noCommThresholdMin: number
   cycleDurationThresholdMin: number
-  density: Density
   unit: "metric" | "imperial"
   /** Simulation clock ISO from backend when VITE_USE_API — drives Film window. */
   simNowIso: string | null
@@ -174,6 +177,10 @@ interface OpsState {
   setSelectedSite: (id: string) => void
   setSelectedShift: (id: string) => void
   setPeriodRange: (from: string, to: string) => void
+  setSelectedPoste: (poste: SelectedPoste) => void
+  resetAnalysisFilters: () => void
+  setAnalysisTimeline: (segments: TimelineSegment[]) => void
+  setAnalysisProduction: (production: ProductionByShift) => void
   tick: () => void
   updateAlertStatus: (id: string, status: AlertStatus, assignedTo?: string) => Promise<void>
   applyOperationalSettings: (dto: OperationalSettingsDto) => void
@@ -181,7 +188,6 @@ interface OpsState {
   setIdleAlertThreshold: (min: number) => void
   setNoCommThreshold: (min: number) => void
   setCycleDurationThreshold: (min: number) => void
-  setDensity: (d: Density) => void
   setUnit: (u: "metric" | "imperial") => void
   setZones: (updater: (zones: Zone[]) => Zone[]) => void
   setRoutes: (updater: (routes: RoutePath[]) => RoutePath[]) => void
@@ -243,10 +249,17 @@ function apiCtx(state: Pick<OpsState, "selectedSiteId" | "selectedShiftId">): Op
   return { siteCode: state.selectedSiteId, shiftId: state.selectedShiftId }
 }
 
+const emptyProduction = { hourly: [], daily: [], shiftly: [] } as ProductionByShift
+
 function emptyScope(): Partial<OpsState> {
   return { equipment: [], operators: [], alerts: [], timelineSegments: [], cycleTimeSamples: [], downtimeReasons: [],
-    productionByShift: { hourly: [], daily: [], shiftly: [] }, simNowIso: null, fullWorldHydrated: false,
+    productionByShift: emptyProduction, analysisTimelineSegments: [], analysisProduction: emptyProduction,
+    simNowIso: null, fullWorldHydrated: false,
     lastSuccessfulSyncAt: null, apiConnectionState: "degraded", apiPollError: "Chargement du contexte opérationnel…" }
+}
+
+function operationalToday(simNowIso: string | null): string {
+  return operationalDateFromIso(simNowIso) ?? todayIso()
 }
 
 function settingsFromDto(dto: OperationalSettingsDto) {
@@ -264,6 +277,12 @@ export const useOpsStore = create<OpsState>((set, get) => ({
   selectedShiftId: useApiMode ? "" : SHIFTS[0].id,
   periodFrom: today,
   periodTo: today,
+  selectedPoste: "all",
+  analysisPeriodTouched: false,
+  analysisTimelineSegments: useApiMode ? [] : world.timelineSegments,
+  analysisProduction: useApiMode
+    ? emptyProduction
+    : (world.productionByShift as ProductionByShift),
   zones: world.zones,
   routes: world.routes,
   equipment: world.equipment,
@@ -280,7 +299,6 @@ export const useOpsStore = create<OpsState>((set, get) => ({
   idleAlertThresholdMin: 15,
   noCommThresholdMin: 5,
   cycleDurationThresholdMin: 50,
-  density: "compact",
   unit: "metric",
   simNowIso: null,
   apiBootstrapped: !useApiMode,
@@ -300,10 +318,23 @@ export const useOpsStore = create<OpsState>((set, get) => ({
     set({ selectedShiftId: id, ...(useApiMode ? emptyScope() : {}) })
   },
   setPeriodRange: (from, to) => {
-    const periodFrom = from <= to ? from : to
-    const periodTo = from <= to ? to : from
-    set({ periodFrom, periodTo })
+    const next = clampPeriodRange(from, to)
+    set({ periodFrom: next.from, periodTo: next.to, analysisPeriodTouched: true })
   },
+  setSelectedPoste: (poste) => {
+    set({ selectedPoste: poste, analysisPeriodTouched: true })
+  },
+  resetAnalysisFilters: () => {
+    const day = operationalToday(get().simNowIso)
+    set({
+      periodFrom: day,
+      periodTo: day,
+      selectedPoste: "all",
+      analysisPeriodTouched: false,
+    })
+  },
+  setAnalysisTimeline: (segments) => set({ analysisTimelineSegments: segments }),
+  setAnalysisProduction: (production) => set({ analysisProduction: production }),
 
   tick: () => {
     const { equipment, zones, selectedSiteId } = get()
@@ -365,7 +396,6 @@ export const useOpsStore = create<OpsState>((set, get) => ({
   setIdleAlertThreshold: (min) => set({ idleAlertThresholdMin: min }),
   setNoCommThreshold: (min) => set({ noCommThresholdMin: min }),
   setCycleDurationThreshold: (min) => set({ cycleDurationThresholdMin: min }),
-  setDensity: (d) => set({ density: d }),
   setUnit: (u) => set({ unit: u }),
   setZones: (updater) => set((s) => ({ zones: updater(s.zones) })),
   setRoutes: (updater) => set((s) => ({ routes: updater(s.routes) })),
@@ -381,6 +411,10 @@ export const useOpsStore = create<OpsState>((set, get) => ({
       if (typeof payload.activeCount === "number") {
         useAlertFeedStore.getState().setActiveCount(payload.activeCount)
       }
+      const simNowIso = payload.simNow === undefined ? s.simNowIso : payload.simNow
+      const simDate = operationalDateFromIso(simNowIso)
+      const periodPatch =
+        !s.analysisPeriodTouched && simDate ? { periodFrom: simDate, periodTo: simDate } : {}
       return {
         sites: payload.sites ?? s.sites,
         shifts: payload.shifts ?? s.shifts,
@@ -399,7 +433,8 @@ export const useOpsStore = create<OpsState>((set, get) => ({
         selectedShiftId: s.apiBootstrapped
           ? s.selectedShiftId || payload.activeShiftId || ""
           : payload.activeShiftId || payload.shifts?.[0]?.id || s.selectedShiftId,
-        simNowIso: payload.simNow === undefined ? s.simNowIso : payload.simNow,
+        simNowIso,
+        ...periodPatch,
         apiBootstrapped: true,
         fullWorldHydrated,
         apiPollError,

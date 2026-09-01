@@ -23,7 +23,6 @@ import { cn } from "@/lib/utils"
 import { inspecteurInsight } from "@/lib/ai/placeholders"
 import { AiSlot } from "@/components/ai/AiSlot"
 import { FilterDrawer } from "@/components/shared/FilterDrawer"
-import { PeriodFilters } from "@/components/shared/PeriodFilters"
 import { StatusLegend } from "@/components/shared/StatusLegend"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -1035,8 +1034,6 @@ export default function Carte({ tab }: Partial<import("@/components/workspace/Wo
         ) : (
           <FilterDrawer title="Filtres" defaultCollapsed widthExpanded={200}>
             <div className="flex flex-col gap-3 p-2.5">
-              <PeriodFilters className="border-b border-border pb-3" />
-
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-2">
                   <Search className="size-3" />

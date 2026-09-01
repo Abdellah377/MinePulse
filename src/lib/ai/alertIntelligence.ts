@@ -8,7 +8,8 @@ import {
 } from "@/lib/ai/predictions"
 import { MERAH_SHIFT_SCENARIO } from "@/lib/mock/scenario"
 import { useApiMode } from "@/lib/api/client"
-import { timeAgo } from "@/lib/format"
+import { operationalAlertTime } from "@/lib/alerts/order"
+import { operationalTimeAgo } from "@/lib/format"
 
 export type AlertKind = "current" | "prediction"
 
@@ -42,7 +43,8 @@ export interface IntelligenceItem {
 export function buildCurrentIntelligence(
   alerts: Alert[],
   equipment: Equipment[],
-  zones: Zone[]
+  zones: Zone[],
+  simNowIso?: string | null,
 ): IntelligenceItem[] {
   if (useApiMode) return [] // Demo-only intelligence; live investigations use /ai/investigations.
   const eqById = new Map(equipment.map((e) => [e.id, e]))
@@ -65,7 +67,7 @@ export function buildCurrentIntelligence(
         equipmentCode: eq?.code ?? null,
         zoneId: zone?.id ?? null,
         zoneName: zone?.name ?? alert.location,
-        timeLabel: timeAgo(alert.createdAt),
+        timeLabel: operationalTimeAgo(operationalAlertTime(alert), simNowIso),
         horizonMin: null,
         confidence: inv.confidence,
         statusLabel: ALERT_STATUS_LABEL[alert.status],

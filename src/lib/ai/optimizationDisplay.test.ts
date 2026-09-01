@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { OptimizationCandidate } from "@/lib/api/types/optimization"
-import { visibleOptimizationPlans } from "./optimizationDisplay"
+import { visibleOptimizationPlans, optimizationImpactPreview } from "./optimizationDisplay"
 
 const candidate = (id: string): OptimizationCandidate => ({
   candidateId: id,
@@ -56,5 +56,31 @@ describe("visibleOptimizationPlans", () => {
     const persisted = [candidate("c-best"), candidate("c-2"), candidate("c-3"), candidate("c-4")]
     const { visible } = visibleOptimizationPlans(persisted)
     expect(visible[0]?.candidateId).toBe("c-best")
+  })
+})
+
+describe("optimizationImpactPreview", () => {
+  it("compares current vs selected using only known metrics", () => {
+    const current = { ...candidate("now"), isCurrent: true, waitMinutes: 20, travelMinutes: 12, distanceKm: 4 }
+    const next = { ...candidate("opt"), waitMinutes: 5, travelMinutes: 10, distanceKm: 3.5 }
+    const preview = optimizationImpactPreview([current, next], "opt")
+    expect(preview?.rows).toEqual([
+      { key: "waitMinutes", before: 20, after: 5 },
+      { key: "travelMinutes", before: 12, after: 10 },
+      { key: "distanceKm", before: 4, after: 3.5 },
+    ])
+  })
+
+  it("omits metrics that are unknown on both sides", () => {
+    const current = { ...candidate("now"), isCurrent: true, waitMinutes: 8, travelMinutes: null, distanceKm: null }
+    const next = { ...candidate("opt"), waitMinutes: 3, travelMinutes: null, distanceKm: null }
+    const preview = optimizationImpactPreview([current, next], "opt")
+    expect(preview?.rows).toEqual([{ key: "waitMinutes", before: 8, after: 3 }])
+  })
+
+  it("returns null when nothing can be shown", () => {
+    expect(optimizationImpactPreview([], "x")).toBeNull()
+    const blank = { ...candidate("now"), isCurrent: true, waitMinutes: null, travelMinutes: null, distanceKm: null }
+    expect(optimizationImpactPreview([blank], "now")).toBeNull()
   })
 })

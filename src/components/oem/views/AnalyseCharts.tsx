@@ -1,8 +1,7 @@
 import { useOemApi } from "@/components/oem/oemViewUtils"
-import { useOpsStore } from "@/lib/store/useOpsStore"
 import { OemEmptyState } from "@/components/oem/OemEmptyState"
 import { OemSynchronizedCharts } from "@/components/oem/OemSyncedCharts"
-import { rangeParams, useOemLoad, type OemViewProps } from "@/components/oem/oemViewUtils"
+import { useAnalysisRangeParams, useOemLoad, type OemViewProps } from "@/components/oem/oemViewUtils"
 
 const FALLBACK = [
   { key: "speed_kmh", label: "Vitesse", unit: "km/h" },
@@ -46,11 +45,10 @@ function SignalWorkspace({
   maxSignals,
 }: Pick<OemViewProps, "filters" | "refreshKey"> & { defaultKeys: string[]; maxSignals?: number }) {
   const oemApi = useOemApi()
-  const shifts = useOpsStore((s) => s.shifts)
   const code = filters.equipmentCodes[0]
   const selected = filters.parameterKeys.length ? filters.parameterKeys : defaultKeys
   const keys = maxSignals ? selected.slice(0, maxSignals) : selected
-  const r = rangeParams(filters, shifts)
+  const r = useAnalysisRangeParams()
   const { data, error, loading } = useOemLoad(
     () => (code ? oemApi.telemetry(code, keys.join(","), r.from, r.to) : Promise.reject(new Error("Aucun engin"))),
     [refreshKey, code, keys.join(","), r.from, r.to]

@@ -3,7 +3,7 @@ import { HelpCircle } from "lucide-react"
 
 import { useOpsStore, useSiteScopedEquipment, useSiteScopedZones } from "@/lib/store/useOpsStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
-import { useApiMode } from "@/lib/api/client"
+import { useApiMode, fetchProduction } from "@/lib/api/client"
 import { MERAH_SHIFT_SCENARIO } from "@/lib/mock/scenario"
 import { formatClock } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -18,6 +18,7 @@ import { PerformanceChart } from "@/components/performance/PerformanceChart"
 import { PerformanceTable } from "@/components/performance/PerformanceTable"
 import { ExportExcelButton } from "@/components/performance/ExportExcelButton"
 import { PeriodFilters, formatPeriodLabel } from "@/components/shared/PeriodFilters"
+import { canonicalPosteName } from "@/lib/ops/shiftLabel"
 import {
   Select,
   SelectContent,
@@ -71,11 +72,12 @@ function PerformanceAnalyse({ tab }: { tab?: WorkspacePanelProps["tab"] }) {
   const zones = useSiteScopedZones()
   const sites = useOpsStore((s) => s.sites)
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
-  const shifts = useOpsStore((s) => s.shifts)
-  const selectedShiftId = useOpsStore((s) => s.selectedShiftId)
   const periodFrom = useOpsStore((s) => s.periodFrom)
   const periodTo = useOpsStore((s) => s.periodTo)
-  const production = useOpsStore((s) => s.productionByShift)
+  const selectedPoste = useOpsStore((s) => s.selectedPoste)
+  const liveProduction = useOpsStore((s) => s.productionByShift)
+  const analysisProduction = useOpsStore((s) => s.analysisProduction)
+  const setAnalysisProduction = useOpsStore((s) => s.setAnalysisProduction)
   const downtimeReasons = useOpsStore((s) => s.downtimeReasons)
   const lastSuccessfulSyncAt = useOpsStore((s) => s.lastSuccessfulSyncAt)
   const apiPollError = useOpsStore((s) => s.apiPollError)
@@ -83,12 +85,30 @@ function PerformanceAnalyse({ tab }: { tab?: WorkspacePanelProps["tab"] }) {
   const patchTabContext = useWorkspaceStore((s) => s.patchTabContext)
   const setTabState = useWorkspaceStore((s) => s.setTabState)
 
+  const production = useApiMode ? analysisProduction : liveProduction
+
+  useEffect(() => {
+    if (!useApiMode) return
+    let cancelled = false
+    fetchProduction(
+      { siteCode: selectedSiteId },
+      { from: periodFrom, to: periodTo, poste: selectedPoste === "all" ? undefined : selectedPoste }
+    )
+      .then((rows) => {
+        if (!cancelled) setAnalysisProduction(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setAnalysisProduction({ hourly: [], daily: [], shiftly: [] })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedSiteId, periodFrom, periodTo, selectedPoste, setAnalysisProduction])
+
   const siteName =
     sites.find((s) => s.id === selectedSiteId)?.name ?? (useApiMode ? selectedSiteId : MERAH_SHIFT_SCENARIO.siteName)
-  const shiftLabel =
-    shifts.find((s) => s.id === selectedShiftId)?.name ?? (useApiMode ? selectedShiftId : MERAH_SHIFT_SCENARIO.shiftLabel)
-  const selectedShift = shifts.find((s) => s.id === selectedShiftId)
-  const periodLabel = useApiMode ? (selectedShift?.windowStart && selectedShift.windowEnd ? `${new Date(selectedShift.windowStart).toLocaleString("fr-FR")} – ${new Date(selectedShift.windowEnd).toLocaleString("fr-FR")}` : "Fenêtre indisponible") : formatPeriodLabel(periodFrom, periodTo)
+  const shiftLabel = canonicalPosteName(selectedPoste)
+  const periodLabel = formatPeriodLabel(periodFrom, periodTo)
   const freshnessValue = useApiMode
     ? apiPollError || lastSuccessfulSyncAt == null
       ? "—"

@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils"
 import { useApiMode } from "@/lib/api/client"
 import { getShiftAttainment } from "@/lib/mock/scenarioMetrics"
 import { shiftProductionRollup, formatPosteBarObjectif } from "@/lib/production/mergeProduction"
-import { shiftRemainingMinutes } from "@/lib/ops/shiftWindow"
+import { formatOperationalClock } from "@/lib/format"
+import { formatPosteName } from "@/lib/ops/shiftLabel"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 
@@ -41,17 +42,13 @@ export function PosteBar() {
     )
   }
 
-  const remainingMin = shiftRemainingMinutes(simNowIso, shift)
+  const clock = formatOperationalClock(simNowIso)
   const criticalCount = alerts.filter((a) => a.status !== "resolved" && a.severity === "critical").length
-  const h = Math.floor(remainingMin / 60)
-  const m = remainingMin % 60
 
   return (
     <div className="mx-4 mb-1 flex h-9 shrink-0 items-center gap-4 rounded-md border border-border/80 bg-surface px-4 text-[11px]">
-      <span className="font-semibold text-foreground/90">{shift.name}</span>
-      <span className="text-muted">
-        {Number.isFinite(remainingMin) ? `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} restant` : "Temps restant indisponible"}
-      </span>
+      <span className="font-semibold text-foreground/90">{formatPosteName(shift.name)}</span>
+      <span className="tabular-nums text-muted">{clock === "—" ? "Heure opérationnelle indisponible" : clock}</span>
       <span
         className={cn(
           "rounded-full px-2 py-0.5 font-medium",

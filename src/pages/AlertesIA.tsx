@@ -54,8 +54,8 @@ function DemoAlertesIA({ tab }: Partial<WorkspacePanelProps> = {}) {
   )
 
   const currentItems = useMemo(
-    () => buildCurrentIntelligence(alerts, equipment, zones),
-    [alerts, equipment, zones]
+    () => buildCurrentIntelligence(alerts, equipment, zones, simNowIso),
+    [alerts, equipment, zones, simNowIso]
   )
   const predictionItems = useMemo(
     () => (useApiMode ? [] : buildPredictionIntelligence()),

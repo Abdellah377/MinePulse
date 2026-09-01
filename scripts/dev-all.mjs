@@ -77,6 +77,28 @@ async function waitForApiReady(url, timeoutMs = 45_000) {
   return false
 }
 
+async function probeMinePulseApi(url) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(1_500) })
+    if (!res.ok) return false
+    const payload = await res.json()
+    return payload?.status === "ok" && typeof payload?.simulator === "object"
+  } catch {
+    return false
+  }
+}
+
+async function probeMinePulseUi(url) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(1_500) })
+    if (!res.ok) return false
+    const html = await res.text()
+    return html.includes("<title>MinePulse") && html.includes('id="root"')
+  } catch {
+    return false
+  }
+}
+
 function shutdown(code = 0) {
   if (shuttingDown) return
   shuttingDown = true
@@ -121,36 +143,57 @@ if (migration.error || migration.status !== 0) {
 }
 console.log(`${prefix("db", "33")} database schema is current.`)
 
-start(
-  "api",
-  "36",
-  py,
-  [
-    "-m",
-    "uvicorn",
-    "app.main:app",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    "8000",
-    "--reload",
-    "--reload-dir",
-    "app",
-    "--reload-dir",
-    "simulator",
-    "--reload-exclude",
-    "*.json",
-    "--reload-exclude",
-    "*.jsonl",
-  ],
-  backend
-)
+const healthUrl = "http://127.0.0.1:8000/health"
+const reuseApi = await probeMinePulseApi(healthUrl)
+if (reuseApi) {
+  console.log(
+    `${prefix("api", "36")} an existing healthy MinePulse API already owns port 8000; reusing it.`,
+  )
+} else {
+  start(
+    "api",
+    "36",
+    py,
+    [
+      "-m",
+      "uvicorn",
+      "app.main:app",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000",
+      "--reload",
+      "--reload-dir",
+      "app",
+      "--reload-dir",
+      "simulator",
+      "--reload-exclude",
+      "*.json",
+      "--reload-exclude",
+      "*.jsonl",
+    ],
+    backend,
+  )
+}
 
-const ready = await waitForApiReady("http://127.0.0.1:8000/health")
+const ready = reuseApi || (await waitForApiReady(healthUrl))
 if (!ready && !shuttingDown) {
   console.log(`${prefix("api", "36")} readiness timed out; starting UI so the app can show degraded API state.`)
 }
 
 if (!shuttingDown) {
-  start("web", "35", isWin ? "npm.cmd" : "npm", ["run", "dev", "--", "--host", "127.0.0.1"], root)
+  const reuseUi = await probeMinePulseUi("http://127.0.0.1:5173/")
+  if (reuseUi) {
+    console.log(
+      `${prefix("web", "35")} an existing healthy MinePulse UI already owns port 5173; reusing it.`,
+    )
+  } else {
+    start(
+      "web",
+      "35",
+      isWin ? "npm.cmd" : "npm",
+      ["run", "dev", "--", "--host", "127.0.0.1", "--strictPort"],
+      root,
+    )
+  }
 }

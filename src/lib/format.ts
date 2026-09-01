@@ -70,3 +70,30 @@ export function timeAgo(ms: number, nowMs?: number) {
   const d = Math.floor(h / 24)
   return `il y a ${d} j`
 }
+
+export function parseSimNowMs(simNowIso?: string | null): number | undefined {
+  if (!simNowIso) return undefined
+  const ms = Date.parse(simNowIso)
+  return Number.isFinite(ms) ? ms : undefined
+}
+
+/** Relative age against the operational/simulation clock, never wall-clock by default. */
+export function operationalTimeAgo(ms: number, simNowIso?: string | null) {
+  return timeAgo(ms, parseSimNowMs(simNowIso))
+}
+
+/** Detail timestamp: "01 sept. 2026 · 14:32" */
+export function formatOperationalDateTime(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "—"
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return "—"
+  const day = date.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })
+  const time = date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", hour12: false })
+  return `${day} · ${time}`
+}
+
+export function formatOperationalClock(simNowIso?: string | null): string {
+  const ms = parseSimNowMs(simNowIso)
+  if (ms == null) return "—"
+  return formatShortTime(ms)
+}

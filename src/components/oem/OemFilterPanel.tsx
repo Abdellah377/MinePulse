@@ -3,11 +3,11 @@ import { ChevronLeft, ChevronRight, Search } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { oemApi, type OemCatalog } from "@/lib/api/oem"
-import { dateFromIso } from "@/lib/oem/format"
 import type { OemCol, OemDraft } from "@/lib/oem/types"
 import { OEM_TYPE_GROUP, UNAVAILABLE_SIM } from "@/lib/oem/types"
 import type { OemView } from "@/lib/workspace/types"
 import { useOpsStore, useSiteScopedEquipment } from "@/lib/store/useOpsStore"
+import { PeriodFilters } from "@/components/shared/PeriodFilters"
 import { OemEquipmentTree } from "@/components/oem/OemEquipmentTree"
 import { OemParameterSelector } from "@/components/oem/OemParameterSelector"
 import { OemExportButton } from "@/components/oem/OemExportButton"
@@ -51,8 +51,6 @@ export function OemFilterPanel({
   const equipment = useSiteScopedEquipment()
   const sites = useOpsStore((s) => s.sites)
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
-  const shifts = useOpsStore((s) => s.shifts)
-  const simNowIso = useOpsStore((s) => s.simNowIso)
   const siteName = sites.find((s) => s.id === selectedSiteId)?.name ?? selectedSiteId
   const types = Array.from(new Set(equipment.map((e) => e.type)))
   const showParams =
@@ -67,14 +65,6 @@ export function OemFilterPanel({
   useEffect(() => {
     oemApi.catalog().then(setCatalog).catch(() => setCatalog(null))
   }, [])
-
-  useEffect(() => {
-    if (draft.fromDate) return
-    const today = dateFromIso(simNowIso) || new Date().toISOString().slice(0, 10)
-    const shiftId = shifts[0]?.id ?? ""
-    onChange({ ...draft, fromDate: today, toDate: today, fromShift: shiftId, toShift: shiftId })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [simNowIso, shifts.length])
 
   if (collapsed) {
     return (
@@ -112,6 +102,8 @@ export function OemFilterPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 pb-3">
+        <PeriodFilters />
+
         <Field label="Entreprise">
           <Input className={CTL} value={siteName} disabled title="Le site se change dans l'en-tête MinePulse" />
         </Field>
@@ -162,89 +154,6 @@ export function OemFilterPanel({
             Engins déclassés
           </label>
         </div>
-
-        <Field label="Intervalle">
-          <Select
-            value={draft.periodMode}
-            onValueChange={(periodMode) => onChange({ ...draft, periodMode: periodMode as OemDraft["periodMode"] })}
-          >
-            <SelectTrigger className={CTL}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="shift">Poste sélectionné</SelectItem>
-              <SelectItem value="posts">Sur plusieurs postes</SelectItem>
-              <SelectItem value="custom">Personnalisée</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-
-        {draft.periodMode === "posts" ? (
-          <div className="flex flex-col gap-2">
-            <div className="grid grid-cols-[1fr_88px] gap-1.5">
-              <Input
-                type="date"
-                disabled
-                className="h-7 rounded-xl px-2 text-xs"
-                value={shifts.find((s) => s.id === draft.fromShift)?.windowStart?.slice(0, 10) ?? ""}
-                onChange={(e) => onChange({ ...draft, fromDate: e.target.value })}
-              />
-              <Select
-                value={draft.fromShift || undefined}
-                onValueChange={(fromShift) => onChange({ ...draft, fromShift })}
-              >
-                <SelectTrigger className="h-7 w-full rounded-xl px-2 text-xs">
-                  <SelectValue placeholder="Poste" />
-                </SelectTrigger>
-                <SelectContent>
-                  {shifts.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-[1fr_88px] gap-1.5">
-              <Input
-                type="date"
-                disabled
-                className="h-7 rounded-xl px-2 text-xs"
-                value={shifts.find((s) => s.id === draft.toShift)?.windowEnd?.slice(0, 10) ?? ""}
-                onChange={(e) => onChange({ ...draft, toDate: e.target.value })}
-              />
-              <Select value={draft.toShift || undefined} onValueChange={(toShift) => onChange({ ...draft, toShift })}>
-                <SelectTrigger className="h-7 w-full rounded-xl px-2 text-xs">
-                  <SelectValue placeholder="Poste" />
-                </SelectTrigger>
-                <SelectContent>
-                  {shifts.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        ) : null}
-
-        {draft.periodMode === "custom" ? (
-          <div className="flex flex-col gap-2">
-            <Input
-              type="datetime-local"
-              className="h-7 rounded-xl px-2 text-xs"
-              value={draft.from}
-              onChange={(e) => onChange({ ...draft, from: e.target.value })}
-            />
-            <Input
-              type="datetime-local"
-              className="h-7 rounded-xl px-2 text-xs"
-              value={draft.to}
-              onChange={(e) => onChange({ ...draft, to: e.target.value })}
-            />
-          </div>
-        ) : null}
 
         {showParams ? (
           <div>

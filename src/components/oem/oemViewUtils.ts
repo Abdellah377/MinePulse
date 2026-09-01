@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { scopedOemApi } from "@/lib/api/oem"
 import { useOpsStore } from "@/lib/store/useOpsStore"
+import { analysisRangeIso } from "@/lib/ops/analysisWindow"
+import { canonicalPosteName, type SelectedPoste } from "@/lib/ops/shiftLabel"
+import { formatPeriodLabel } from "@/components/shared/PeriodFilters"
 
 import type { OemCol, OemDraft } from "@/lib/oem/types"
-import { isoFromLocal } from "@/lib/oem/format"
 import type { Shift } from "@/lib/mock/types"
 
 export const EMPTY_OEM_ROWS: Record<string, unknown>[] = []
@@ -25,22 +27,37 @@ export type OemViewProps = {
 }
 
 export function rangeParams(
-  filters: OemDraft,
-  shifts: Shift[]
+  _filters: OemDraft,
+  shifts: Shift[],
+  periodFrom?: string,
+  periodTo?: string,
+  poste?: SelectedPoste,
+  simNowIso?: string | null
 ): { from?: string; to?: string } {
-  if (filters.periodMode === "shift") return {}
-  if (filters.periodMode === "custom") {
-    return { from: isoFromLocal(filters.from) ?? "unavailable", to: isoFromLocal(filters.to) ?? "unavailable" }
-  }
-  const fromShift = shifts.find((s) => s.id === filters.fromShift)
-  const toShift = shifts.find((s) => s.id === filters.toShift)
-  // Invalid values produce a controlled 422, never a silent different time window.
-  return { from: fromShift?.windowStart ?? "unavailable", to: toShift?.windowEnd ?? "unavailable" }
+  const from = periodFrom ?? useOpsStore.getState().periodFrom
+  const to = periodTo ?? useOpsStore.getState().periodTo
+  const selectedPoste = poste ?? useOpsStore.getState().selectedPoste
+  const sim = simNowIso !== undefined ? simNowIso : useOpsStore.getState().simNowIso
+  return analysisRangeIso(shifts, from, to, selectedPoste, sim)
+}
+
+export function useAnalysisRangeParams(): { from?: string; to?: string } {
+  const shifts = useOpsStore((s) => s.shifts)
+  const periodFrom = useOpsStore((s) => s.periodFrom)
+  const periodTo = useOpsStore((s) => s.periodTo)
+  const selectedPoste = useOpsStore((s) => s.selectedPoste)
+  const simNowIso = useOpsStore((s) => s.simNowIso)
+  return useMemo(
+    () => analysisRangeIso(shifts, periodFrom, periodTo, selectedPoste, simNowIso),
+    [shifts, periodFrom, periodTo, selectedPoste, simNowIso]
+  )
 }
 
 export function useOemLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
   const siteCode = useOpsStore((s) => s.selectedSiteId)
-  const shiftId = useOpsStore((s) => s.selectedShiftId)
+  const periodFrom = useOpsStore((s) => s.periodFrom)
+  const periodTo = useOpsStore((s) => s.periodTo)
+  const selectedPoste = useOpsStore((s) => s.selectedPoste)
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -87,21 +104,19 @@ export function useOemLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
       window.clearInterval(id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, siteCode, shiftId])
+  }, [...deps, siteCode, periodFrom, periodTo, selectedPoste])
   return { data, error, loading }
 }
 
-export function oemContext(filters: OemDraft, siteName: string, shiftLabel: string, extra?: Record<string, string>) {
+export function oemContext(filters: OemDraft, siteName: string, _shiftLabel: string, extra?: Record<string, string>) {
   const engins = filters.equipmentCodes.length ? filters.equipmentCodes.join(", ") : "Tous"
-  const period =
-    filters.periodMode === "shift"
-      ? "Poste sélectionné"
-      : filters.periodMode === "posts"
-        ? `${filters.fromShift} → ${filters.toShift} (fenêtres serveur)`
-        : `${filters.from} → ${filters.to}`
+  const periodFrom = useOpsStore.getState().periodFrom
+  const periodTo = useOpsStore.getState().periodTo
+  const poste = useOpsStore.getState().selectedPoste
+  const period = `${formatPeriodLabel(periodFrom, periodTo)} · ${canonicalPosteName(poste)}`
   return {
     Site: siteName,
-    Poste: shiftLabel,
+    Poste: canonicalPosteName(poste),
     Engin: engins,
     Période: period,
     "Source données": "postgresql",

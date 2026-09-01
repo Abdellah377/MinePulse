@@ -12,13 +12,13 @@ import type { EquipmentType, FilmStateGroup, TimelineSegment } from "@/lib/mock/
 import { FILM_GROUP_CONFIG } from "@/lib/status"
 import { formatElapsedHms, formatShortTime, formatTimeHms } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { shiftWindowBounds } from "@/lib/ops/shiftWindow"
-import { useApiMode } from "@/lib/api/client"
+import { fetchTimeline, useApiMode } from "@/lib/api/client"
 import { sortEquipmentByCode } from "@/lib/equipmentOrder"
 import { filmSegmentInsight } from "@/lib/ai/placeholders"
 import { AiSlot } from "@/components/ai/AiSlot"
 import { StatusLegend } from "@/components/shared/StatusLegend"
 import { PeriodFilters } from "@/components/shared/PeriodFilters"
+import { analysisWindowMs } from "@/lib/ops/analysisWindow"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -31,7 +31,6 @@ import {
 } from "@/components/ui/select"
 import { MiniTimelineStrip } from "@/components/equipment/MiniTimelineStrip"
 
-const WINDOW_MIN = 720
 const MIN_TIMELINE_WIDTH_PX = 480
 const LABEL_WIDTH = 72
 const ROW_HEIGHT = 36
@@ -47,14 +46,43 @@ type Selection = { type: "segment"; equipmentId: string; segment: TimelineSegmen
 
 export default function Film({ tab }: Partial<import("@/components/workspace/WorkspaceHost").WorkspacePanelProps> = {}) {
   const equipment = useSiteScopedEquipment()
-  const timelineSegments = useOpsStore((s) => s.timelineSegments)
+  const liveTimeline = useOpsStore((s) => s.timelineSegments)
+  const analysisTimeline = useOpsStore((s) => s.analysisTimelineSegments)
+  const setAnalysisTimeline = useOpsStore((s) => s.setAnalysisTimeline)
   const shifts = useOpsStore((s) => s.shifts)
-  const selectedShiftId = useOpsStore((s) => s.selectedShiftId)
+  const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
+  const periodFrom = useOpsStore((s) => s.periodFrom)
+  const periodTo = useOpsStore((s) => s.periodTo)
+  const selectedPoste = useOpsStore((s) => s.selectedPoste)
   const simNowIso = useOpsStore((s) => s.simNowIso)
   const openEquipmentDrawer = useUiStore((s) => s.openEquipmentDrawer)
 
-  const shift = shifts.find((s) => s.id === selectedShiftId) ?? (useApiMode ? undefined : shifts[0])
-  const { startMs: shiftStartRef, nowMs: now } = shiftWindowBounds(simNowIso, shift)
+  const timelineSegments = useApiMode ? analysisTimeline : liveTimeline
+  const analysisWindow = useMemo(
+    () => analysisWindowMs(shifts, periodFrom, periodTo, selectedPoste, simNowIso),
+    [shifts, periodFrom, periodTo, selectedPoste, simNowIso]
+  )
+  const now = simNowIso ? Date.parse(simNowIso) : Date.now()
+  const rangeStart = analysisWindow?.startMs ?? NaN
+  const rangeEnd = analysisWindow?.endMs ?? NaN
+
+  useEffect(() => {
+    if (!useApiMode) return
+    let cancelled = false
+    fetchTimeline(
+      { siteCode: selectedSiteId },
+      { from: periodFrom, to: periodTo, poste: selectedPoste === "all" ? undefined : selectedPoste }
+    )
+      .then((rows) => {
+        if (!cancelled) setAnalysisTimeline(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setAnalysisTimeline([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedSiteId, periodFrom, periodTo, selectedPoste, setAnalysisTimeline])
 
   const [typeFilter, setTypeFilter] = useState<"all" | EquipmentType>("all")
   const [stateFilter, setStateFilter] = useState<Set<FilmStateGroup>>(new Set(ALL_GROUPS))
@@ -73,9 +101,6 @@ export default function Film({ tab }: Partial<import("@/components/workspace/Wor
   const timelineScrollRef = useRef<HTMLDivElement>(null)
   const syncing = useRef(false)
 
-  const windowMs = WINDOW_MIN * 60_000
-  const rangeEnd = useApiMode && shift?.windowEnd ? Math.min(now, Date.parse(shift.windowEnd)) : now
-  const rangeStart = Math.max(shiftStartRef, rangeEnd - windowMs)
   const totalWidthPx = timelineWidthPx
 
   useEffect(() => {
@@ -553,8 +578,8 @@ export default function Film({ tab }: Partial<import("@/components/workspace/Wor
             selection={selection}
             equipment={equipment}
             allSegmentsByEquipment={allSegmentsByEquipment}
-            rangeStart={shiftStartRef}
-            rangeEnd={now}
+            rangeStart={rangeStart}
+            rangeEnd={rangeEnd}
             onOpenEquipment={(id) => openEquipmentDrawer(id)}
           />
         </div>

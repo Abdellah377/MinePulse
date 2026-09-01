@@ -22,4 +22,13 @@ describe("opsQueryString", () => {
     expect(opsQueryString({ siteCode: "", shiftId: "" })).toBe("")
     expect(opsQueryString({ siteCode: "SITE-A", shiftId: "" })).toBe("?site_code=SITE-A")
   })
+
+  it("appends analysis period and poste without a live shift id", () => {
+    const q = opsQueryString({ siteCode: "MP-SIM-01" }, { from: "2026-01-28", to: "2026-01-30", poste: "nuit" })
+    expect(q).toContain("site_code=MP-SIM-01")
+    expect(q).toContain("from=2026-01-28")
+    expect(q).toContain("to=2026-01-30")
+    expect(q).toContain("poste=nuit")
+    expect(q).not.toContain("shift_id")
+  })
 })

@@ -4,8 +4,7 @@ import { useOemApi, EMPTY_OEM_ROWS } from "@/components/oem/oemViewUtils"
 import type { OemCol } from "@/lib/oem/types"
 import { OemGrid } from "@/components/oem/OemDataTable"
 import { OemEmptyState } from "@/components/oem/OemEmptyState"
-import { codesQuery, rangeParams, useOemLoad, type OemViewProps } from "@/components/oem/oemViewUtils"
-import { useOpsStore } from "@/lib/store/useOpsStore"
+import { codesQuery, useAnalysisRangeParams, useOemLoad, type OemViewProps } from "@/components/oem/oemViewUtils"
 
 const COLS: OemCol[] = [
   { id: "thresholdSource", header: "Source seuils (non constructeur)" },
@@ -22,8 +21,7 @@ const COLS: OemCol[] = [
 
 export function ParametersTable({ filters, refreshKey, onExport }: OemViewProps) {
   const oemApi = useOemApi()
-  const shifts = useOpsStore((s) => s.shifts)
-  const r = rangeParams(filters, shifts)
+  const r = useAnalysisRangeParams()
   const { data, error, loading } = useOemLoad(
     () =>
       oemApi.diagnostic({

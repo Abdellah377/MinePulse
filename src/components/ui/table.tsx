@@ -1,23 +1,17 @@
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
-import { useOpsStore, type Density } from "@/lib/store/useOpsStore"
-
-const TableDensityContext = React.createContext<Density>("compact")
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
-  const density = useOpsStore((s) => s.density)
   return (
-    <TableDensityContext.Provider value={density}>
-      <div className="relative w-full overflow-auto">
-        <table
-          data-slot="table"
-          data-density={density}
-          className={cn("w-full caption-bottom text-xs", className)}
-          {...props}
-        />
-      </div>
-    </TableDensityContext.Provider>
+    <div className="relative w-full overflow-auto">
+      <table
+        data-slot="table"
+        data-density="comfortable"
+        className={cn("w-full caption-bottom text-xs", className)}
+        {...props}
+      />
+    </div>
   )
 }
 
@@ -71,13 +65,11 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
 }
 
 function TableHead({ className, ...props }: React.ComponentProps<"th">) {
-  const density = React.useContext(TableDensityContext)
   return (
     <th
       data-slot="table-head"
       className={cn(
-        "whitespace-nowrap px-3 text-left align-middle text-[10px] font-semibold uppercase tracking-wider text-muted-2",
-        density === "compact" ? "h-7" : "h-9",
+        "h-9 whitespace-nowrap px-3 text-left align-middle text-[10px] font-semibold uppercase tracking-wider text-muted-2",
         className
       )}
       {...props}
@@ -86,13 +78,11 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
 }
 
 function TableCell({ className, ...props }: React.ComponentProps<"td">) {
-  const density = React.useContext(TableDensityContext)
   return (
     <td
       data-slot="table-cell"
       className={cn(
-        "whitespace-nowrap px-3 align-middle text-foreground/90",
-        density === "compact" ? "py-1.5" : "py-3",
+        "whitespace-nowrap px-3 py-3 align-middle text-foreground/90",
         className
       )}
       {...props}

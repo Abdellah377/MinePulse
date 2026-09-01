@@ -11,6 +11,7 @@ import {
   type OemDraft,
 } from "@/lib/oem/types"
 import { oemOpenContext } from "@/lib/oem/openOem"
+import { canonicalPosteName } from "@/lib/ops/shiftLabel"
 import { useOpsStore, useSiteScopedEquipment } from "@/lib/store/useOpsStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
 import type { OemDiagnosticTab, OemMaintenanceTab } from "@/lib/workspace/types"
@@ -60,8 +61,9 @@ export default function OemPage({ tab }: Partial<WorkspacePanelProps> = {}) {
   const equipment = useSiteScopedEquipment()
   const sites = useOpsStore((s) => s.sites)
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
-  const shifts = useOpsStore((s) => s.shifts)
-  const selectedShiftId = useOpsStore((s) => s.selectedShiftId)
+  const periodFrom = useOpsStore((s) => s.periodFrom)
+  const periodTo = useOpsStore((s) => s.periodTo)
+  const selectedPoste = useOpsStore((s) => s.selectedPoste)
 
   const view = resolveOemView(tab?.context.oemView as string | undefined)
   const family = oemFamilyForView(view)
@@ -131,9 +133,9 @@ export default function OemPage({ tab }: Partial<WorkspacePanelProps> = {}) {
   ])
 
   const siteName = sites.find((s) => s.id === selectedSiteId)?.name ?? selectedSiteId
-  const shiftLabel = shifts.find((s) => s.id === selectedShiftId)?.name ?? selectedShiftId
+  const shiftLabel = canonicalPosteName(selectedPoste)
   const internalTab = view === "diagnostic" ? diagnosticTab : view === "maintenance" ? maintenanceTab : undefined
-  const reportKey = JSON.stringify([selectedSiteId, selectedShiftId, view, internalTab, applied])
+  const reportKey = JSON.stringify([selectedSiteId, periodFrom, periodTo, selectedPoste, view, internalTab, applied])
   const exportPayload = exportState?.key === reportKey ? exportState.payload : null
 
   const onExport = useCallback((payload: OemExportPayload | null) => {

@@ -60,17 +60,18 @@ it("labels persisted automatic monitoring results without starting a frontend in
   }
   const html = renderToStaticMarkup(createElement(AlertesIA))
   expect(html).toContain("Détecté automatiquement")
-  expect(html).toContain("Pourquoi ?")
+  expect(html).not.toContain("Pourquoi ?")
   expect(html).toContain("ai-why-report")
   expect(mocks.start).not.toHaveBeenCalled()
   expect(mocks.demo).not.toHaveBeenCalled()
 })
-it("Pourquoi ? is available without an investigation and does not POST", () => {
+it("Investiguer is available without an investigation and does not POST", () => {
   const html = renderToStaticMarkup(createElement(AlertesIA))
-  expect(html).toContain("Pourquoi ?")
-  expect(html).toContain("Voir dans Actions IA")
+  expect(html).not.toContain("Pourquoi ?")
+  expect(html).toContain("Ouvrir Actions IA")
   expect(html).toContain("Investiguer")
   expect(html).toContain("Analyse IA non lancée")
+  expect(html).not.toContain("Voir dans Actions IA")
   expect(mocks.start).not.toHaveBeenCalled()
 })
 it("render and rerender cannot create investigations; pending is not confidence zero", () => {
@@ -85,14 +86,16 @@ it("API Actions IA uses only the persisted UUID result, without dispatch scenari
   const tab: WorkspaceTab = { id: "tab-actions", type: "actions", title: "Actions IA", module: "actions", context: { investigationId: result.investigation_id, alertId: alert.id }, isPinned: false, isDirty: false, createdAt: 1, lastActivatedAt: 1 }
   const html = renderToStaticMarkup(createElement<Partial<{ tab: WorkspaceTab }>>(ActionsIA, { tab }))
   expect(html).toContain(result.recommendation!.description)
-  expect(html).toContain("lg:col-span-7")
-  expect(html).toContain("lg:col-span-5")
+  expect(html).toContain("Action recommandée")
+  expect(html).toContain("Aide à la décision")
   expect(html).toContain("Accepter")
   expect(html).toContain("Modifier")
   expect(html).toContain("Rejeter")
   expect(html).toContain("Discuter cette recommandation")
-  expect(html).toContain("Pourquoi ?")
+  expect(html).toContain("Pourquoi cette recommandation ?")
   expect(html).toContain("En attente de décision")
+  expect(html).not.toMatch(/>Pourquoi \?</)
+  expect(html).not.toContain("lg:col-span-7")
   expect(html).not.toContain("Préparer")
   expect(html).not.toContain(">Marquer<")
   expect(mocks.demo).not.toHaveBeenCalled()
@@ -113,9 +116,9 @@ it("API Actions IA decision and reject labels cover accept, modify, and reject",
   expect(labels).toContain("Autre")
 })
 
-it("Actions IA Pourquoi and decisions do not start investigations; only discussion posts generate_reply", () => {
+it("Actions IA decisions do not start investigations; only discussion posts generate_reply", () => {
   const source = readFileSync("src/components/ai/InvestigationActions.tsx", "utf8")
-  expect(source).toMatch(/AiWhyButton/)
+  expect(source).not.toMatch(/AiWhyButton/)
   expect(source).toMatch(/putDecision/)
   expect(source).toMatch(/patchFollowUp/)
   expect(source).toMatch(/follow_up_status: "RESOLVED"/)
@@ -132,6 +135,8 @@ it("Actions IA Pourquoi and decisions do not start investigations; only discussi
   expect(source).toMatch(/File Actions IA indisponible/)
   expect(source).toMatch(/Dossier alerte indisponible/)
   expect(source).toMatch(/Optimisation de dispatch non applicable/)
+  expect(source).toMatch(/Impact estimé/)
+  expect(source).toMatch(/createOptimizationRun/)
   expect(source).not.toMatch(/JSON\.stringify/)
   expect(source).not.toMatch(/Ouvrir Alertes IA/)
   expect(source).not.toMatch(/Retour aux alertes/)
@@ -141,18 +146,18 @@ it("Actions IA Pourquoi and decisions do not start investigations; only discussi
   expect(source).not.toMatch(/generate_reply: true[\s\S]{0,80}listInbox/)
 })
 
-it("Pourquoi ? only scrolls to the existing report and never starts an investigation", () => {
+it("Alertes IA does not keep a fake Pourquoi scroll control", () => {
   const source = readFileSync("src/components/ai/InvestigationAlerts.tsx", "utf8")
-  expect(source).toMatch(/AiWhyButton[\s\S]{0,180}scrollIntoView/)
+  expect(source).not.toMatch(/AiWhyButton/)
+  expect(source).not.toMatch(/scrollIntoView/)
   expect(source).toMatch(/onClick=\{investigate\}/)
-  expect(source).not.toMatch(/AiWhyButton[\s\S]{0,220}start\(/)
-  expect(source).not.toMatch(/AiWhyButton[\s\S]{0,220}investigate\(/)
+  expect(source).toMatch(/Ouvrir Actions IA/)
 })
 it("running state disables manual creation and persisted provider errors do not expose raw messages", () => {
   mocks.entry = { phase: "running" }
   let html = renderToStaticMarkup(createElement(AlertesIA))
   expect(html).toContain("Analyse IA en cours")
-  expect(html).toContain("Pourquoi ?")
+  expect(html).not.toContain("Pourquoi ?")
   expect(html).not.toContain(result.recommendation!.description)
   mocks.entry = { phase: "ready", result: { ...result, status: "FAILED", conclusion: null, recommendation: null, error: { stage: "analyze", error_type: "ProviderTimeoutError", message: "secret SDK response" } } }
   html = renderToStaticMarkup(createElement(AlertesIA))

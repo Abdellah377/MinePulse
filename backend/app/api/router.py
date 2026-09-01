@@ -1,10 +1,11 @@
 from fastapi import APIRouter
 
-from app.api.routes import actions, ai, alerts, bootstrap, equipment, external_context, oem, operations, optimization, production, settings, simulation, zones
+from app.api.routes import actions, ai, alerts, bootstrap, equipment, external_context, oem, operations, optimization, production, settings, simulation, timeline, zones
 
 api_router = APIRouter(prefix="/api")
 
 api_router.include_router(bootstrap.router, tags=["bootstrap"])
+api_router.include_router(timeline.router, tags=["timeline"])
 api_router.include_router(equipment.router, prefix="/equipment", tags=["equipment"])
 api_router.include_router(zones.router, prefix="/zones", tags=["zones"])
 api_router.include_router(zones.roads_router, prefix="/roads", tags=["roads"])

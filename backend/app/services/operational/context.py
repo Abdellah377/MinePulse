@@ -13,6 +13,14 @@ from app.db.models import Shift, Site
 from app.services.operational.clock import get_operational_now
 from app.services.operational.ids import format_shift_id
 
+POSTE_ID_TO_NAME = {
+    "matin": "Poste matin",
+    "apres-midi": "Poste après-midi",
+    "nuit": "Poste nuit",
+}
+
+MAX_ANALYSIS_RANGE = timedelta(days=7)
+
 
 @dataclass(frozen=True)
 class OperationalContext:
@@ -47,18 +55,105 @@ def _combine_shift_datetime(shift_date: date, t: time, tz: timezone = timezone.u
     return datetime.combine(shift_date, t, tzinfo=tz)
 
 
-def shift_window(shift: Shift, sim_now: datetime) -> tuple[datetime, datetime]:
-    """Return [start, end) for a shift entity, handling overnight shifts."""
-    tz = sim_now.tzinfo or timezone.utc
+def shift_operational_span(shift: Shift, tz: timezone = timezone.utc) -> tuple[datetime, datetime]:
+    """Stored operational window [start, end) from shift_date + hours. Overnight adds one day."""
     start = _combine_shift_datetime(shift.shift_date, shift.start_time, tz)
     end = _combine_shift_datetime(shift.shift_date, shift.end_time, tz)
     if end <= start:
         end = end + timedelta(days=1)
+    return start, end
+
+
+def shift_window(shift: Shift, sim_now: datetime) -> tuple[datetime, datetime]:
+    """Return [start, end) for a shift entity, handling overnight shifts."""
+    tz = sim_now.tzinfo or timezone.utc
+    start, end = shift_operational_span(shift, tz if isinstance(tz, timezone) else timezone.utc)
     # If sim is before today's shift start but after midnight, overnight shift may belong to prior calendar day
     if sim_now < start and shift.end_time < shift.start_time:
         start = start - timedelta(days=1)
         end = end - timedelta(days=1)
     return start, end
+
+
+def period_span(from_date: date, to_date: date, tz: timezone = timezone.utc) -> tuple[datetime, datetime]:
+    """Inclusive operational dates as [from 00:00, to+1 00:00)."""
+    if to_date < from_date:
+        from_date, to_date = to_date, from_date
+    start = datetime.combine(from_date, time.min, tzinfo=tz)
+    end = datetime.combine(to_date + timedelta(days=1), time.min, tzinfo=tz)
+    return start, end
+
+
+def shift_overlaps_period(shift: Shift, from_date: date, to_date: date, tz: timezone = timezone.utc) -> bool:
+    start, end = shift_operational_span(shift, tz)
+    period_start, period_end = period_span(from_date, to_date, tz)
+    return start < period_end and end > period_start
+
+
+def parse_poste_name(poste: str | None) -> str | None:
+    if not poste:
+        return None
+    name = POSTE_ID_TO_NAME.get(poste)
+    if name is None:
+        raise HTTPException(status_code=422, detail=f"Invalid poste: {poste}")
+    return name
+
+
+def resolve_shifts(
+    session: Session,
+    site_id: int,
+    from_date: date,
+    to_date: date,
+    poste_name: str | None = None,
+    tz: timezone = timezone.utc,
+) -> list[Shift]:
+    """Shift rows whose operational window overlaps [from 00:00, to+1 00:00), optional exact name."""
+    if to_date < from_date:
+        from_date, to_date = to_date, from_date
+    q = (
+        select(Shift)
+        .where(
+            Shift.site_id == site_id,
+            Shift.shift_date >= from_date - timedelta(days=1),
+            Shift.shift_date <= to_date,
+        )
+        .order_by(Shift.shift_date, Shift.start_time, Shift.shift_id)
+    )
+    if poste_name:
+        q = q.where(Shift.name == poste_name)
+    rows = list(session.scalars(q).all())
+    return [shift for shift in rows if shift_overlaps_period(shift, from_date, to_date, tz)]
+
+
+def analysis_window(
+    session: Session,
+    ctx: OperationalContext,
+    from_date: date | None,
+    to_date: date | None,
+    poste: str | None,
+) -> tuple[datetime, datetime]:
+    """Union of resolved shift windows, clipped to sim_now and a 7-day cap."""
+    if from_date is None and to_date is None and not poste:
+        until = min(ctx.sim_now, ctx.shift_window_end)
+        return ctx.shift_window_start, until
+
+    from_date = from_date or ctx.sim_now.date()
+    to_date = to_date or from_date
+    poste_name = parse_poste_name(poste)
+    tz = timezone.utc
+    shifts = resolve_shifts(session, ctx.site_id, from_date, to_date, poste_name, tz)
+    if not shifts:
+        start, _ = period_span(from_date, to_date, tz)
+        return start, start
+
+    windows = [shift_operational_span(shift, tz) for shift in shifts]
+    since = min(w[0] for w in windows)
+    until = min(ctx.sim_now, max(w[1] for w in windows))
+    if until - since > MAX_ANALYSIS_RANGE:
+        since = until - MAX_ANALYSIS_RANGE
+    if until < since:
+        until = since
+    return since, until
 
 
 def resolve_site(session: Session, site_code: str | None) -> Site:

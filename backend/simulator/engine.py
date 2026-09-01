@@ -243,11 +243,7 @@ class SimulationEngine:
         for e in all_equip:
             if e.type not in (EquipmentType.EXCAVATOR, EquipmentType.LOADER):
                 continue
-            zone = "BANC_B" if "002" in e.code or "003" in e.code else "BANC_A"
-            if e.code.endswith("001"):
-                zone = "BANC_A"
-            elif e.code.endswith("002"):
-                zone = "BANC_B"
+            zone = "BANC_B" if e.code.endswith("002") else "BANC_A"
             loader_rng_seed = stable_seed(self.cfg.random_seed, e.equipment_id, e.code)
             loader_rng = random.Random(loader_rng_seed)
             self.world.loaders[e.code] = LoaderRuntime(

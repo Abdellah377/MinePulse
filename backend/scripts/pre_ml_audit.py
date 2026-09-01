@@ -832,11 +832,11 @@ def summarize_seed_reports(reports: Sequence[Mapping[str, Any]]) -> dict[str, An
 
     cycle_metrics: dict[str, Any] = {}
     failure_metrics: dict[str, Any] = {}
-    predictors = ("global", "route", "truck", "truck_route_global", "hgb")
-    for predictor in predictors:
+    for predictor in ("global", "route", "truck", "truck_route_global", "hgb"):
         mae = _points(reports, ("artifact_evaluation", "cycle_time", "metrics", predictor, "mae"))
         if mae:
             cycle_metrics.setdefault(predictor, {})["mae"] = _seed_stat(mae, higher_is_better=False)
+    for predictor in ("prevalence", "oem_threshold", "logistic", "hgb"):
         pr_auc = _points(reports, ("artifact_evaluation", "failure_risk", "metrics", predictor, "pr_auc"))
         if pr_auc:
             failure_metrics.setdefault(predictor, {})["pr_auc"] = _seed_stat(

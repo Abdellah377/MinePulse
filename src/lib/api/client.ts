@@ -145,6 +145,25 @@ export function fetchBootstrap(options?: { lite?: boolean; ctx?: OpsContext }): 
   return fetchJson(`/bootstrap${opsQueryString(options?.ctx, lite)}`)
 }
 
+export type AnalysisQuery = { from?: string; to?: string; poste?: string }
+
+function analysisExtra(analysis?: AnalysisQuery): Record<string, string | boolean | undefined> | undefined {
+  if (!analysis) return undefined
+  return {
+    from: analysis.from,
+    to: analysis.to,
+    poste: analysis.poste,
+  }
+}
+
+export function fetchTimeline(ctx?: OpsContext, analysis?: AnalysisQuery): Promise<TimelineSegment[]> {
+  return fetchJson(`/timeline${opsQueryString(ctx, analysisExtra(analysis))}`)
+}
+
+export function fetchProduction(ctx?: OpsContext, analysis?: AnalysisQuery): Promise<ProductionByShift> {
+  return fetchJson(`/production${opsQueryString(ctx, analysisExtra(analysis))}`)
+}
+
 export function fetchEquipmentLive(ctx?: OpsContext): Promise<BootstrapPayload["equipment"]> {
   return fetchJson(`/equipment/live${opsQueryString(ctx)}`)
 }

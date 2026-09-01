@@ -3,7 +3,7 @@ import { Search, Bell, ChevronDown } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { useApiMode } from "@/lib/api/client"
-import { timeAgo } from "@/lib/format"
+import { operationalTimeAgo } from "@/lib/format"
 import { operationalAlertTime } from "@/lib/alerts/order"
 import { alertWorkspaceContext } from "@/lib/alerts/notifications"
 import { useOpsStore } from "@/lib/store/useOpsStore"
@@ -238,7 +238,7 @@ export function BrandHeader() {
                   <div className="flex w-full items-center gap-1.5">
                     <span className={cn("size-1.5 rounded-full", cfg.dot)} />
                     <span className="font-medium">{alert.title}</span>
-                    <span className="ml-auto text-[10px] text-muted-2">{timeAgo(operationalAlertTime(alert), simNowIso ? Date.parse(simNowIso) : undefined)}</span>
+                    <span className="ml-auto text-[10px] text-muted-2">{operationalTimeAgo(operationalAlertTime(alert), simNowIso)}</span>
                   </div>
                   <p className="line-clamp-1 pl-3 text-[11px] text-muted">{alert.description}</p>
                 </DropdownMenuItem>

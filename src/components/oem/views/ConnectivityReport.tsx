@@ -5,7 +5,7 @@ import type { OemCol } from "@/lib/oem/types"
 import { OemGrid } from "@/components/oem/OemDataTable"
 import { OemEmptyState } from "@/components/oem/OemEmptyState"
 import { OemConnectivityTimeline, type PingRow } from "@/components/oem/OemConnectivityTimeline"
-import { rangeParams, useOemLoad, type OemViewProps } from "@/components/oem/oemViewUtils"
+import { useAnalysisRangeParams, useOemLoad, type OemViewProps } from "@/components/oem/oemViewUtils"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 
 const STATUS: Record<string, string> = {
@@ -39,10 +39,9 @@ type ConnBundle = {
 
 export function ConnectivityReport({ filters, refreshKey, onOpenEquipment, onExport }: OemViewProps) {
   const oemApi = useOemApi()
-  const shifts = useOpsStore((s) => s.shifts)
   const siteCode = useOpsStore((s) => s.selectedSiteId)
   const codes = filters.equipmentCodes
-  const r = rangeParams(filters, shifts)
+  const r = useAnalysisRangeParams()
   const { data, error, loading } = useOemLoad<ConnBundle>(
     () =>
       Promise.all([

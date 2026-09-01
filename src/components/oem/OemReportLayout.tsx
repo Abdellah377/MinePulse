@@ -2,6 +2,9 @@ import type { ReactNode } from "react"
 
 import type { OemDraft } from "@/lib/oem/types"
 import { oemViewTitle } from "@/lib/workspace/titles"
+import { useOpsStore } from "@/lib/store/useOpsStore"
+import { formatPeriodLabel } from "@/components/shared/PeriodFilters"
+import { canonicalPosteName } from "@/lib/ops/shiftLabel"
 
 /** Thin FMS-style context line: Entreprise: …; Engin: …; Intervalle: … */
 export function OemReportContextBar({
@@ -15,13 +18,11 @@ export function OemReportContextBar({
   filters: OemDraft
   extra?: string
 }) {
+  const periodFrom = useOpsStore((s) => s.periodFrom)
+  const periodTo = useOpsStore((s) => s.periodTo)
+  const selectedPoste = useOpsStore((s) => s.selectedPoste)
   const engins = filters.equipmentCodes.length ? filters.equipmentCodes.join(", ") : "—"
-  const interval =
-    filters.periodMode === "shift"
-      ? "poste sélectionné"
-      : filters.periodMode === "posts"
-        ? `${filters.fromShift || "non renseigné"} – ${filters.toShift || "non renseigné"} (fenêtres serveur)`
-        : `${filters.from || "…"} – ${filters.to || "…"}`
+  const interval = `${formatPeriodLabel(periodFrom, periodTo)} · ${canonicalPosteName(selectedPoste)}`
   const parts = [
     `Entreprise: ${siteName}`,
     `Engin: ${engins}`,

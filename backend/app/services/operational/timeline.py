@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -10,15 +12,15 @@ from app.mappers.enums import EQUIPMENT_STATE_TO_UI
 from app.services.operational.context import OperationalContext
 
 
-def timeline_for_shift(
+def timeline_for_window(
     session: Session,
     ctx: OperationalContext,
+    since: datetime,
+    until: datetime,
     equip_codes: dict[int, str],
     zone_names: dict[int, str],
 ) -> list[dict]:
-    """Return state segments overlapping the active shift window."""
-    since = ctx.shift_window_start
-    until = min(ctx.sim_now, ctx.shift_window_end)
+    """Return state segments overlapping [since, until)."""
     if until <= since:
         return []
     rows = session.scalars(
@@ -52,3 +54,15 @@ def timeline_for_shift(
             }
         )
     return segments
+
+
+def timeline_for_shift(
+    session: Session,
+    ctx: OperationalContext,
+    equip_codes: dict[int, str],
+    zone_names: dict[int, str],
+) -> list[dict]:
+    """Return state segments overlapping the active shift window."""
+    since = ctx.shift_window_start
+    until = min(ctx.sim_now, ctx.shift_window_end)
+    return timeline_for_window(session, ctx, since, until, equip_codes, zone_names)
