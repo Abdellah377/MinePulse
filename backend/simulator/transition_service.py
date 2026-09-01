@@ -38,6 +38,8 @@ def _close_open_interval(
 def truck_db_state(truck: TruckRuntime) -> EquipmentState:
     if truck.mechanical_hold:
         return EquipmentState.STOPPED_MECHANICAL
+    if truck.in_maintenance:
+        return EquipmentState.MAINTENANCE
     if truck.unexplained_hold:
         return EquipmentState.STOPPED_UNDEFINED
     return PHASE_TO_DB[truck.phase]
@@ -82,6 +84,8 @@ def transition_truck(
         reason_code = "UNDEFINED"
     elif truck.mechanical_hold:
         reason_code = "MECHANICAL"
+    elif truck.in_maintenance:
+        reason_code = "MAINTENANCE"
 
     new_state = truck_db_state(truck)
     row = EquipmentStateRow(

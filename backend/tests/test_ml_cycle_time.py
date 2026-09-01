@@ -6,6 +6,9 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from inspect import signature
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from app.ml.cycle_time.baselines import MedianBaselines
 from app.ml.cycle_time.contracts import (
@@ -22,6 +25,7 @@ from app.ml.cycle_time.dataset import (
     EquipmentInfo,
     StateInterval,
     is_valid_training_cycle,
+    load_snapshot,
     select_training_cycles,
     training_target_minutes,
 )
@@ -32,7 +36,7 @@ from app.ml.cycle_time.features import (
     assert_no_forbidden_features,
     build_feature_rows,
 )
-from app.ml.cycle_time.inference import predict_feature_rows, predict_from_snapshot, resolve_artifact
+from app.ml.cycle_time.inference import predict_cycle_time, predict_feature_rows, predict_from_snapshot, resolve_artifact
 from app.ml.cycle_time.model import build_pipeline, predict_pipeline, rows_to_matrix
 from app.ml.cycle_time.policy import ServingDecision, select_served_predictor
 from app.ml.cycle_time.train import temporal_split, train_from_rows
@@ -357,6 +361,90 @@ def test_inference_available_unavailable_and_insufficient_history(tmp_path: Path
     assert bad_schema.status == CycleTimeStatus.UNAVAILABLE.value or bad_schema.status == CycleTimeStatus.UNAVAILABLE
 
 
+class _Rows:
+    def __init__(self, values):
+        self._values = values
+
+    def all(self):
+        return self._values
+
+
+class _CycleSnapshotSession:
+    def __init__(self, site_id, rows_by_entity):
+        self.site_id = site_id
+        self.rows_by_entity = rows_by_entity
+
+    def scalars(self, statement):
+        sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+        assert f"site_id = {self.site_id}" in sql
+        entity = statement.column_descriptions[0]["entity"]
+        return _Rows(self.rows_by_entity[entity])
+
+
+def test_cycle_snapshot_loader_scopes_cycles_catalog_and_waiting_states_to_requested_site():
+    from app.db.models import Cycle, Equipment, HaulRoad, Zone
+    from app.db.models.telemetry import EquipmentState as EquipmentStateRow
+
+    session = _CycleSnapshotSession(
+        7,
+        {
+            Cycle: [
+                SimpleNamespace(
+                    cycle_id=10,
+                    truck_id=1,
+                    loader_id=None,
+                    origin_zone_id=20,
+                    destination_zone_id=21,
+                    started_at=_at(0),
+                    completed_at=None,
+                    total_duration_sec=None,
+                    status="ACTIVE",
+                    payload_t=None,
+                    distance_km=None,
+                )
+            ],
+            Equipment: [SimpleNamespace(equipment_id=1, code="TRK-S7", model=None, capacity_t=None)],
+            Zone: [
+                SimpleNamespace(zone_id=20, code="PIT-S7"),
+                SimpleNamespace(zone_id=21, code="DUMP-S7"),
+            ],
+            HaulRoad: [SimpleNamespace(from_zone_id=20, to_zone_id=21, distance_km=4.2)],
+            EquipmentStateRow: [
+                SimpleNamespace(equipment_id=1, state="WAITING_LOADING", start_time=_at(0), end_time=None)
+            ],
+        },
+    )
+
+    snapshot = load_snapshot(session, site_id=7)
+
+    assert [cycle.cycle_id for cycle in snapshot.cycles] == [10]
+    assert set(snapshot.equipment) == {1}
+    assert set(snapshot.zones) == {20, 21}
+    assert snapshot.road_distance_km == {(20, 21): 4.2}
+    assert [state.equipment_id for state in snapshot.waiting_states] == [1]
+
+
+def test_cycle_inference_loads_the_requested_site_only(monkeypatch):
+    requested_sites = []
+    monkeypatch.setattr(
+        "app.ml.cycle_time.inference.resolve_artifact",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "app.ml.cycle_time.inference.load_snapshot",
+        lambda _session, *, site_id: requested_sites.append(site_id) or object(),
+    )
+    monkeypatch.setattr(
+        "app.ml.cycle_time.inference.predict_from_snapshot",
+        lambda _snapshot, _cycle_id, _artifact: "scoped prediction",
+    )
+
+    result = predict_cycle_time(object(), 10, artifact=object(), site_id=7)
+
+    assert result == "scoped prediction"
+    assert requested_sites == [7]
+
+
 def _deterministic_maes() -> dict[str, float]:
     return {"global": 12.0, "route": 11.0, "truck": 10.0, "truck_route_global": 10.0}
 
@@ -506,3 +594,24 @@ def test_hgb_artifact_remains_available_when_not_promoted():
     if not report["ml_promoted"]:
         assert report["hgb_role"] == "experimental"
         assert report["served_predictor"] == DETERMINISTIC_SERVED_PREDICTOR
+
+
+def test_train_from_database_scopes_snapshot_to_resolved_site(monkeypatch):
+    from app.ml.cycle_time import train as train_mod
+
+    requested: list[int] = []
+    monkeypatch.setattr(train_mod, "resolve_ml_site_id", lambda _session, site_id=None: site_id or 7)
+    monkeypatch.setattr(
+        train_mod,
+        "load_snapshot",
+        lambda _session, *, site_id: requested.append(site_id) or SimpleNamespace(cycles=[]),
+    )
+    monkeypatch.setattr(train_mod, "select_training_cycles", lambda _cycles: ([], {}))
+    monkeypatch.setattr(train_mod, "build_feature_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(train_mod, "train_from_rows", lambda *_args, **_kwargs: (SimpleNamespace(), {"ok": True}))
+    monkeypatch.setattr(train_mod, "persist_artifact", lambda *_args, **_kwargs: None)
+
+    report = train_mod.train_from_database(object(), Path("unused-artifacts"), site_id=7)
+
+    assert requested == [7]
+    assert report == {"ok": True}

@@ -21,6 +21,7 @@ import sklearn
 from app.ml.cycle_time.baselines import MedianBaselines
 from app.ml.cycle_time.contracts import MODEL_VERSION, TRAINING_DATA_TYPE
 from app.ml.cycle_time.dataset import load_snapshot, select_training_cycles
+from app.ml.site_scope import resolve_ml_site_id
 from app.ml.cycle_time.evaluation import improvement, regression_metrics, residual_quantiles, slice_metrics, targets
 from app.ml.cycle_time.features import FEATURE_NAMES, FeatureRow, build_feature_rows, missing_rates
 from app.ml.cycle_time.model import (
@@ -44,15 +45,26 @@ def temporal_split(
     val_frac: float = 0.15,
 ) -> tuple[list[FeatureRow], list[FeatureRow], list[FeatureRow]]:
     ordered = sorted(rows, key=lambda row: (row.started_at, row.cycle_id))
-    n = len(ordered)
-    if n == 0:
+    if not ordered:
         return [], [], []
-    train_end = int(n * train_frac)
-    val_end = int(n * (train_frac + val_frac))
-    if n >= 3:
-        train_end = min(max(1, train_end), n - 2)
-        val_end = min(max(train_end + 1, val_end), n - 1)
-    return ordered[:train_end], ordered[train_end:val_end], ordered[val_end:]
+    groups: list[list[FeatureRow]] = []
+    for row in ordered:
+        if not groups or groups[-1][0].started_at != row.started_at:
+            groups.append([])
+        groups[-1].append(row)
+    n_groups = len(groups)
+    train_end = int(n_groups * train_frac)
+    val_end = int(n_groups * (train_frac + val_frac))
+    if n_groups >= 3:
+        train_end = min(max(1, train_end), n_groups - 2)
+        val_end = min(max(train_end + 1, val_end), n_groups - 1)
+    elif n_groups == 2:
+        train_end, val_end = 1, 2
+    else:
+        train_end = val_end = 1
+
+    flatten = lambda selected: [row for group in selected for row in group]
+    return flatten(groups[:train_end]), flatten(groups[train_end:val_end]), flatten(groups[val_end:])
 
 
 def _split_bounds(rows: list[FeatureRow]) -> dict[str, str | None]:
@@ -221,8 +233,9 @@ def persist_artifact(artifact: CycleTimeArtifact, artifacts_dir: Path) -> Path:
     return path
 
 
-def train_from_database(session, artifacts_dir: Path) -> dict[str, Any]:
-    snapshot = load_snapshot(session)
+def train_from_database(session, artifacts_dir: Path, *, site_id: int | None = None) -> dict[str, Any]:
+    resolved_site_id = resolve_ml_site_id(session, site_id=site_id)
+    snapshot = load_snapshot(session, site_id=resolved_site_id)
     kept, excluded = select_training_cycles(snapshot.cycles)
     rows = build_feature_rows(kept, snapshot, include_target=True)
     artifact, report = train_from_rows(rows, excluded=excluded)

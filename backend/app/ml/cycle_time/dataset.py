@@ -88,8 +88,23 @@ def cycle_from_orm(row: Cycle) -> CycleRecord:
     )
 
 
-def load_snapshot(session: Session) -> CycleSnapshot:
-    cycles = [cycle_from_orm(row) for row in session.scalars(select(Cycle)).all()]
+def load_snapshot(session: Session, *, site_id: int | None = None) -> CycleSnapshot:
+    cycles_query = select(Cycle)
+    equipment_query = select(Equipment)
+    zones_query = select(Zone)
+    roads_query = select(HaulRoad)
+    waiting_query = select(EquipmentStateRow).where(EquipmentStateRow.state == EquipmentState.WAITING_LOADING)
+    if site_id is not None:
+        cycles_query = cycles_query.join(Equipment, Cycle.truck_id == Equipment.equipment_id).where(
+            Equipment.site_id == site_id
+        )
+        equipment_query = equipment_query.where(Equipment.site_id == site_id)
+        zones_query = zones_query.where(Zone.site_id == site_id)
+        roads_query = roads_query.where(HaulRoad.site_id == site_id)
+        waiting_query = waiting_query.join(
+            Equipment, EquipmentStateRow.equipment_id == Equipment.equipment_id
+        ).where(Equipment.site_id == site_id)
+    cycles = [cycle_from_orm(row) for row in session.scalars(cycles_query).all()]
     equipment = {
         int(row.equipment_id): EquipmentInfo(
             equipment_id=int(row.equipment_id),
@@ -97,11 +112,11 @@ def load_snapshot(session: Session) -> CycleSnapshot:
             model=row.model,
             capacity_t=float(row.capacity_t) if row.capacity_t is not None else None,
         )
-        for row in session.scalars(select(Equipment)).all()
+        for row in session.scalars(equipment_query).all()
     }
-    zones = {int(row.zone_id): row.code for row in session.scalars(select(Zone)).all()}
+    zones = {int(row.zone_id): row.code for row in session.scalars(zones_query).all()}
     roads: dict[tuple[int, int], float] = {}
-    for row in session.scalars(select(HaulRoad)).all():
+    for row in session.scalars(roads_query).all():
         if row.from_zone_id is None or row.to_zone_id is None or row.distance_km is None:
             continue
         roads[(int(row.from_zone_id), int(row.to_zone_id))] = float(row.distance_km)
@@ -112,9 +127,7 @@ def load_snapshot(session: Session) -> CycleSnapshot:
             start_time=_aware(row.start_time) or row.start_time,
             end_time=_aware(row.end_time),
         )
-        for row in session.scalars(
-            select(EquipmentStateRow).where(EquipmentStateRow.state == EquipmentState.WAITING_LOADING)
-        ).all()
+        for row in session.scalars(waiting_query).all()
     ]
     return CycleSnapshot(
         cycles=cycles,

@@ -25,7 +25,13 @@ from app.ml.failure_risk.contracts import (
     SYNTHETIC_DATA_WARNING,
     TRAINING_DATA_TYPE,
 )
-from app.ml.failure_risk.dataset import build_window_split, load_snapshot, snapshot_summary
+from app.ml.failure_risk.dataset import (
+    build_window_split,
+    load_snapshot,
+    readiness_evidence,
+    snapshot_summary,
+)
+from app.ml.site_scope import resolve_ml_site_id
 from app.ml.failure_risk.evaluation import (
     apply_threshold,
     classification_report,
@@ -49,10 +55,13 @@ from app.ml.failure_risk.model import (
 )
 from app.ml.failure_risk.policy import select_served_predictor
 from app.ml.failure_risk.spec import (
+    FORBIDDEN_FEATURE_NAMES,
     HISTORY_LOOKBACK_MINUTES,
     HORIZON_MINUTES,
     MIN_LEAD_TIME_MINUTES,
     STRIDE_MINUTES,
+    evaluate_readiness,
+    required_telemetry_missing_rate,
     split_has_incident_leakage,
 )
 
@@ -236,15 +245,30 @@ def persist_artifact(artifact: FailureRiskArtifact, artifacts_dir: Path) -> Path
     return path
 
 
-def train_from_database(session, artifacts_dir: Path) -> dict[str, Any]:
-    snapshot = load_snapshot(session)
-    split, exclusions, _incidents = build_window_split(snapshot)
+def train_from_database(session, artifacts_dir: Path, *, site_id: int | None = None) -> dict[str, Any]:
+    resolved_site_id = resolve_ml_site_id(session, site_id=site_id)
+    snapshot = load_snapshot(session, site_id=resolved_site_id)
+    split, exclusions, incidents = build_window_split(snapshot)
     if split_has_incident_leakage(split):
         raise ValueError("Incident leakage across temporal splits.")
     windows = list(split.train) + list(split.validation) + list(split.test)
     rows = build_feature_rows(windows, snapshot)
+    rates = missing_rates(rows)
+    readiness = evaluate_readiness(
+        readiness_evidence(
+            snapshot,
+            split,
+            exclusions,
+            incidents,
+            missing_rate_max=required_telemetry_missing_rate(rates),
+            leakage_feature_violations=len([name for name in FEATURE_NAMES if name in FORBIDDEN_FEATURE_NAMES]),
+        )
+    )
+    if readiness.do_not_train:
+        raise ValueError(f"Failure-risk training blocked: {readiness.verdict}")
     extra = snapshot_summary(snapshot, split, exclusions)
     extra["n_incidents"] = len({window.incident_id for window in windows if window.incident_id})
+    extra["readiness_verdict"] = readiness.verdict
     artifact, report = train_from_rows(rows, excluded=exclusions, extra_metadata=extra)
     persist_artifact(artifact, artifacts_dir)
     return report

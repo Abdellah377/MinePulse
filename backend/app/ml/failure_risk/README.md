@@ -60,9 +60,12 @@ Primary metrics: PR-AUC, ROC-AUC, precision, recall, F1, FP/FN. Accuracy is not 
 
 ```
 from app.ml.failure_risk.inference import predict_failure_risk
-predict_failure_risk(session, equipment_id, prediction_time)
+predict_failure_risk(session, equipment_id, prediction_time, site_id=site_id)
 ```
 
 Returns `FailureRiskPrediction` with `AVAILABLE` / `UNAVAILABLE` /
 `INSUFFICIENT_HISTORY`. Unavailable predictions never report 0% risk.
+Inference is scoped to the requested site. A prediction uses only telemetry at
+or before `T`, requires a sample in the 60-minute feature lookback, and rejects
+samples older than the simulator's documented 120-second default cadence.
 No HTTP route, monitoring hook, or LangGraph integration in V1.

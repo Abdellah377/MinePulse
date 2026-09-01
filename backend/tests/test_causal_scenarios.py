@@ -20,12 +20,19 @@ from simulator.causal_scenarios import (
     scenario_catalog,
     validate_trace,
 )
-from simulator.apply_commands import CommandContext, _apply_command
+from simulator.apply_commands import (
+    CommandContext,
+    _apply_command,
+    _restore_injection,
+    apply_commands_for_target,
+    drain_commands_for_target,
+)
 from simulator.commands import SimulationCommand
 from simulator.generators.telemetry import build_telemetry
 from simulator.generators.tyres import tyre_rows
 from simulator.loaders import LoaderRuntime
 from simulator.state_machine import TruckPhase, TruckRuntime
+from simulator.world_model import ActiveInjection
 
 
 NOW = datetime(2026, 1, 29, 6, 0, tzinfo=timezone.utc)
@@ -330,6 +337,122 @@ def test_manual_sabotage_immediate_mode_retains_legacy_switch(monkeypatch):
 
     assert world.trucks["TRK-001"].mechanical_hold is True
     assert manager.active == {}
+
+
+def test_restore_command_is_consumed_once():
+    world = _world()
+    context = _command_context(world, CausalScenarioManager())
+    command = SimulationCommand.create(
+        target_type="EQUIPMENT",
+        target_id="TRK-001",
+        action="RESTORE",
+    )
+
+    assert apply_commands_for_target(context, [command]) == [command]
+    assert command.status == "APPLIED"
+    assert drain_commands_for_target([command], "EQUIPMENT", "TRK-001") == []
+
+
+def test_manual_causal_restore_routes_persisted_incident_to_recovery(monkeypatch):
+    from simulator import apply_commands
+
+    world = _world()
+    manager = CausalScenarioManager()
+    run = manager.activate(world, "lubrication_degradation", "TRK-001", NOW, seed=11)
+    context = _command_context(world, manager)
+    recovered = []
+    context.on_causal_recovery = lambda run_id, target_id, recovered_at: recovered.append(
+        (run_id, target_id, recovered_at)
+    )
+    monkeypatch.setattr(apply_commands, "transition_truck", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(apply_commands, "emit_system_event", lambda *_args, **_kwargs: None)
+
+    _restore_injection(
+        context,
+        ActiveInjection(
+            injection_id="injection-1",
+            command_id="command-1",
+            target_type="EQUIPMENT",
+            target_id="TRK-001",
+            action="MECHANICAL_BREAKDOWN",
+            parameters={"mode": "causal"},
+            started_at=NOW.isoformat(),
+            expires_at=None,
+            ground_truth="test-only",
+            original_state={"causal_run_id": run.run_id},
+        ),
+        "manual restore",
+    )
+
+    assert recovered == [(run.run_id, "TRK-001", NOW)]
+
+
+def test_manual_causal_commands_use_the_simulation_seed_after_reset():
+    worlds = [_world(), _world()]
+    managers = [CausalScenarioManager(), CausalScenarioManager()]
+    runs = []
+    for index, (world, manager) in enumerate(zip(worlds, managers)):
+        context = _command_context(world, manager)
+        context.causal_seed = 31415
+        command = SimulationCommand.create(
+            target_type="EQUIPMENT",
+            target_id="TRK-001",
+            action="MECHANICAL_BREAKDOWN",
+            parameters={"profile": "lubrication"},
+        )
+        command.command_id = f"same-ui-click-after-reset-{index}"
+        _apply_command(context, command)
+        runs.append(next(iter(manager.active.values())))
+
+    assert [run.seed for run in runs] == [31415, 31415]
+
+
+def test_live_speed_changes_update_the_physics_configuration(monkeypatch):
+    from simulator import engine as engine_module
+    from simulator.engine import SimulationEngine
+
+    engine = object.__new__(SimulationEngine)
+    engine.cfg = SimpleNamespace(speed=30.0, scenario="normal")
+    engine.clock = SimpleNamespace(speed=30.0, status="RUNNING")
+    engine.world = SimpleNamespace(mode="MANUAL")
+    monkeypatch.setattr(
+        engine_module,
+        "read_control",
+        lambda: {"status": "RUNNING", "speed": 60.0, "mode": "MANUAL", "scenario": "normal"},
+    )
+
+    engine._sync_control_from_disk()
+
+    assert engine.clock.speed == 60.0
+    assert engine.cfg.speed == 60.0
+
+
+def test_oem_warning_tokens_clear_when_telemetry_recovers():
+    from simulator.engine import SimulationEngine
+
+    truck = TruckRuntime("TRK-001", 1)
+    truck.tyres = {"FL": {"pressure_kpa": 680.0, "temperature_c": 55.0}}
+    truck.active_oem_codes = {
+        "SIM-ENG-TEMP-HIGH:",
+        "SIM-OIL-PRESS-LOW:",
+        "SIM-TYRE-PRESS-LOW:FL",
+        "SIM-TYRE-TEMP-HIGH:FL",
+    }
+    engine = SimpleNamespace(clock=SimpleNamespace(sim_now=NOW), session=SimpleNamespace())
+
+    SimulationEngine._check_oem_anomalies(
+        engine,
+        truck,
+        {
+            "engine_temp_c": 86.0,
+            "oil_pressure_kpa": 410.0,
+            "battery_voltage": 27.2,
+            "fuel_rate_lph": 24.0,
+            "communication_quality": 95.0,
+        },
+    )
+
+    assert truck.active_oem_codes == set()
 
 
 def test_undefined_stop_keeps_precursors_non_diagnostic():

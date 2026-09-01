@@ -453,14 +453,18 @@ def test_attach_failure_risk_scores_only_haul_trucks_and_swallows_scoring_errors
         active_alerts=[],
     )
     scored_ids = []
+    scored_sites = []
     monkeypatch.setattr(
         "app.ml.failure_risk.inference.score_equipment",
-        lambda _session, equipment_ids, _ts, **_kwargs: scored_ids.extend(equipment_ids) or {},
+        lambda _session, equipment_ids, _ts, **kwargs: (
+            scored_ids.extend(equipment_ids) or scored_sites.append(kwargs["site_id"]) or {}
+        ),
     )
     from unittest.mock import MagicMock
 
     attached = attach_failure_risk_predictions(MagicMock(), snapshot)
     assert scored_ids == [10]
+    assert scored_sites == [1]
     assert attached.failure_risk == {}
 
     monkeypatch.setattr(

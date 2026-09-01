@@ -30,6 +30,7 @@ from app.ml.failure_risk.spec import (
     labeled_windows,
     merge_mechanical_incidents,
     positive_negative_ratio,
+    required_telemetry_missing_rate,
 )
 
 T0 = datetime(2026, 8, 1, 6, 0, tzinfo=timezone.utc)
@@ -342,6 +343,20 @@ def test_leakage_violations_block_ready():
     assert result.verdict == VERDICT_NOT_READY
     assert result.do_not_train is True
     assert result.reasons["critical_leakage"] is True
+
+
+def test_required_telemetry_missing_rate_ignores_optional_recency_features():
+    rate = required_telemetry_missing_rate(
+        {
+            "engine_temp_c_latest": 0.0,
+            "oil_pressure_kpa_mean": 1.0,
+            "minutes_since_last_completed_maintenance": 37.2,
+            "minutes_since_last_oem_event": 3.6,
+        }
+    )
+    assert rate == 0.01
+    blocked = evaluate_readiness(_ready_evidence(required_feature_max_missing_rate=rate))
+    assert blocked.reasons["critical_missing_required_feature"] is False
 
 
 def test_audit_script_uses_spec_readiness_not_hardcoded_do_not_train():

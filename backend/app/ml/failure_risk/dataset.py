@@ -24,12 +24,14 @@ from app.ml.failure_risk.spec import (
     STRIDE_MINUTES,
     TELEMETRY_FEATURE_FIELDS,
     MechanicalIncident,
+    ReadinessEvidence,
     TemporalSplit,
     assign_temporal_splits,
     count_exclusions,
     iter_prediction_times,
     labeled_windows,
     merge_mechanical_incidents,
+    split_has_incident_leakage,
 )
 from app.oem.catalog import EVENT_TYPE_TO_CODE
 
@@ -92,20 +94,40 @@ class FailureRiskSnapshot:
     maintenance: list[MaintenanceSample]
 
 
-def load_snapshot(session: Session) -> FailureRiskSnapshot:
+def load_snapshot(session: Session, *, site_id: int | None = None) -> FailureRiskSnapshot:
+    equipment_query = select(Equipment)
+    if site_id is not None:
+        equipment_query = equipment_query.where(Equipment.site_id == site_id)
     equipment = {
         int(row.equipment_id): EquipmentInfo(equipment_id=int(row.equipment_id), code=str(row.code))
-        for row in session.scalars(select(Equipment)).all()
+        for row in session.scalars(equipment_query).all()
     }
+    telemetry_query = select(EquipmentTelemetry).order_by(EquipmentTelemetry.ts)
+    state_query = select(EquipmentStateRow).order_by(EquipmentStateRow.start_time)
+    event_query = select(SystemEvent).order_by(SystemEvent.ts)
+    maintenance_query = select(MaintenanceEvent).order_by(MaintenanceEvent.start_time)
+    if site_id is not None:
+        telemetry_query = telemetry_query.join(
+            Equipment, EquipmentTelemetry.equipment_id == Equipment.equipment_id
+        ).where(Equipment.site_id == site_id)
+        state_query = state_query.join(
+            Equipment, EquipmentStateRow.equipment_id == Equipment.equipment_id
+        ).where(Equipment.site_id == site_id)
+        event_query = event_query.join(
+            Equipment, SystemEvent.equipment_id == Equipment.equipment_id
+        ).where(Equipment.site_id == site_id)
+        maintenance_query = maintenance_query.join(
+            Equipment, MaintenanceEvent.equipment_id == Equipment.equipment_id
+        ).where(Equipment.site_id == site_id)
     telemetry: list[TelemetrySample] = []
-    for row in session.scalars(select(EquipmentTelemetry).order_by(EquipmentTelemetry.ts)).all():
+    for row in session.scalars(telemetry_query).all():
         ts = _aware(row.ts)
         if ts is None:
             continue
         values = {name: _float(getattr(row, name, None)) for name in TELEMETRY_FEATURE_FIELDS}
         telemetry.append(TelemetrySample(equipment_id=int(row.equipment_id), ts=ts, values=values))
     states: list[StateInterval] = []
-    for row in session.scalars(select(EquipmentStateRow).order_by(EquipmentStateRow.start_time)).all():
+    for row in session.scalars(state_query).all():
         start = _aware(row.start_time)
         if start is None:
             continue
@@ -120,7 +142,7 @@ def load_snapshot(session: Session) -> FailureRiskSnapshot:
         )
     oem_types = set(EVENT_TYPE_TO_CODE)
     oem_events: list[EventSample] = []
-    for row in session.scalars(select(SystemEvent).order_by(SystemEvent.ts)).all():
+    for row in session.scalars(event_query).all():
         if row.equipment_id is None or row.event_type not in oem_types:
             continue
         ts = _aware(row.ts)
@@ -128,7 +150,7 @@ def load_snapshot(session: Session) -> FailureRiskSnapshot:
             continue
         oem_events.append(EventSample(equipment_id=int(row.equipment_id), ts=ts, event_type=str(row.event_type)))
     maintenance: list[MaintenanceSample] = []
-    for row in session.scalars(select(MaintenanceEvent).order_by(MaintenanceEvent.start_time)).all():
+    for row in session.scalars(maintenance_query).all():
         start = _aware(row.start_time)
         if start is None:
             continue
@@ -196,6 +218,48 @@ def build_window_split(snapshot: FailureRiskSnapshot) -> tuple[TemporalSplit, di
     )
     split = assign_temporal_splits(labeled, incidents)
     return split, exclusions, incidents
+
+
+def _state_name(state: Any) -> str:
+    return str(getattr(state, "value", state))
+
+
+def downtime_event_count(snapshot: FailureRiskSnapshot) -> int:
+    return sum(1 for item in snapshot.states if _state_name(item.state) == "STOPPED_MECHANICAL")
+
+
+def readiness_evidence(
+    snapshot: FailureRiskSnapshot,
+    split: TemporalSplit,
+    exclusions: dict[str, int],
+    incidents: list[MechanicalIncident],
+    *,
+    missing_rate_max: float,
+    leakage_feature_violations: int,
+) -> ReadinessEvidence:
+    windows = list(split.train) + list(split.validation) + list(split.test)
+    precursor_ids = {
+        window.incident_id
+        for window in windows
+        if window.incident_id
+        and window.label == 1
+        and window.minutes_to_incident is not None
+        and window.minutes_to_incident >= 55
+    }
+    return ReadinessEvidence(
+        n_incidents=len(incidents),
+        n_open_incidents=sum(1 for item in incidents if item.end_time is None),
+        n_incidents_with_60min_precursor=len(precursor_ids),
+        n_positive_windows=int(exclusions.get("labeled_positive", 0)),
+        n_negative_windows=int(exclusions.get("labeled_negative", 0)),
+        n_excluded_immediate_pre_failure=int(exclusions.get("immediate_pre_failure", 0)),
+        downtime_events=downtime_event_count(snapshot),
+        maintenance_events=len(snapshot.maintenance),
+        required_feature_max_missing_rate=missing_rate_max,
+        leakage_feature_violations=leakage_feature_violations,
+        split_incident_leakage=int(split_has_incident_leakage(split)),
+        lead_time_applied=True,
+    )
 
 
 def snapshot_summary(snapshot: FailureRiskSnapshot, split: TemporalSplit, exclusions: dict[str, int]) -> dict[str, Any]:

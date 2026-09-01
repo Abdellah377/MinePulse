@@ -104,10 +104,11 @@ def predict_cycle_time(
     session: Session,
     cycle_id: int,
     *,
+    site_id: int,
     artifacts_dir: Path | None = None,
     artifact: CycleTimeArtifact | None = None,
 ) -> CycleTimePrediction:
     resolved = resolve_artifact(artifacts_dir=artifacts_dir, artifact=artifact)
     if isinstance(resolved, CycleTimePrediction):
         return resolved.model_copy(update={"cycle_id": cycle_id})
-    return predict_from_snapshot(load_snapshot(session), cycle_id, resolved)
+    return predict_from_snapshot(load_snapshot(session, site_id=site_id), cycle_id, resolved)

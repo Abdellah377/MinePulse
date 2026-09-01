@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 import hashlib
 
@@ -46,6 +46,8 @@ class CommandContext:
     causal_tick_sim_sec: float = 1.0
     zones_geom: dict[str, ZoneGeom] | None = None
     equipment_by_id: dict[int, Equipment] | None = None
+    causal_seed: int | None = None
+    on_causal_recovery: Callable[[str, str, datetime], None] | None = None
 
 
 def _ctx_equipment(ctx: CommandContext, equipment_id: int) -> Equipment | None:
@@ -76,10 +78,12 @@ def _format_alert(spec, target_id: str) -> tuple[str, str]:
     return title, desc
 
 
-def _causal_seed(cmd: SimulationCommand) -> int:
+def _causal_seed(ctx: CommandContext, cmd: SimulationCommand) -> int:
     explicit = cmd.parameters.get("seed")
     if explicit is not None:
         return int(explicit)
+    if ctx.causal_seed is not None:
+        return ctx.causal_seed
     digest = hashlib.sha256(cmd.command_id.encode("utf-8")).hexdigest()
     return int(digest[:8], 16) & 0x7FFFFFFF
 
@@ -92,7 +96,7 @@ def _start_causal_injection(
     """Start diagnostic progression, or return None for an instant-only action."""
     if ctx.causal_scenarios is None or bool(cmd.parameters.get("immediate", False)):
         return None
-    seed = _causal_seed(cmd)
+    seed = _causal_seed(ctx, cmd)
     plan = causal_plan_for_sabotage(
         action,
         equipment_kind(cmd.target_id),
@@ -311,6 +315,7 @@ def _apply_command(ctx: CommandContext, cmd: SimulationCommand) -> ActiveInjecti
 
     if action == "RESTORE":
         _restore_target(ctx, cmd.target_type, tid)
+        cmd.status = "PERSISTED"
         ctx.world.log_test(ctx.sim_now, f"{tid} RESTORE requested", cmd.target_type, tid)
         return None
 
@@ -358,6 +363,8 @@ def _restore_injection(ctx: CommandContext, inj: ActiveInjection, reason: str) -
     if causal_run_id and ctx.causal_scenarios is not None:
         if causal_run_id in ctx.causal_scenarios.active:
             ctx.causal_scenarios.stop(ctx.world, causal_run_id)
+        if ctx.on_causal_recovery is not None:
+            ctx.on_causal_recovery(causal_run_id, tid, ctx.sim_now)
     else:
         restore_runtime(ctx.world, inj.target_type, tid, inj.original_state or {})
 

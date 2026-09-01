@@ -21,9 +21,11 @@ from simulator.cli import build_parser, cmd_generate_cycles
 from simulator.config import SimConfig
 from app.oem.thresholds import classify_value
 from simulator.causal_scenarios import CausalScenarioManager
+from simulator.causal_scenarios import CausalStage, ObservableTransition
 from simulator.failure_population import FailurePopulationConfig, FailurePopulationManager
 from simulator.generators.telemetry import build_telemetry
 from simulator.state_machine import TruckPhase, TruckRuntime
+from simulator.transition_service import truck_db_state
 
 
 NOW = datetime(2026, 1, 29, 6, 0, tzinfo=timezone.utc)
@@ -266,6 +268,69 @@ def test_ambiguous_mechanical_profile_is_not_a_single_oem_threshold_rule():
     }
     assert warning_keys == set()
     assert truck.mechanical_hold
+
+
+def test_tyre_safety_stop_persists_as_maintenance_not_mechanical_failure():
+    world = _world(1)
+    truck = world.trucks["TRK-001"]
+    manager = CausalScenarioManager()
+    run = manager.activate(world, "tyre_degradation", truck.code, NOW, seed=31)
+
+    manager.step(world, NOW + timedelta(seconds=run.duration_sec))
+
+    assert truck.in_maintenance
+    assert truck_db_state(truck) == EquipmentState.MAINTENANCE
+
+
+def test_tyre_safety_stop_interrupts_open_work_and_opens_failure_lifecycle(monkeypatch):
+    from simulator import engine as engine_module
+    from simulator.engine import SimulationEngine
+
+    truck = TruckRuntime("TRK-001", 1, phase=TruckPhase.MOVING_LOADED)
+    truck.in_maintenance = True
+    world = SimpleNamespace(trucks={truck.code: truck})
+    interrupted = []
+    transitioned = []
+    lifecycle = []
+    engine = object.__new__(SimulationEngine)
+    engine.equip_id_by_code = {truck.code: truck.equipment_id}
+    engine.world = world
+    engine.failure_population = SimpleNamespace(active={})
+    engine.open_failure_records = {}
+    engine.session = SimpleNamespace(add=lambda *_args: None)
+    engine._interrupt_truck_work = lambda item, **kwargs: interrupted.append((item, kwargs))
+    engine._transition_truck = lambda item, **kwargs: transitioned.append((item, kwargs))
+    monkeypatch.setattr(engine_module, "emit_system_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine_module, "emit_fms_alert", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine_module,
+        "start_mechanical_incident",
+        lambda *args, **kwargs: lifecycle.append(kwargs) or "records",
+    )
+    transition = ObservableTransition(
+        run_id="tyre-run",
+        target_id=truck.code,
+        occurred_at=NOW,
+        stage=CausalStage.INCIDENT,
+        event_kind="SAFETY_STOP",
+        alert_type="EQUIPMENT_SAFETY_STOP",
+        severity="CRITICAL",
+        maintenance_required=True,
+    )
+
+    engine._persist_causal_transitions([transition])
+
+    assert interrupted == [(truck, {"interrupted_at": NOW})]
+    assert transitioned == [(truck, {"sim_now": NOW})]
+    assert lifecycle == [
+        {
+            "equipment_id": 1,
+            "started_at": NOW,
+            "expected_recovery_at": NOW + timedelta(minutes=30),
+            "severity": AlertSeverity.CRITICAL,
+        }
+    ]
+    assert engine.open_failure_records == {"tyre-run": "records"}
 
 
 def test_failure_population_hidden_truth_stays_out_of_production_packages():

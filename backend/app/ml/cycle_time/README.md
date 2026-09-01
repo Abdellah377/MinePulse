@@ -106,7 +106,7 @@ intervals (10th–90th percentile) are fit on **validation** residuals of the
 
 ```
 from app.ml.cycle_time.inference import predict_cycle_time
-predict_cycle_time(session, cycle_id)
+predict_cycle_time(session, cycle_id, site_id=site_id)
 ```
 
 Returns `CycleTimePrediction` with `AVAILABLE` / `UNAVAILABLE` /

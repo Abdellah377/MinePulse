@@ -35,7 +35,12 @@ def attach_failure_risk_predictions(session: Session, snapshot: MonitoringSnapsh
         # PostgreSQL aborts a transaction after a failed query. Optional inference
         # must not poison the operational snapshot/alert writes that follow it.
         with session.begin_nested():
-            scored = score_equipment(session, equipment_ids, snapshot.context.sim_now)
+            scored = score_equipment(
+                session,
+                equipment_ids,
+                snapshot.context.sim_now,
+                site_id=snapshot.context.site_id,
+            )
         return replace(snapshot, failure_risk=scored)
     except Exception:
         site_id = getattr(getattr(snapshot, "context", None), "site_id", None)

@@ -36,9 +36,10 @@ def _truck(**overrides) -> Equipment:
 def test_supported_truck_preserves_probability_horizon_and_prototype_metadata(monkeypatch):
     captured = {}
 
-    def fake_predict(session, equipment_id, prediction_time, **_kwargs):
+    def fake_predict(session, equipment_id, prediction_time, **kwargs):
         captured["equipment_id"] = equipment_id
         captured["prediction_time"] = prediction_time
+        captured["site_id"] = kwargs["site_id"]
         return FailureRiskPrediction(
             equipment_id=equipment_id,
             equipment_code="TRK-010",
@@ -62,6 +63,7 @@ def test_supported_truck_preserves_probability_horizon_and_prototype_metadata(mo
     prediction = current_failure_risk(object(), _truck(), NOW)
     assert captured["equipment_id"] == 10
     assert captured["prediction_time"] == NOW
+    assert captured["site_id"] == 1
     dto = failure_risk_to_dto(prediction)
     assert dto["riskProbability"] == 0.74
     assert dto["horizonMinutes"] == 60

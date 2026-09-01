@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from app.ml.failure_risk.baselines import FailureRiskBaselines, oem_warn_count
 from app.ml.failure_risk.contracts import (
@@ -22,6 +25,7 @@ from app.ml.failure_risk.dataset import (
     StateInterval,
     TelemetrySample,
     build_window_split,
+    load_snapshot,
 )
 from app.ml.failure_risk.evaluation import apply_threshold, select_threshold_max_f1
 from app.ml.failure_risk.features import (
@@ -38,6 +42,7 @@ from app.ml.failure_risk.inference import (
     score_equipment,
 )
 from app.ml.failure_risk.model import (
+    FailureRiskArtifact,
     build_hgb_pipeline,
     build_logistic_pipeline,
     predict_proba_positive,
@@ -180,6 +185,17 @@ def _balanced_rows() -> list[FeatureRow]:
             )
             idx += 1
     return rows
+
+
+def _inference_artifact() -> FailureRiskArtifact:
+    return FailureRiskArtifact(
+        logistic=None,
+        hgb=None,
+        baselines=FailureRiskBaselines(prevalence=0.25),
+        served_predictor="prevalence",
+        threshold=0.5,
+        feature_names=FEATURE_NAMES,
+    )
 
 
 def test_dataset_reproduces_60_minute_horizon_and_15_minute_lead():
@@ -332,8 +348,31 @@ def test_inference_never_reads_after_t_and_insufficient_history_is_explicit():
     assert unresolved.risk_probability is None
 
 
+def test_inference_rejects_an_empty_feature_lookback_without_imputing_zero_risk():
+    result = predict_from_snapshot(_snapshot(end_min=20), 1, _at(100), _inference_artifact())
+
+    assert result.status == FailureRiskStatus.UNAVAILABLE
+    assert result.risk_probability is None
+    assert result.feature_timestamp == _at(20)
+
+
+def test_inference_rejects_telemetry_older_than_the_documented_sampling_cadence():
+    result = predict_from_snapshot(_snapshot(end_min=80), 1, _at(83), _inference_artifact())
+
+    assert result.status == FailureRiskStatus.UNAVAILABLE
+    assert result.risk_probability is None
+    assert result.feature_timestamp == _at(80)
+
+
+def test_available_inference_reports_the_latest_observed_feature_timestamp():
+    result = predict_from_snapshot(_snapshot(end_min=80), 1, _at(81), _inference_artifact())
+
+    assert result.status == FailureRiskStatus.AVAILABLE
+    assert result.feature_timestamp == _at(80)
+
+
 def test_score_equipment_returns_unavailable_copies_when_artifact_is_missing():
-    scored = score_equipment(object(), [1, 2], _at(40), artifacts_dir=Path("missing-artifacts-dir"))
+    scored = score_equipment(object(), [1, 2], _at(40), site_id=1, artifacts_dir=Path("missing-artifacts-dir"))
     assert set(scored) == {1, 2}
     assert all(item.status == FailureRiskStatus.UNAVAILABLE for item in scored.values())
     assert all(item.risk_probability is None for item in scored.values())
@@ -348,13 +387,71 @@ def test_score_equipment_loads_snapshot_once(monkeypatch):
     loads = []
     monkeypatch.setattr(
         "app.ml.failure_risk.inference.load_snapshot",
-        lambda _session: loads.append(1) or snapshot,
+        lambda _session, *, site_id: loads.append(site_id) or snapshot,
     )
-    scored = score_equipment(object(), [1, 99], _at(40), artifact=artifact)
+    scored = score_equipment(object(), [1, 99], _at(40), site_id=1, artifact=artifact)
     assert loads == [1]
     assert scored[1].status == FailureRiskStatus.AVAILABLE
     assert scored[99].status == FailureRiskStatus.UNAVAILABLE
     assert scored[99].risk_probability is None
+
+
+def test_score_equipment_loads_the_requested_site_only(monkeypatch):
+    snapshot = _snapshot(end_min=80)
+    requested_sites = []
+    monkeypatch.setattr(
+        "app.ml.failure_risk.inference.load_snapshot",
+        lambda _session, *, site_id: requested_sites.append(site_id) or snapshot,
+    )
+
+    scored = score_equipment(object(), [1], _at(80), artifact=_inference_artifact(), site_id=7)
+
+    assert requested_sites == [7]
+    assert scored[1].status == FailureRiskStatus.AVAILABLE
+
+
+class _Rows:
+    def __init__(self, values):
+        self._values = values
+
+    def all(self):
+        return self._values
+
+
+class _FailureSnapshotSession:
+    def __init__(self, site_id, rows_by_entity):
+        self.site_id = site_id
+        self.rows_by_entity = rows_by_entity
+
+    def scalars(self, statement):
+        sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+        assert f"equipment.site_id = {self.site_id}" in sql
+        entity = statement.column_descriptions[0]["entity"]
+        return _Rows(self.rows_by_entity[entity])
+
+
+def test_failure_snapshot_loader_scopes_every_observational_relation_to_requested_site():
+    from app.db.models import Equipment, MaintenanceEvent, SystemEvent
+    from app.db.models.telemetry import EquipmentState as EquipmentStateRow
+    from app.db.models.telemetry import EquipmentTelemetry
+
+    telemetry = {name: None for name in TELEMETRY_FEATURE_FIELDS}
+    session = _FailureSnapshotSession(
+        7,
+        {
+            Equipment: [SimpleNamespace(equipment_id=1, code="TRK-S7")],
+            EquipmentTelemetry: [SimpleNamespace(equipment_id=1, ts=_at(80), **telemetry)],
+            EquipmentStateRow: [SimpleNamespace(equipment_id=1, state="MOVING_EMPTY", start_time=_at(0), end_time=None)],
+            SystemEvent: [],
+            MaintenanceEvent: [],
+        },
+    )
+
+    snapshot = load_snapshot(session, site_id=7)
+
+    assert set(snapshot.equipment) == {1}
+    assert [sample.equipment_id for sample in snapshot.telemetry] == [1]
+    assert [state.equipment_id for state in snapshot.states] == [1]
 
 
 def test_active_stop_inference_is_unavailable_not_zero_risk():
@@ -391,3 +488,74 @@ def test_no_paid_api_imports_in_failure_risk_package():
 
 def test_threshold_apply_helper():
     assert apply_threshold([0.1, 0.5, 0.9], 0.5) == [0, 1, 1]
+
+
+def test_train_from_database_blocks_when_readiness_forbids_training(monkeypatch):
+    from app.ml.failure_risk import train as train_mod
+
+    calls: list[str] = []
+    monkeypatch.setattr(train_mod, "resolve_ml_site_id", lambda _session, site_id=None: 7)
+    monkeypatch.setattr(train_mod, "load_snapshot", lambda _session, *, site_id: SimpleNamespace(states=[], maintenance=[]))
+    monkeypatch.setattr(
+        train_mod,
+        "build_window_split",
+        lambda _snapshot: (
+            SimpleNamespace(train=(), validation=(), test=(), dropped_boundary_windows=0),
+            {"labeled_positive": 0, "labeled_negative": 0, "immediate_pre_failure": 0},
+            [],
+        ),
+    )
+    monkeypatch.setattr(train_mod, "split_has_incident_leakage", lambda _split: False)
+    monkeypatch.setattr(train_mod, "build_feature_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(train_mod, "missing_rates", lambda _rows: {})
+    monkeypatch.setattr(train_mod, "readiness_evidence", lambda *_args, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        train_mod,
+        "evaluate_readiness",
+        lambda _evidence: SimpleNamespace(do_not_train=True, verdict="NOT READY — DATA/SIMULATOR CHANGES REQUIRED"),
+    )
+    monkeypatch.setattr(train_mod, "train_from_rows", lambda *_args, **_kwargs: calls.append("fit") or (None, {}))
+    monkeypatch.setattr(train_mod, "persist_artifact", lambda *_args, **_kwargs: calls.append("persist"))
+
+    with pytest.raises(ValueError, match="blocked"):
+        train_mod.train_from_database(object(), Path("unused-artifacts"))
+    assert calls == []
+
+
+def test_train_from_database_scopes_snapshot_to_resolved_site_when_ready(monkeypatch):
+    from app.ml.failure_risk import train as train_mod
+
+    requested: list[int] = []
+    monkeypatch.setattr(train_mod, "resolve_ml_site_id", lambda _session, site_id=None: site_id or 7)
+    monkeypatch.setattr(
+        train_mod,
+        "load_snapshot",
+        lambda _session, *, site_id: requested.append(site_id) or SimpleNamespace(states=[], maintenance=[]),
+    )
+    monkeypatch.setattr(
+        train_mod,
+        "build_window_split",
+            lambda _snapshot: (
+                SimpleNamespace(
+                    train=(SimpleNamespace(incident_id="inc-1", label=1),),
+                    validation=(SimpleNamespace(incident_id="inc-2", label=0),),
+                    test=(),
+                    dropped_boundary_windows=0,
+                ),
+            {"labeled_positive": 20, "labeled_negative": 200, "immediate_pre_failure": 4},
+            [SimpleNamespace(end_time=_at(10))],
+        ),
+    )
+    monkeypatch.setattr(train_mod, "split_has_incident_leakage", lambda _split: False)
+    monkeypatch.setattr(train_mod, "build_feature_rows", lambda *_args, **_kwargs: [object()])
+    monkeypatch.setattr(train_mod, "missing_rates", lambda _rows: {"engine_temp_c_latest": 0.0})
+    monkeypatch.setattr(train_mod, "readiness_evidence", lambda *_args, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(train_mod, "evaluate_readiness", lambda _evidence: SimpleNamespace(do_not_train=False, verdict="READY TO BUILD FAILURE-RISK V1"))
+    monkeypatch.setattr(train_mod, "snapshot_summary", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(train_mod, "train_from_rows", lambda *_args, **_kwargs: (SimpleNamespace(), {"ok": True}))
+    monkeypatch.setattr(train_mod, "persist_artifact", lambda *_args, **_kwargs: None)
+
+    report = train_mod.train_from_database(object(), Path("unused-artifacts"), site_id=7)
+
+    assert requested == [7]
+    assert report == {"ok": True}

@@ -7,7 +7,7 @@ PROTOTYPE / SYNTHETIC-DATA MODEL.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -28,7 +28,18 @@ from app.ml.failure_risk.model import (
     load_artifact,
     predict_proba_positive,
 )
-from app.ml.failure_risk.spec import HORIZON_MINUTES, MIN_HISTORY_MINUTES, LabeledWindow, classify_window
+from app.ml.failure_risk.spec import (
+    HISTORY_LOOKBACK_MINUTES,
+    HORIZON_MINUTES,
+    MIN_HISTORY_MINUTES,
+    LabeledWindow,
+    classify_window,
+)
+
+# The batch simulator persists telemetry every two 60-second ticks by default
+# (simulator.cli --sample-every-ticks=2). A complete cadence is accepted so a
+# score at the boundary does not reject the latest normal sample.
+MAX_TELEMETRY_AGE_SECONDS = 120
 
 
 def _aware(ts: datetime | None) -> datetime | None:
@@ -92,6 +103,19 @@ def _scores(artifact: FailureRiskArtifact, rows) -> list[float]:
     return artifact.baselines.predict(name, rows)
 
 
+def _latest_telemetry_at_or_before(
+    snapshot: FailureRiskSnapshot,
+    equipment_id: int,
+    prediction_time: datetime,
+) -> datetime | None:
+    observed = (
+        _aware(sample.ts)
+        for sample in snapshot.telemetry
+        if sample.equipment_id == equipment_id and _aware(sample.ts) is not None and _aware(sample.ts) <= prediction_time
+    )
+    return max(observed, default=None)
+
+
 def predict_from_snapshot(
     snapshot: FailureRiskSnapshot,
     equipment_id: int,
@@ -106,6 +130,41 @@ def predict_from_snapshot(
             prediction_timestamp=t,
             detail="Equipment not found.",
             model_version=artifact.model_version,
+        )
+    latest_telemetry = _latest_telemetry_at_or_before(snapshot, equipment_id, t)
+    if latest_telemetry is None:
+        return _unavailable(
+            equipment_id=equipment_id,
+            equipment_code=info.code,
+            prediction_timestamp=t,
+            feature_timestamp=None,
+            detail="No telemetry is available at or before the prediction time.",
+            model_version=artifact.model_version,
+            model_status=artifact.model_status,
+            served_predictor=artifact.served_predictor,
+        )
+    lookback_start = t - timedelta(minutes=HISTORY_LOOKBACK_MINUTES)
+    if latest_telemetry < lookback_start:
+        return _unavailable(
+            equipment_id=equipment_id,
+            equipment_code=info.code,
+            prediction_timestamp=t,
+            feature_timestamp=latest_telemetry,
+            detail="No telemetry sample exists in the 60-minute feature lookback.",
+            model_version=artifact.model_version,
+            model_status=artifact.model_status,
+            served_predictor=artifact.served_predictor,
+        )
+    if (t - latest_telemetry).total_seconds() > MAX_TELEMETRY_AGE_SECONDS:
+        return _unavailable(
+            equipment_id=equipment_id,
+            equipment_code=info.code,
+            prediction_timestamp=t,
+            feature_timestamp=latest_telemetry,
+            detail="Latest telemetry is older than the 120-second sampling cadence.",
+            model_version=artifact.model_version,
+            model_status=artifact.model_status,
+            served_predictor=artifact.served_predictor,
         )
     _start, _end, first_ts = telemetry_span(snapshot)
     incidents = mechanical_incidents(snapshot)
@@ -123,7 +182,7 @@ def predict_from_snapshot(
             equipment_id=equipment_id,
             equipment_code=info.code,
             prediction_timestamp=t,
-            feature_timestamp=t,
+            feature_timestamp=latest_telemetry,
             horizon_minutes=HORIZON_MINUTES,
             status=FailureRiskStatus.INSUFFICIENT_HISTORY,
             risk_probability=None,
@@ -138,7 +197,7 @@ def predict_from_snapshot(
             equipment_id=equipment_id,
             equipment_code=info.code,
             prediction_timestamp=t,
-            feature_timestamp=t,
+            feature_timestamp=latest_telemetry,
             detail="Equipment is in an active STOPPED_MECHANICAL incident.",
             model_version=artifact.model_version,
             model_status=artifact.model_status,
@@ -159,7 +218,7 @@ def predict_from_snapshot(
         equipment_id=equipment_id,
         equipment_code=info.code,
         prediction_timestamp=t,
-        feature_timestamp=t,
+        feature_timestamp=latest_telemetry,
         horizon_minutes=HORIZON_MINUTES,
         risk_probability=round(float(probability), 4),
         risk_level=level,
@@ -179,6 +238,7 @@ def predict_failure_risk(
     equipment_id: int,
     prediction_time: datetime,
     *,
+    site_id: int,
     artifacts_dir: Path | None = None,
     artifact: FailureRiskArtifact | None = None,
 ) -> FailureRiskPrediction:
@@ -186,6 +246,7 @@ def predict_failure_risk(
         session,
         [equipment_id],
         prediction_time,
+        site_id=site_id,
         artifacts_dir=artifacts_dir,
         artifact=artifact,
     )[equipment_id]
@@ -196,6 +257,7 @@ def score_equipment(
     equipment_ids: list[int],
     prediction_time: datetime,
     *,
+    site_id: int,
     artifacts_dir: Path | None = None,
     artifact: FailureRiskArtifact | None = None,
 ) -> dict[int, FailureRiskPrediction]:
@@ -209,7 +271,7 @@ def score_equipment(
             )
             for equipment_id in equipment_ids
         }
-    snapshot = load_snapshot(session)
+    snapshot = load_snapshot(session, site_id=site_id)
     return {
         equipment_id: predict_from_snapshot(snapshot, equipment_id, prediction_time, resolved)
         for equipment_id in equipment_ids

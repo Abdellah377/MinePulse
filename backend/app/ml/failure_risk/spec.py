@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 MODEL_VERSION = "failure_risk_v1"
 TRAINING_DATA_TYPE = "synthetic"
@@ -481,12 +481,22 @@ def assign_temporal_splits(
     *,
     horizon_minutes: int = HORIZON_MINUTES,
 ) -> TemporalSplit:
-    assignment, first_val, first_test = _incident_cutoffs(incidents)
+    assignment, _first_val_incident, _first_test_incident = _incident_cutoffs(incidents)
     horizon = timedelta(minutes=horizon_minutes)
     train: list[LabeledWindow] = []
     validation: list[LabeledWindow] = []
     test: list[LabeledWindow] = []
     dropped = 0
+
+    assigned_positive_times: dict[str, list[datetime]] = {
+        "train": [], "validation": [], "test": [],
+    }
+    for window in windows:
+        if window.incident_id is None or window.label != 1:
+            continue
+        assigned_positive_times[assignment[window.incident_id]].append(window.prediction_time)
+    first_val = min(assigned_positive_times["validation"], default=None)
+    first_test = min(assigned_positive_times["test"], default=None)
 
     def put(window: LabeledWindow, name: str) -> None:
         tagged = replace(window, split=name)
@@ -501,7 +511,18 @@ def assign_temporal_splits(
         if window.label is None:
             continue
         if window.incident_id is not None:
-            put(window, assignment[window.incident_id])
+            owner = assignment[window.incident_id]
+            t = window.prediction_time
+            outside_owner_period = (
+                (owner == "train" and first_val is not None and t >= first_val)
+                or (owner == "validation" and first_val is not None and t < first_val)
+                or (owner == "validation" and first_test is not None and t >= first_test)
+                or (owner == "test" and first_test is not None and t < first_test)
+            )
+            if outside_owner_period:
+                dropped += 1
+                continue
+            put(window, owner)
             continue
         t = window.prediction_time
         horizon_end = t + horizon
@@ -537,6 +558,21 @@ def split_has_incident_leakage(split: TemporalSplit) -> bool:
                 continue
             owners.setdefault(window.incident_id, set()).add(name)
     return any(len(names) > 1 for names in owners.values())
+
+
+def required_telemetry_missing_rate(rates_pct: Mapping[str, float]) -> float:
+    """Return the worst required-sensor missing rate as a 0-1 fraction.
+
+    ``rates_pct`` uses the 0-100 missing percentages from feature builders.
+    Optional recency features such as minutes since last maintenance are not
+    required sensors and must not block training by themselves.
+    """
+    selected = [
+        float(value) / 100.0
+        for name, value in rates_pct.items()
+        if any(name == field or name.startswith(f"{field}_") for field in TELEMETRY_FEATURE_FIELDS)
+    ]
+    return max(selected, default=0.0)
 
 
 def do_not_train_for(verdict: str) -> bool:

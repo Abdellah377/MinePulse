@@ -271,6 +271,7 @@ class SimulationEngine:
             speed = float(control.get("speed", self.clock.speed))
             if speed > 0:
                 self.clock.speed = speed
+                self.cfg.speed = speed
         except (TypeError, ValueError):
             pass
         self.world.mode = control.get("mode", self.world.mode)
@@ -344,6 +345,12 @@ class SimulationEngine:
             causal_tick_sim_sec=tick_sim_sec,
             zones_geom=self.zones_geom,
             equipment_by_id=self._equipment_by_id,
+            causal_seed=self.cfg.random_seed,
+            on_causal_recovery=lambda run_id, target_id, recovered_at: self._close_failure_recovery(
+                run_id=run_id,
+                target_id=target_id,
+                recovered_at=recovered_at,
+            ),
         )
 
     def _persist_control(self) -> None:
@@ -816,15 +823,19 @@ class SimulationEngine:
             if level:
                 self._emit_oem_code(truck, code, key, value, level)
             else:
-                truck.active_oem_codes.discard(code)
+                truck.active_oem_codes.discard(f"{code}:")
 
         for pos, tyre in (truck.tyres or {}).items():
             p = float(tyre["pressure_kpa"])
             t = float(tyre["temperature_c"])
             if classify_value("tyre_pressure_kpa", p):
                 self._emit_oem_code(truck, "SIM-TYRE-PRESS-LOW", "tyre_pressure_kpa", p, "warning", pos)
+            else:
+                truck.active_oem_codes.discard(f"SIM-TYRE-PRESS-LOW:{pos}")
             if classify_value("tyre_temp_c", t):
                 self._emit_oem_code(truck, "SIM-TYRE-TEMP-HIGH", "tyre_temp_c", t, "warning", pos)
+            else:
+                truck.active_oem_codes.discard(f"SIM-TYRE-TEMP-HIGH:{pos}")
 
     def _emit_oem_code(
         self,
@@ -1064,7 +1075,7 @@ class SimulationEngine:
                 )
             if transition.maintenance_required and equipment_id:
                 truck = self.world.trucks.get(transition.target_id)
-                if truck is not None and truck.mechanical_hold:
+                if truck is not None and (truck.mechanical_hold or truck.in_maintenance):
                     self._interrupt_truck_work(
                         truck,
                         interrupted_at=transition.occurred_at,

@@ -44,7 +44,12 @@ def current_failure_risk(
             detail=_UNSUPPORTED_DETAIL,
         )
     try:
-        return predict_failure_risk(session, equipment.equipment_id, prediction_time)
+        return predict_failure_risk(
+            session,
+            equipment.equipment_id,
+            prediction_time,
+            site_id=equipment.site_id,
+        )
     except Exception:
         logger.exception(
             "Failure-Risk inference failed for equipment detail",
