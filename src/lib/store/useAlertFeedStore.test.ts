@@ -54,6 +54,23 @@ describe("useAlertFeedStore", () => {
     expect(useAlertFeedStore.getState().byId["alert-1"].status).toBe("resolved")
   })
 
+  it("mapping the feed inside a Zustand selector allocates a new array every snapshot", () => {
+    useAlertFeedStore.getState().mergeHead({
+      items: [alert("alert-1", 1)],
+      nextCursor: null,
+      hasMore: false,
+      activeCount: 1,
+    })
+    const mapInsideSelector = (s: ReturnType<typeof useAlertFeedStore.getState>) =>
+      s.orderedIds.map((id) => s.byId[id]).filter(Boolean)
+    const first = mapInsideSelector(useAlertFeedStore.getState())
+    const second = mapInsideSelector(useAlertFeedStore.getState())
+    expect(first).toEqual(second)
+    expect(first).not.toBe(second)
+    expect(useAlertFeedStore.getState().orderedIds).toBe(useAlertFeedStore.getState().orderedIds)
+    expect(useAlertFeedStore.getState().byId).toBe(useAlertFeedStore.getState().byId)
+  })
+
   it("caps stored ids and does not duplicate on append", () => {
     const rows = Array.from({ length: 12 }, (_, i) => alert(`alert-${i}`, i))
     useAlertFeedStore.getState().appendPage({ items: rows, nextCursor: "c", hasMore: true, activeCount: 12 })

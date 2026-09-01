@@ -7,7 +7,7 @@ import { timeAgo } from "@/lib/format"
 import { operationalAlertTime } from "@/lib/alerts/order"
 import { alertWorkspaceContext } from "@/lib/alerts/notifications"
 import { useOpsStore } from "@/lib/store/useOpsStore"
-import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
+import { useAlertFeedStore, useVisibleAlerts } from "@/lib/store/useAlertFeedStore"
 import { useUiStore } from "@/lib/store/useUiStore"
 import { useWorkspaceStore, useActiveWorkspace } from "@/lib/store/useWorkspaceStore"
 import type { WorkspaceModule, WorkspaceType } from "@/lib/workspace/types"
@@ -79,7 +79,7 @@ export function BrandHeader() {
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
   const setSelectedSite = useOpsStore((s) => s.setSelectedSite)
   const alerts = useOpsStore((s) => s.alerts)
-  const feedAlerts = useAlertFeedStore((s) => s.orderedIds.map((id) => s.byId[id]).filter(Boolean))
+  const feedAlerts = useVisibleAlerts()
   const activeCount = useAlertFeedStore((s) => s.activeCount)
   const simNowIso = useOpsStore((s) => s.simNowIso)
   const apiPollError = useOpsStore((s) => s.apiPollError)
