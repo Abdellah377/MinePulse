@@ -28,6 +28,7 @@ from app.ml.failure_risk.spec import (
     assert_no_forbidden_features,
     filter_history_at_or_before,
 )
+from app.oem.thresholds import classify_value
 from app.ml.failure_risk.spec import FeatureRecord as SpecFeatureRecord
 
 MISSING_CAT = "__missing__"
@@ -62,7 +63,13 @@ NUMERIC_FEATURES: tuple[str, ...] = (
     "maintenance_count_before_t",
     "minutes_since_last_completed_maintenance",
 )
+TEMPORAL_EXTRA_FEATURES: tuple[str, ...] = (
+    *(f"{name}_{stat}" for name in CORE_SENSORS for stat in ("min", "max", "mean_15m")),
+    "oem_warn_sample_count_lookback",
+    "consecutive_abnormal_samples",
+)
 FEATURE_NAMES = CATEGORICAL_FEATURES + NUMERIC_FEATURES
+FEATURE_VERSION = "failure_risk_features_v1"
 
 
 def _history(
@@ -174,6 +181,35 @@ class FeatureRow:
     values: dict[str, Any]
 
 
+def _recent_mean(history: list[TelemetrySample], name: str, prediction_time: datetime, minutes: int) -> float | None:
+    lo = prediction_time - timedelta(minutes=minutes)
+    values = [
+        float(sample.values[name])
+        for sample in history
+        if sample.ts >= lo and sample.values.get(name) is not None
+    ]
+    return _mean(values)
+
+
+def _abnormal_lookback(history: list[TelemetrySample]) -> tuple[float, float]:
+    warn_count = 0.0
+    consecutive = 0
+    longest = 0
+    for sample in history:
+        abnormal = False
+        for name in CORE_SENSORS:
+            value = sample.values.get(name)
+            if value is None:
+                continue
+            if classify_value(name, float(value)) in {"warning", "critical"}:
+                warn_count += 1.0
+                abnormal = True
+                break
+        consecutive = consecutive + 1 if abnormal else 0
+        longest = max(longest, consecutive)
+    return warn_count, float(longest)
+
+
 def _sensor_stats(history: list[TelemetrySample], name: str) -> dict[str, float | None]:
     times, values = _series(history, name)
     latest = values[-1] if values else None
@@ -183,6 +219,8 @@ def _sensor_stats(history: list[TelemetrySample], name: str) -> dict[str, float 
         "std": _std(values),
         "slope": _slope(times, values),
         "change": (values[-1] - values[0]) if len(values) >= 2 else None,
+        "min": min(values) if values else None,
+        "max": max(values) if values else None,
     }
 
 
@@ -215,6 +253,11 @@ def features_for_window(window: LabeledWindow, snapshot: FailureRiskSnapshot) ->
     values["minutes_since_last_oem_event"] = oem_minutes
     values["maintenance_count_before_t"] = maint_count
     values["minutes_since_last_completed_maintenance"] = maint_minutes
+    for name in CORE_SENSORS:
+        values[f"{name}_mean_15m"] = _recent_mean(history, name, window.prediction_time, 15)
+    warn_count, consecutive = _abnormal_lookback(history)
+    values["oem_warn_sample_count_lookback"] = warn_count
+    values["consecutive_abnormal_samples"] = consecutive
     assert_no_forbidden_features(values)
     return FeatureRow(
         equipment_id=window.equipment_id,
@@ -227,21 +270,39 @@ def features_for_window(window: LabeledWindow, snapshot: FailureRiskSnapshot) ->
     )
 
 
-def build_feature_rows(windows: list[LabeledWindow] | tuple[LabeledWindow, ...], snapshot: FailureRiskSnapshot) -> list[FeatureRow]:
-    assert_no_forbidden_features(FEATURE_NAMES)
-    if not FORBIDDEN_FEATURE_NAMES.isdisjoint(FEATURE_NAMES):
+def build_feature_rows(
+    windows: list[LabeledWindow] | tuple[LabeledWindow, ...],
+    snapshot: FailureRiskSnapshot,
+    *,
+    feature_names: tuple[str, ...] = FEATURE_NAMES,
+) -> list[FeatureRow]:
+    assert_no_forbidden_features(feature_names)
+    if not FORBIDDEN_FEATURE_NAMES.isdisjoint(feature_names):
         raise ValueError("Feature schema contains forbidden names.")
     unused = TELEMETRY_FEATURE_FIELDS  # documented source fields; derived names are the schema
     _ = unused
-    return [features_for_window(window, snapshot) for window in windows]
+    rows = [features_for_window(window, snapshot) for window in windows]
+    allowed = set(feature_names)
+    return [
+        FeatureRow(
+            equipment_id=row.equipment_id,
+            prediction_time=row.prediction_time,
+            label=row.label,
+            incident_id=row.incident_id,
+            minutes_to_incident=row.minutes_to_incident,
+            split=row.split,
+            values={name: row.values.get(name) for name in feature_names if name in allowed},
+        )
+        for row in rows
+    ]
 
 
-def missing_rates(rows: list[FeatureRow]) -> dict[str, float]:
+def missing_rates(rows: list[FeatureRow], *, feature_names: tuple[str, ...] = FEATURE_NAMES) -> dict[str, float]:
     if not rows:
-        return {name: 0.0 for name in FEATURE_NAMES}
+        return {name: 0.0 for name in feature_names}
     rates: dict[str, float] = {}
     n = len(rows)
-    for name in FEATURE_NAMES:
+    for name in feature_names:
         missing = 0
         for row in rows:
             value = row.values.get(name)

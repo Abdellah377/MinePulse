@@ -17,9 +17,13 @@ From `backend/`:
 ```
 python -m app.ml.failure_risk.train
 python -m app.ml.failure_risk.train --eval-only
+python -m scripts.run_failure_risk_experiment --primary-seed 42 --robustness-seed 43 --robustness-seed 44 --robustness-seed 45 --robustness-seed 46 --target-cycles 1000
 ```
 
-Requires the configured PostgreSQL snapshot. Does not call an LLM or paid API.
+The experiment command creates a disposable `minepulse_audit_*` database, never
+the configured MinePulse database, and writes a versioned artifact plus
+`reports/failure_risk_v1_experiment.json`. It is **not** field-validated.
+
 
 ## Artifacts
 

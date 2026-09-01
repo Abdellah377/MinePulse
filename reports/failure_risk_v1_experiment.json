@@ -1,0 +1,1298 @@
+{
+  "artifact": {
+    "canonical_joblib": "C:\\Users\\Gigabyte\\Desktop\\MinePulse\\backend\\artifacts\\failure_risk\\failure_risk_v1.joblib",
+    "canonical_metadata": "C:\\Users\\Gigabyte\\Desktop\\MinePulse\\backend\\artifacts\\failure_risk\\failure_risk_v1.metadata.json",
+    "experiment_joblib": "C:\\Users\\Gigabyte\\Desktop\\MinePulse\\backend\\artifacts\\failure_risk\\experiments\\11da14812bef\\failure_risk_v1.joblib",
+    "experiment_metadata": "C:\\Users\\Gigabyte\\Desktop\\MinePulse\\backend\\artifacts\\failure_risk\\experiments\\11da14812bef\\failure_risk_v1.metadata.json"
+  },
+  "audit_database": {
+    "disposable": true,
+    "dropped_after_run": true,
+    "name": "minepulse_audit_frv1_42"
+  },
+  "created_at": "2026-09-01T18:18:14.897873+00:00",
+  "dataset": {
+    "concatenation": "not_used_overlapping_sim_calendars_would_break_temporal_splits",
+    "digest": "11da14812bef21afac30d8ca2d1fbcfe78701700a0c0210852df26a6d27b0791",
+    "equipment_count": 28,
+    "excluded_windows": {
+      "active_incident": 161,
+      "immediate_pre_failure": 65,
+      "insufficient_history": 20
+    },
+    "git_commit": "b76c25cfe18ff264667c2195bd49913742fa02b1",
+    "mechanical_incident_count": 69,
+    "n_incidents_with_60min_precursor": 69,
+    "negative_windows": 2744,
+    "positive_windows": 210,
+    "primary_seed": 42,
+    "readiness_verdict": "READY TO BUILD FAILURE-RISK V1",
+    "robustness_seeds": [
+      43,
+      44,
+      45,
+      46
+    ],
+    "site_id": 1,
+    "split": {
+      "test": 482,
+      "test_positive": 33,
+      "train": 2024,
+      "train_positive": 146,
+      "validation": 346,
+      "validation_positive": 31
+    },
+    "target_cycles_per_seed": 1000,
+    "telemetry_rows": 24520,
+    "time_range": {
+      "end": "2026-01-30T23:51:00+01:00",
+      "start": "2026-01-29T07:01:00+01:00"
+    }
+  },
+  "decision": "LOGISTIC_PROMOTED",
+  "features": {
+    "ablation": [
+      {
+        "feature_set": "v1",
+        "hgb_val_pr_auc": 0.8929,
+        "logistic_val_pr_auc": 0.9195,
+        "n_features": 37,
+        "oem_val_pr_auc": 0.2145
+      },
+      {
+        "feature_set": "v1_temporal",
+        "hgb_val_pr_auc": 0.8894,
+        "logistic_val_pr_auc": 0.9059,
+        "n_features": 51,
+        "oem_val_pr_auc": 0.2145
+      }
+    ],
+    "audit": {
+      "forbidden_in_schema": [],
+      "n_rows": 2852,
+      "near_constant_features": [],
+      "profiles": [
+        {
+          "feature": "current_state",
+          "kind": "categorical",
+          "leakage_risk": false,
+          "missing_pct": 0.0,
+          "n_unique": 7,
+          "near_constant": false
+        },
+        {
+          "feature": "engine_temp_c_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 108.0,
+          "mean": 95.0369,
+          "min": 56.5,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 5.167466
+        },
+        {
+          "feature": "engine_temp_c_mean",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 102.7226,
+          "mean": 94.1192,
+          "min": 67.3516,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 4.812295
+        },
+        {
+          "feature": "engine_temp_c_std",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 18.1891,
+          "mean": 3.6882,
+          "min": 0.4946,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 2.552745
+        },
+        {
+          "feature": "engine_temp_c_slope",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 0.8288,
+          "mean": 0.0184,
+          "min": -0.9883,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 0.176827
+        },
+        {
+          "feature": "engine_temp_c_change",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 46.8,
+          "mean": 1.1618,
+          "min": -49.1,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 8.713019
+        },
+        {
+          "feature": "coolant_temp_c_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 101.5,
+          "mean": 88.8638,
+          "min": 51.6,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 5.069929
+        },
+        {
+          "feature": "coolant_temp_c_mean",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 96.3323,
+          "mean": 87.9767,
+          "min": 61.1323,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 4.923362
+        },
+        {
+          "feature": "coolant_temp_c_std",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 17.5371,
+          "mean": 3.2724,
+          "min": 0.375,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 2.507737
+        },
+        {
+          "feature": "coolant_temp_c_slope",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 0.7933,
+          "mean": 0.018,
+          "min": -0.9532,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 0.170403
+        },
+        {
+          "feature": "coolant_temp_c_change",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 44.2,
+          "mean": 1.1285,
+          "min": -47.4,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 8.361114
+        },
+        {
+          "feature": "oil_pressure_kpa_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 497.7,
+          "mean": 447.7506,
+          "min": 40.1,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 44.443305
+        },
+        {
+          "feature": "oil_pressure_kpa_mean",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 475.16,
+          "mean": 435.7145,
+          "min": 73.9267,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 66.332205
+        },
+        {
+          "feature": "oil_pressure_kpa_std",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 184.2777,
+          "mean": 28.714,
+          "min": 3.2627,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 38.533132
+        },
+        {
+          "feature": "oil_pressure_kpa_slope",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 9.8852,
+          "mean": 0.3381,
+          "min": -9.5756,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 2.084617
+        },
+        {
+          "feature": "oil_pressure_kpa_change",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 447.3,
+          "mean": 19.2989,
+          "min": -328.2,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 99.510863
+        },
+        {
+          "feature": "battery_voltage_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 27.4,
+          "mean": 27.34,
+          "min": 23.01,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 0.330866
+        },
+        {
+          "feature": "battery_voltage_mean",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 27.4,
+          "mean": 27.3058,
+          "min": 23.4648,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 0.335922
+        },
+        {
+          "feature": "battery_voltage_std",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 1.7397,
+          "mean": 0.0678,
+          "min": 0.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 0.200663
+        },
+        {
+          "feature": "battery_voltage_slope",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 0.0949,
+          "mean": 0.0011,
+          "min": -0.0726,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 0.010581
+        },
+        {
+          "feature": "battery_voltage_change",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 5.11,
+          "mean": 0.0612,
+          "min": -4.25,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 0.551282
+        },
+        {
+          "feature": "engine_load_pct_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 100.0,
+          "mean": 48.0449,
+          "min": 0.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 36.37702
+        },
+        {
+          "feature": "engine_load_pct_mean",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 71.2133,
+          "mean": 45.6941,
+          "min": 1.3333,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 11.318935
+        },
+        {
+          "feature": "engine_rpm_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 1893.0,
+          "mean": 1384.9271,
+          "min": 0.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 452.924397
+        },
+        {
+          "feature": "engine_rpm_mean",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 1644.2903,
+          "mean": 1327.1175,
+          "min": 125.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 214.487346
+        },
+        {
+          "feature": "fuel_rate_lph_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 31.53,
+          "mean": 14.4584,
+          "min": 0.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 9.988689
+        },
+        {
+          "feature": "fuel_rate_lph_mean",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 20.6637,
+          "mean": 13.8015,
+          "min": 0.4167,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 3.221666
+        },
+        {
+          "feature": "speed_kmh_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 41.2,
+          "mean": 16.7536,
+          "min": 0.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 13.542218
+        },
+        {
+          "feature": "payload_t_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 180.2,
+          "mean": 81.0039,
+          "min": 0.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 82.650136
+        },
+        {
+          "feature": "communication_quality_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 96.0,
+          "mean": 93.9095,
+          "min": 88.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 1.011619
+        },
+        {
+          "feature": "fuel_level_pct_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 100.0,
+          "mean": 55.7161,
+          "min": 9.4,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 24.26923
+        },
+        {
+          "feature": "engine_hours_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 22980.97,
+          "mean": 15107.6326,
+          "min": 5184.37,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 5906.324076
+        },
+        {
+          "feature": "odometer_km_latest",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 78728.18,
+          "mean": 49162.8883,
+          "min": 24124.17,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 16263.13054
+        },
+        {
+          "feature": "oem_event_count_lookback",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 3.0,
+          "mean": 1.2682,
+          "min": 0.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 0.666205
+        },
+        {
+          "feature": "minutes_since_last_oem_event",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 230.0,
+          "mean": 28.7969,
+          "min": 0.0,
+          "missing_pct": 1.8,
+          "near_constant": false,
+          "std": 26.584533
+        },
+        {
+          "feature": "maintenance_count_before_t",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 4.0,
+          "mean": 1.6003,
+          "min": 0.0,
+          "missing_pct": 0.0,
+          "near_constant": false,
+          "std": 1.079309
+        },
+        {
+          "feature": "minutes_since_last_completed_maintenance",
+          "kind": "numeric",
+          "leakage_risk": false,
+          "max": 1174.0,
+          "mean": 354.2106,
+          "min": 1.0,
+          "missing_pct": 18.3,
+          "near_constant": false,
+          "std": 260.971182
+        }
+      ]
+    },
+    "existing": [
+      "current_state",
+      "engine_temp_c_latest",
+      "engine_temp_c_mean",
+      "engine_temp_c_std",
+      "engine_temp_c_slope",
+      "engine_temp_c_change",
+      "coolant_temp_c_latest",
+      "coolant_temp_c_mean",
+      "coolant_temp_c_std",
+      "coolant_temp_c_slope",
+      "coolant_temp_c_change",
+      "oil_pressure_kpa_latest",
+      "oil_pressure_kpa_mean",
+      "oil_pressure_kpa_std",
+      "oil_pressure_kpa_slope",
+      "oil_pressure_kpa_change",
+      "battery_voltage_latest",
+      "battery_voltage_mean",
+      "battery_voltage_std",
+      "battery_voltage_slope",
+      "battery_voltage_change",
+      "engine_load_pct_latest",
+      "engine_load_pct_mean",
+      "engine_rpm_latest",
+      "engine_rpm_mean",
+      "fuel_rate_lph_latest",
+      "fuel_rate_lph_mean",
+      "speed_kmh_latest",
+      "payload_t_latest",
+      "communication_quality_latest",
+      "fuel_level_pct_latest",
+      "engine_hours_latest",
+      "odometer_km_latest",
+      "oem_event_count_lookback",
+      "minutes_since_last_oem_event",
+      "maintenance_count_before_t",
+      "minutes_since_last_completed_maintenance"
+    ],
+    "permutation_importance_hgb_default": [
+      {
+        "feature": "oil_pressure_kpa_latest",
+        "importance_mean": 0.16174,
+        "importance_std": 0.017743
+      },
+      {
+        "feature": "battery_voltage_change",
+        "importance_mean": 0.071499,
+        "importance_std": 0.005039
+      },
+      {
+        "feature": "coolant_temp_c_change",
+        "importance_mean": 0.033603,
+        "importance_std": 0.00705
+      },
+      {
+        "feature": "battery_voltage_latest",
+        "importance_mean": 0.026698,
+        "importance_std": 0.001912
+      },
+      {
+        "feature": "coolant_temp_c_latest",
+        "importance_mean": 0.015104,
+        "importance_std": 0.018298
+      },
+      {
+        "feature": "communication_quality_latest",
+        "importance_mean": 0.013516,
+        "importance_std": 0.003136
+      },
+      {
+        "feature": "speed_kmh_latest",
+        "importance_mean": 0.011661,
+        "importance_std": 0.004238
+      },
+      {
+        "feature": "oil_pressure_kpa_mean",
+        "importance_mean": 0.007627,
+        "importance_std": 0.012642
+      },
+      {
+        "feature": "coolant_temp_c_std",
+        "importance_mean": 0.007242,
+        "importance_std": 0.005367
+      },
+      {
+        "feature": "engine_load_pct_latest",
+        "importance_mean": 0.007066,
+        "importance_std": 0.006155
+      },
+      {
+        "feature": "fuel_rate_lph_mean",
+        "importance_mean": 0.006034,
+        "importance_std": 0.004625
+      },
+      {
+        "feature": "engine_hours_latest",
+        "importance_mean": 0.005505,
+        "importance_std": 0.00212
+      },
+      {
+        "feature": "engine_load_pct_mean",
+        "importance_mean": 0.005354,
+        "importance_std": 0.003353
+      },
+      {
+        "feature": "engine_temp_c_mean",
+        "importance_mean": 0.004302,
+        "importance_std": 0.00612
+      },
+      {
+        "feature": "engine_temp_c_latest",
+        "importance_mean": 0.003884,
+        "importance_std": 0.005964
+      },
+      {
+        "feature": "battery_voltage_std",
+        "importance_mean": 0.003509,
+        "importance_std": 0.000935
+      },
+      {
+        "feature": "current_state",
+        "importance_mean": 0.002842,
+        "importance_std": 0.006438
+      },
+      {
+        "feature": "minutes_since_last_oem_event",
+        "importance_mean": 0.002048,
+        "importance_std": 0.002736
+      },
+      {
+        "feature": "battery_voltage_mean",
+        "importance_mean": 0.001243,
+        "importance_std": 0.000901
+      },
+      {
+        "feature": "minutes_since_last_completed_maintenance",
+        "importance_mean": 0.001032,
+        "importance_std": 0.001911
+      },
+      {
+        "feature": "odometer_km_latest",
+        "importance_mean": 0.000754,
+        "importance_std": 0.004882
+      },
+      {
+        "feature": "coolant_temp_c_slope",
+        "importance_mean": 0.000614,
+        "importance_std": 0.00794
+      },
+      {
+        "feature": "battery_voltage_slope",
+        "importance_mean": 0.000119,
+        "importance_std": 0.000595
+      },
+      {
+        "feature": "oem_event_count_lookback",
+        "importance_mean": 0.0,
+        "importance_std": 0.0
+      },
+      {
+        "feature": "maintenance_count_before_t",
+        "importance_mean": 0.0,
+        "importance_std": 0.0
+      },
+      {
+        "feature": "engine_temp_c_slope",
+        "importance_mean": -0.000191,
+        "importance_std": 0.004494
+      },
+      {
+        "feature": "oil_pressure_kpa_change",
+        "importance_mean": -0.000579,
+        "importance_std": 0.002735
+      },
+      {
+        "feature": "fuel_level_pct_latest",
+        "importance_mean": -0.000596,
+        "importance_std": 0.001531
+      },
+      {
+        "feature": "oil_pressure_kpa_std",
+        "importance_mean": -0.000777,
+        "importance_std": 0.007028
+      },
+      {
+        "feature": "engine_rpm_mean",
+        "importance_mean": -0.001379,
+        "importance_std": 0.001972
+      },
+      {
+        "feature": "fuel_rate_lph_latest",
+        "importance_mean": -0.001403,
+        "importance_std": 0.003642
+      },
+      {
+        "feature": "engine_temp_c_std",
+        "importance_mean": -0.00161,
+        "importance_std": 0.005583
+      },
+      {
+        "feature": "payload_t_latest",
+        "importance_mean": -0.001802,
+        "importance_std": 0.001569
+      },
+      {
+        "feature": "engine_rpm_latest",
+        "importance_mean": -0.002093,
+        "importance_std": 0.0014
+      },
+      {
+        "feature": "engine_temp_c_change",
+        "importance_mean": -0.004393,
+        "importance_std": 0.002297
+      },
+      {
+        "feature": "oil_pressure_kpa_slope",
+        "importance_mean": -0.005658,
+        "importance_std": 0.011359
+      },
+      {
+        "feature": "coolant_temp_c_mean",
+        "importance_mean": -0.009279,
+        "importance_std": 0.00532
+      }
+    ],
+    "selected": [
+      "current_state",
+      "engine_temp_c_latest",
+      "engine_temp_c_mean",
+      "engine_temp_c_std",
+      "engine_temp_c_slope",
+      "engine_temp_c_change",
+      "coolant_temp_c_latest",
+      "coolant_temp_c_mean",
+      "coolant_temp_c_std",
+      "coolant_temp_c_slope",
+      "coolant_temp_c_change",
+      "oil_pressure_kpa_latest",
+      "oil_pressure_kpa_mean",
+      "oil_pressure_kpa_std",
+      "oil_pressure_kpa_slope",
+      "oil_pressure_kpa_change",
+      "battery_voltage_latest",
+      "battery_voltage_mean",
+      "battery_voltage_std",
+      "battery_voltage_slope",
+      "battery_voltage_change",
+      "engine_load_pct_latest",
+      "engine_load_pct_mean",
+      "engine_rpm_latest",
+      "engine_rpm_mean",
+      "fuel_rate_lph_latest",
+      "fuel_rate_lph_mean",
+      "speed_kmh_latest",
+      "payload_t_latest",
+      "communication_quality_latest",
+      "fuel_level_pct_latest",
+      "engine_hours_latest",
+      "odometer_km_latest",
+      "oem_event_count_lookback",
+      "minutes_since_last_oem_event",
+      "maintenance_count_before_t",
+      "minutes_since_last_completed_maintenance"
+    ],
+    "temporal_candidates": [
+      "engine_temp_c_min",
+      "engine_temp_c_max",
+      "engine_temp_c_mean_15m",
+      "coolant_temp_c_min",
+      "coolant_temp_c_max",
+      "coolant_temp_c_mean_15m",
+      "oil_pressure_kpa_min",
+      "oil_pressure_kpa_max",
+      "oil_pressure_kpa_mean_15m",
+      "battery_voltage_min",
+      "battery_voltage_max",
+      "battery_voltage_mean_15m",
+      "oem_warn_sample_count_lookback",
+      "consecutive_abnormal_samples"
+    ]
+  },
+  "hgb_baseline_validation": {
+    "n": 346.0,
+    "n_negative": 315.0,
+    "n_positive": 31.0,
+    "pr_auc": 0.8929,
+    "roc_auc": 0.9855
+  },
+  "hgb_tuning": {
+    "default": {
+      "n": 346.0,
+      "n_negative": 315.0,
+      "n_positive": 31.0,
+      "pr_auc": 0.8929,
+      "roc_auc": 0.9855
+    },
+    "reason": "Limited tuning did not beat the default HGB by the 5% relative PR-AUC bar.",
+    "relative_improvement": 0.0136,
+    "selected": "default",
+    "selected_params": {
+      "l2_regularization": 0.1,
+      "learning_rate": 0.1,
+      "max_bins": 255,
+      "max_depth": 3,
+      "max_iter": 80,
+      "min_samples_leaf": 10
+    },
+    "tuned": {
+      "n": 346.0,
+      "n_negative": 315.0,
+      "n_positive": 31.0,
+      "pr_auc": 0.905,
+      "roc_auc": 0.9843
+    }
+  },
+  "prototype": true,
+  "ready_for_prototype_integration": true,
+  "robustness": {
+    "hgb_val_pr_auc_max": {
+      "seed": 44,
+      "value": 0.9331
+    },
+    "hgb_val_pr_auc_mean": 0.9145,
+    "hgb_val_pr_auc_min": {
+      "seed": 45,
+      "value": 0.8814
+    },
+    "hgb_val_pr_auc_std": 0.0199,
+    "retrain": [
+      {
+        "digest": "1a7290bae4144f4f440f5016b54dde52519f6ca02f4c3d3bdda243ab989674d1",
+        "hgb_pr_auc": 0.9262,
+        "n_incidents": 73,
+        "readiness_verdict": "READY TO BUILD FAILURE-RISK V1",
+        "retrain_test_pr_auc": {
+          "hgb": 0.9113,
+          "logistic": 0.8476,
+          "oem_threshold": 0.2629
+        },
+        "retrain_val_pr_auc": {
+          "hgb": 0.9262,
+          "logistic": 0.9283,
+          "oem_threshold": 0.324,
+          "prevalence": 0.0808
+        },
+        "seed": 43,
+        "transfer_test": {
+          "hgb": 0.8836,
+          "logistic": 0.8537,
+          "oem_threshold": 0.2629,
+          "prevalence": 0.0794
+        }
+      },
+      {
+        "digest": "733efd2a748166e7142e9db99a5ae62f78dd0e290ff944e3d9efa58231c9f02a",
+        "hgb_pr_auc": 0.9331,
+        "n_incidents": 70,
+        "readiness_verdict": "READY TO BUILD FAILURE-RISK V1",
+        "retrain_test_pr_auc": {
+          "hgb": 0.9011,
+          "logistic": 0.8012,
+          "oem_threshold": 0.2262
+        },
+        "retrain_val_pr_auc": {
+          "hgb": 0.9331,
+          "logistic": 0.9298,
+          "oem_threshold": 0.2731,
+          "prevalence": 0.074
+        },
+        "seed": 44,
+        "transfer_test": {
+          "hgb": 0.8177,
+          "logistic": 0.8026,
+          "oem_threshold": 0.2262,
+          "prevalence": 0.0762
+        }
+      },
+      {
+        "digest": "8006e1b2e37aa26a8fb6b9267024bb526a53bfd8a4760d5f1fa4496ac44cd6e1",
+        "hgb_pr_auc": 0.8814,
+        "n_incidents": 70,
+        "readiness_verdict": "READY TO BUILD FAILURE-RISK V1",
+        "retrain_test_pr_auc": {
+          "hgb": 0.9338,
+          "logistic": 0.9163,
+          "oem_threshold": 0.1992
+        },
+        "retrain_val_pr_auc": {
+          "hgb": 0.8814,
+          "logistic": 0.9054,
+          "oem_threshold": 0.2356,
+          "prevalence": 0.0866
+        },
+        "seed": 45,
+        "transfer_test": {
+          "hgb": 0.9253,
+          "logistic": 0.88,
+          "oem_threshold": 0.1992,
+          "prevalence": 0.0733
+        }
+      },
+      {
+        "digest": "1a1c46d6408bf63fb666d21d39c5c14064179d711dddf7cb4763c5e8d1c57ab7",
+        "hgb_pr_auc": 0.9175,
+        "n_incidents": 71,
+        "readiness_verdict": "READY TO BUILD FAILURE-RISK V1",
+        "retrain_test_pr_auc": {
+          "hgb": 0.8189,
+          "logistic": 0.8621,
+          "oem_threshold": 0.1918
+        },
+        "retrain_val_pr_auc": {
+          "hgb": 0.9175,
+          "logistic": 0.9285,
+          "oem_threshold": 0.3139,
+          "prevalence": 0.0827
+        },
+        "seed": 46,
+        "transfer_test": {
+          "hgb": 0.8407,
+          "logistic": 0.8526,
+          "oem_threshold": 0.1918,
+          "prevalence": 0.0688
+        }
+      }
+    ],
+    "seeds": [
+      43,
+      44,
+      45,
+      46
+    ]
+  },
+  "test_once": {
+    "hgb": {
+      "calibration": {
+        "bins": [
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.0048
+          },
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.0078
+          },
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.011
+          },
+          {
+            "fraction_positive": 0.0167,
+            "mean_predicted": 0.0148
+          },
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.0212
+          },
+          {
+            "fraction_positive": 0.0333,
+            "mean_predicted": 0.0327
+          },
+          {
+            "fraction_positive": 0.0167,
+            "mean_predicted": 0.0669
+          },
+          {
+            "fraction_positive": 0.4754,
+            "mean_predicted": 0.5605
+          }
+        ],
+        "brier": 0.0228
+      },
+      "f1": 0.8182,
+      "false_negatives": 6.0,
+      "false_positives": 6.0,
+      "n": 482.0,
+      "n_negative": 449.0,
+      "n_positive": 33.0,
+      "operational": {
+        "false_alarms_per_equipment_hour": 0.0498,
+        "incident_recall": 1.0,
+        "incidents_detected": 11.0,
+        "incidents_in_split": 11.0,
+        "median_warning_lead_time_min": 48.0
+      },
+      "pr_auc": 0.8372,
+      "precision": 0.8182,
+      "recall": 0.8182,
+      "roc_auc": 0.9583,
+      "threshold": 0.5,
+      "true_negatives": 443.0,
+      "true_positives": 27.0
+    },
+    "logistic": {
+      "calibration": {
+        "bins": [
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.0001
+          },
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.0006
+          },
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.0013
+          },
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.0028
+          },
+          {
+            "fraction_positive": 0.0,
+            "mean_predicted": 0.0054
+          },
+          {
+            "fraction_positive": 0.0333,
+            "mean_predicted": 0.0119
+          },
+          {
+            "fraction_positive": 0.0167,
+            "mean_predicted": 0.0391
+          },
+          {
+            "fraction_positive": 0.4918,
+            "mean_predicted": 0.5738
+          }
+        ],
+        "brier": 0.0183
+      },
+      "f1": 0.75,
+      "false_negatives": 12.0,
+      "false_positives": 2.0,
+      "n": 482.0,
+      "n_negative": 449.0,
+      "n_positive": 33.0,
+      "operational": {
+        "false_alarms_per_equipment_hour": 0.0166,
+        "incident_recall": 0.9091,
+        "incidents_detected": 10.0,
+        "incidents_in_split": 11.0,
+        "median_warning_lead_time_min": 40.5
+      },
+      "pr_auc": 0.8351,
+      "precision": 0.913,
+      "recall": 0.6364,
+      "roc_auc": 0.9737,
+      "threshold": 0.9494476398891302,
+      "true_negatives": 447.0,
+      "true_positives": 21.0
+    },
+    "oem_threshold": {
+      "f1": 0.2515,
+      "false_negatives": 12.0,
+      "false_positives": 113.0,
+      "n": 482.0,
+      "n_negative": 449.0,
+      "n_positive": 33.0,
+      "operational": {
+        "false_alarms_per_equipment_hour": 0.9378,
+        "incident_recall": 1.0,
+        "incidents_detected": 11.0,
+        "incidents_in_split": 11.0,
+        "median_warning_lead_time_min": 33.0
+      },
+      "pr_auc": 0.275,
+      "precision": 0.1567,
+      "recall": 0.6364,
+      "roc_auc": 0.7331,
+      "threshold": 0.5,
+      "true_negatives": 336.0,
+      "true_positives": 21.0
+    },
+    "prevalence": {
+      "f1": 0.0,
+      "false_negatives": 33.0,
+      "false_positives": 0.0,
+      "n": 482.0,
+      "n_negative": 449.0,
+      "n_positive": 33.0,
+      "operational": {
+        "false_alarms_per_equipment_hour": 0.0,
+        "incident_recall": 0.0,
+        "incidents_detected": 0.0,
+        "incidents_in_split": 11.0,
+        "median_warning_lead_time_min": null
+      },
+      "pr_auc": 0.0685,
+      "precision": 0.0,
+      "recall": 0.0,
+      "roc_auc": 0.5,
+      "threshold": 0.5,
+      "true_negatives": 449.0,
+      "true_positives": 0.0
+    }
+  },
+  "threshold": {
+    "candidates": [
+      {
+        "f1": 0.7895,
+        "false_alarms_per_equipment_hour": 0.1734,
+        "false_negatives": 1.0,
+        "false_positives": 15.0,
+        "incident_recall": 1.0,
+        "incidents_detected": 10.0,
+        "incidents_in_split": 10.0,
+        "median_warning_lead_time_min": 48.0,
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.9195,
+        "precision": 0.6667,
+        "recall": 0.9677,
+        "roc_auc": 0.9924,
+        "threshold": 0.25,
+        "true_negatives": 300.0,
+        "true_positives": 30.0
+      },
+      {
+        "f1": 0.8108,
+        "false_alarms_per_equipment_hour": 0.1503,
+        "false_negatives": 1.0,
+        "false_positives": 13.0,
+        "incident_recall": 1.0,
+        "incidents_detected": 10.0,
+        "incidents_in_split": 10.0,
+        "median_warning_lead_time_min": 48.0,
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.9195,
+        "precision": 0.6977,
+        "recall": 0.9677,
+        "roc_auc": 0.9924,
+        "threshold": 0.35,
+        "true_negatives": 302.0,
+        "true_positives": 30.0
+      },
+      {
+        "f1": 0.8451,
+        "false_alarms_per_equipment_hour": 0.1156,
+        "false_negatives": 1.0,
+        "false_positives": 10.0,
+        "incident_recall": 1.0,
+        "incidents_detected": 10.0,
+        "incidents_in_split": 10.0,
+        "median_warning_lead_time_min": 48.0,
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.9195,
+        "precision": 0.75,
+        "recall": 0.9677,
+        "roc_auc": 0.9924,
+        "threshold": 0.45,
+        "true_negatives": 305.0,
+        "true_positives": 30.0
+      },
+      {
+        "f1": 0.8451,
+        "false_alarms_per_equipment_hour": 0.1156,
+        "false_negatives": 1.0,
+        "false_positives": 10.0,
+        "incident_recall": 1.0,
+        "incidents_detected": 10.0,
+        "incidents_in_split": 10.0,
+        "median_warning_lead_time_min": 48.0,
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.9195,
+        "precision": 0.75,
+        "recall": 0.9677,
+        "roc_auc": 0.9924,
+        "threshold": 0.5,
+        "true_negatives": 305.0,
+        "true_positives": 30.0
+      },
+      {
+        "f1": 0.8451,
+        "false_alarms_per_equipment_hour": 0.1156,
+        "false_negatives": 1.0,
+        "false_positives": 10.0,
+        "incident_recall": 1.0,
+        "incidents_detected": 10.0,
+        "incidents_in_split": 10.0,
+        "median_warning_lead_time_min": 48.0,
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.9195,
+        "precision": 0.75,
+        "recall": 0.9677,
+        "roc_auc": 0.9924,
+        "threshold": 0.55,
+        "true_negatives": 305.0,
+        "true_positives": 30.0
+      },
+      {
+        "f1": 0.8696,
+        "false_alarms_per_equipment_hour": 0.0925,
+        "false_negatives": 1.0,
+        "false_positives": 8.0,
+        "incident_recall": 1.0,
+        "incidents_detected": 10.0,
+        "incidents_in_split": 10.0,
+        "median_warning_lead_time_min": 48.0,
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.9195,
+        "precision": 0.7895,
+        "recall": 0.9677,
+        "roc_auc": 0.9924,
+        "threshold": 0.65,
+        "true_negatives": 307.0,
+        "true_positives": 30.0
+      },
+      {
+        "f1": 0.8955,
+        "false_alarms_per_equipment_hour": 0.0694,
+        "false_negatives": 1.0,
+        "false_positives": 6.0,
+        "incident_recall": 1.0,
+        "incidents_detected": 10.0,
+        "incidents_in_split": 10.0,
+        "median_warning_lead_time_min": 48.0,
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.9195,
+        "precision": 0.8333,
+        "recall": 0.9677,
+        "roc_auc": 0.9924,
+        "threshold": 0.75,
+        "true_negatives": 309.0,
+        "true_positives": 30.0
+      }
+    ],
+    "f1_max_operating": {
+      "f1": 0.9091,
+      "false_alarms_per_equipment_hour": 0.0578,
+      "false_negatives": 1.0,
+      "false_positives": 5.0,
+      "incident_recall": 1.0,
+      "incidents_detected": 10.0,
+      "incidents_in_split": 10.0,
+      "median_warning_lead_time_min": 48.0,
+      "n": 346.0,
+      "precision": 0.8571,
+      "recall": 0.9677,
+      "true_negatives": 310.0,
+      "true_positives": 30.0
+    },
+    "f1_max_threshold": 0.9494476398891302,
+    "rule": "Operating threshold maximizes validation F1. Candidate table is reported for recall vs false-alarm trade-offs; the test set is not used.",
+    "selected_threshold": 0.9494476398891302
+  },
+  "training_data_type": "synthetic",
+  "validation": {
+    "baseline": {
+      "oem_threshold": {
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.2145,
+        "roc_auc": 0.6939
+      },
+      "prevalence": {
+        "n": 346.0,
+        "n_negative": 315.0,
+        "n_positive": 31.0,
+        "pr_auc": 0.0896,
+        "roc_auc": 0.5
+      }
+    },
+    "decision_reason": "Selected learned model validation PR-AUC improves on the best deterministic baseline by at least the minimum promotion threshold",
+    "hgb": {
+      "n": 346.0,
+      "n_negative": 315.0,
+      "n_positive": 31.0,
+      "pr_auc": 0.8929,
+      "roc_auc": 0.9855
+    },
+    "logistic": {
+      "n": 346.0,
+      "n_negative": 315.0,
+      "n_positive": 31.0,
+      "pr_auc": 0.9195,
+      "roc_auc": 0.9924
+    },
+    "ml_promoted": true,
+    "served": {
+      "f1": 0.9091,
+      "false_negatives": 1.0,
+      "false_positives": 5.0,
+      "n": 346.0,
+      "n_negative": 315.0,
+      "n_positive": 31.0,
+      "pr_auc": 0.9195,
+      "precision": 0.8571,
+      "recall": 0.9677,
+      "roc_auc": 0.9924,
+      "threshold": 0.9494476398891302,
+      "true_negatives": 310.0,
+      "true_positives": 30.0
+    },
+    "served_operational": {
+      "false_alarms_per_equipment_hour": 0.0578,
+      "incident_recall": 1.0,
+      "incidents_detected": 10.0,
+      "incidents_in_split": 10.0,
+      "median_warning_lead_time_min": 48.0
+    }
+  }
+}

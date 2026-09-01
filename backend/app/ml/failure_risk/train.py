@@ -88,16 +88,25 @@ def _split_bounds(rows: list[FeatureRow]) -> dict[str, Any]:
     }
 
 
-def _fit_hgb(train: list[FeatureRow], val: list[FeatureRow]) -> tuple[Any, dict[str, float | None], dict[str, Any]]:
+def _fit_hgb(
+    train: list[FeatureRow],
+    val: list[FeatureRow],
+    *,
+    param_grid: tuple[dict[str, Any], ...] = HGB_GRID,
+    feature_names: tuple[str, ...] = FEATURE_NAMES,
+) -> tuple[Any, dict[str, float | None], dict[str, Any]]:
     y_train = labels_of(train)
     y_val = labels_of(val)
     best_pipeline = None
     best_metrics: dict[str, float | None] | None = None
     best_params: dict[str, Any] = {}
-    for params in HGB_GRID:
-        pipeline = build_hgb_pipeline(**params)
-        pipeline.fit(rows_to_matrix(train), y_train)
-        metrics = ranking_metrics(y_val, predict_proba_positive(pipeline, val))
+    x_train = rows_to_matrix(train, feature_names=feature_names)
+    for params in param_grid:
+        pipeline = build_hgb_pipeline(feature_names=feature_names, **params)
+        pipeline.fit(x_train, y_train)
+        metrics = ranking_metrics(
+            y_val, predict_proba_positive(pipeline, val, feature_names=feature_names)
+        )
         if best_metrics is None or (metrics["pr_auc"] or -1) > (best_metrics["pr_auc"] or -1):
             best_pipeline = pipeline
             best_metrics = metrics
@@ -106,23 +115,34 @@ def _fit_hgb(train: list[FeatureRow], val: list[FeatureRow]) -> tuple[Any, dict[
     return best_pipeline, best_metrics, best_params
 
 
-def _scores_for(name: str, artifact: FailureRiskArtifact, rows: list[FeatureRow]) -> list[float]:
+def _scores_for(
+    name: str,
+    artifact: FailureRiskArtifact,
+    rows: list[FeatureRow],
+    *,
+    feature_names: tuple[str, ...] = FEATURE_NAMES,
+) -> list[float]:
     if name == "logistic":
         if artifact.logistic is None:
             raise ValueError("Logistic pipeline missing.")
-        return predict_proba_positive(artifact.logistic, rows)
+        return predict_proba_positive(artifact.logistic, rows, feature_names=feature_names)
     if name == "hgb":
         if artifact.hgb is None:
             raise ValueError("HGB pipeline missing.")
-        return predict_proba_positive(artifact.hgb, rows)
+        return predict_proba_positive(artifact.hgb, rows, feature_names=feature_names)
     return artifact.baselines.predict(name, rows)
 
 
-def _importance_for(name: str, artifact: FailureRiskArtifact) -> list[tuple[str, float]]:
+def _importance_for(
+    name: str,
+    artifact: FailureRiskArtifact,
+    *,
+    feature_names: tuple[str, ...] = FEATURE_NAMES,
+) -> list[tuple[str, float]]:
     if name == "logistic" and artifact.logistic is not None:
-        return feature_importance(artifact.logistic, "logistic")[:12]
+        return feature_importance(artifact.logistic, "logistic", feature_names=feature_names)[:12]
     if name == "hgb" and artifact.hgb is not None:
-        return feature_importance(artifact.hgb, "hgb")[:12]
+        return feature_importance(artifact.hgb, "hgb", feature_names=feature_names)[:12]
     return []
 
 
@@ -131,6 +151,10 @@ def train_from_rows(
     *,
     excluded: dict[str, int] | None = None,
     extra_metadata: dict[str, Any] | None = None,
+    hgb_param_grid: tuple[dict[str, Any], ...] = HGB_GRID,
+    include_test: bool = True,
+    feature_names: tuple[str, ...] = FEATURE_NAMES,
+    select_threshold: bool = True,
 ) -> tuple[FailureRiskArtifact, dict[str, Any]]:
     train, val, test = _split_rows(rows)
     if not train or not val:
@@ -142,10 +166,14 @@ def train_from_rows(
         "prevalence": ranking_metrics(y_val, baselines.predict_prevalence(val)),
         "oem_threshold": ranking_metrics(y_val, baselines.predict_oem_score(val)),
     }
-    logistic = build_logistic_pipeline()
-    logistic.fit(rows_to_matrix(train), labels_of(train))
-    logistic_val = ranking_metrics(y_val, predict_proba_positive(logistic, val))
-    hgb, hgb_val, hgb_params = _fit_hgb(train, val)
+    logistic = build_logistic_pipeline(feature_names=feature_names)
+    logistic.fit(rows_to_matrix(train, feature_names=feature_names), labels_of(train))
+    logistic_val = ranking_metrics(
+        y_val, predict_proba_positive(logistic, val, feature_names=feature_names)
+    )
+    hgb, hgb_val, hgb_params = _fit_hgb(
+        train, val, param_grid=hgb_param_grid, feature_names=feature_names
+    )
 
     decision = select_served_predictor(
         logistic_pr_auc=logistic_val["pr_auc"],
@@ -160,30 +188,19 @@ def train_from_rows(
         baselines=baselines,
         served_predictor=decision.served_predictor,
         threshold=0.5,
-        feature_names=FEATURE_NAMES,
+        feature_names=feature_names,
         model_status=decision.model_status,
     )
-    val_scores = _scores_for(decision.served_predictor, artifact, val)
-    threshold, val_operating = select_threshold_max_f1(y_val, val_scores)
+    val_scores = _scores_for(decision.served_predictor, artifact, val, feature_names=feature_names)
+    if select_threshold:
+        threshold, val_operating = select_threshold_max_f1(y_val, val_scores)
+    else:
+        threshold, val_operating = 0.5, classification_report(y_val, val_scores, 0.5)
     artifact.threshold = threshold
-    importance = _importance_for(decision.served_predictor, artifact)
+    importance = _importance_for(decision.served_predictor, artifact, feature_names=feature_names)
     artifact.top_signals = tuple(name for name, _ in importance[:5])
 
-    y_test = labels_of(test) if test else []
-    test_scores = _scores_for(decision.served_predictor, artifact, test) if test else []
     served_val = classification_report(y_val, val_scores, threshold)
-    served_test = classification_report(y_test, test_scores, threshold) if test else {}
-    baseline_test = (
-        {
-            "prevalence": ranking_metrics(y_test, baselines.predict_prevalence(test)),
-            "oem_threshold": ranking_metrics(y_test, baselines.predict_oem_score(test)),
-        }
-        if test
-        else {}
-    )
-    logistic_test = ranking_metrics(y_test, predict_proba_positive(logistic, test)) if test else {}
-    hgb_test = ranking_metrics(y_test, predict_proba_positive(hgb, test)) if test else {}
-
     report: dict[str, Any] = {
         "model_name": "failure_risk",
         "model_version": MODEL_VERSION,
@@ -197,40 +214,65 @@ def train_from_rows(
         "history_lookback_min": HISTORY_LOOKBACK_MINUTES,
         "sampling_stride_min": STRIDE_MINUTES,
         "class_imbalance_handling": "class_weight=balanced; no oversampling",
-        "threshold_selection": "maximize F1 on validation scores only",
+        "threshold_selection": "maximize F1 on validation scores only" if select_threshold else "fixed_0.5_validation_only",
         "selected_threshold": threshold,
-        "feature_schema": list(FEATURE_NAMES),
+        "feature_schema": list(feature_names),
         "sklearn_version": sklearn.__version__,
         "dataset_sample_count": len(rows),
         "excluded_sample_count": excluded or {},
-        "missing_rates_pct": missing_rates(rows),
+        "missing_rates_pct": missing_rates(rows, feature_names=feature_names),
         "split": {
             "strategy": "chronological_incident_grouped_70_15_15_no_shuffle",
             "train": _split_bounds(train),
             "validation": _split_bounds(val),
-            "test": _split_bounds(test),
+            "test": _split_bounds(test) if include_test else {"held_out": True, "n": len(test)},
         },
         "hgb_params": hgb_params,
         "baseline_validation": baseline_val,
-        "baseline_test": baseline_test,
         "logistic_validation": logistic_val,
-        "logistic_test": logistic_test,
         "hgb_validation": hgb_val,
-        "hgb_test": hgb_test,
         "served_predictor": decision.served_predictor,
         "served_validation": served_val,
-        "served_test": served_test,
         "served_validation_operating": val_operating,
         "served_validation_operational": operational_metrics(val, apply_threshold(val_scores, threshold)),
-        "served_test_operational": operational_metrics(test, apply_threshold(test_scores, threshold)) if test else {},
         "feature_importance": [{"feature": name, "weight": weight} for name, weight in importance],
         "model_status": decision.model_status.value,
         "selection": {
             "uses": "validation_only",
             "test_set_used_for_selection": False,
             "test_set_used_for_threshold": False,
+            "test_metrics_computed": include_test,
         },
     }
+    if include_test:
+        y_test = labels_of(test) if test else []
+        test_scores = _scores_for(decision.served_predictor, artifact, test, feature_names=feature_names) if test else []
+        served_test = classification_report(y_test, test_scores, threshold) if test else {}
+        baseline_test = (
+            {
+                "prevalence": ranking_metrics(y_test, baselines.predict_prevalence(test)),
+                "oem_threshold": ranking_metrics(y_test, baselines.predict_oem_score(test)),
+            }
+            if test
+            else {}
+        )
+        logistic_test = (
+            ranking_metrics(y_test, predict_proba_positive(logistic, test, feature_names=feature_names))
+            if test
+            else {}
+        )
+        hgb_test = (
+            ranking_metrics(y_test, predict_proba_positive(hgb, test, feature_names=feature_names))
+            if test
+            else {}
+        )
+        report["baseline_test"] = baseline_test
+        report["logistic_test"] = logistic_test
+        report["hgb_test"] = hgb_test
+        report["served_test"] = served_test
+        report["served_test_operational"] = (
+            operational_metrics(test, apply_threshold(test_scores, threshold)) if test else {}
+        )
     report.update(decision.metadata())
     if extra_metadata:
         report.update(extra_metadata)
@@ -238,10 +280,20 @@ def train_from_rows(
     return artifact, report
 
 
-def persist_artifact(artifact: FailureRiskArtifact, artifacts_dir: Path) -> Path:
+def persist_artifact(
+    artifact: FailureRiskArtifact,
+    artifacts_dir: Path,
+    *,
+    filename: str | None = None,
+    metadata_name: str | None = None,
+) -> Path:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    path = write_joblib(artifact, artifacts_dir / ARTIFACT_FILE)
-    (artifacts_dir / METADATA_NAME).write_text(json.dumps(artifact.metadata, indent=2, default=str), encoding="utf-8")
+    joblib_name = filename or ARTIFACT_FILE
+    meta_name = metadata_name or METADATA_NAME
+    path = write_joblib(artifact, artifacts_dir / joblib_name)
+    (artifacts_dir / meta_name).write_text(
+        json.dumps(artifact.metadata, indent=2, default=str), encoding="utf-8"
+    )
     return path
 
 

@@ -29,6 +29,7 @@ backend/artifacts/cycle_time/*.joblib
 backend/artifacts/cycle_time/*.metadata.json
 backend/artifacts/failure_risk/*.joblib
 backend/artifacts/failure_risk/*.metadata.json
+backend/artifacts/failure_risk/experiments/
 
 # Editor directories and files
 .vscode/*
