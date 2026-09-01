@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from collections import Counter
 from pathlib import Path
 from statistics import mean, median
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import create_engine, text
@@ -375,6 +376,70 @@ def _numeric_distribution(values: Sequence[float | None]) -> dict[str, float | i
     }
 
 
+def partition_time_range(times: Sequence[Any]) -> dict[str, Any]:
+    present = [value for value in times if value is not None]
+    if not present:
+        return {"n": 0, "first": None, "last": None}
+    return {
+        "n": len(present),
+        "first": min(present).isoformat(),
+        "last": max(present).isoformat(),
+    }
+
+
+def observable_precursor_examples(snapshot: Any, incidents: Sequence[Any], *, limit: int = 3) -> list[dict[str, Any]]:
+    """Build 2-3 observable telemetry timelines ending at STOPPED_MECHANICAL.
+
+    Uses only operational telemetry fields already present on the ML snapshot.
+    """
+    examples: list[dict[str, Any]] = []
+    ranked = sorted(
+        [incident for incident in incidents if getattr(incident, "start_time", None) is not None],
+        key=lambda incident: incident.start_time,
+    )
+    for incident in ranked:
+        history = sorted(
+            (
+                sample
+                for sample in snapshot.telemetry
+                if sample.equipment_id == incident.equipment_id
+                and sample.ts <= incident.start_time
+                and sample.ts >= incident.start_time - timedelta(minutes=90)
+            ),
+            key=lambda sample: sample.ts,
+        )
+        if len(history) < 4:
+            continue
+        stride = max(1, len(history) // 4)
+        picks = list(history[::stride][:4])
+        if picks[-1] is not history[-1]:
+            picks.append(history[-1])
+        info = snapshot.equipment.get(incident.equipment_id)
+        examples.append(
+            {
+                "equipment_code": getattr(info, "code", None) or incident.equipment_id,
+                "stopped_mechanical_at": incident.start_time.isoformat(),
+                "telemetry_samples_in_90min": len(history),
+                "samples": [
+                    {
+                        "ts": sample.ts.isoformat(),
+                        "minutes_before_stop": round(
+                            (incident.start_time - sample.ts).total_seconds() / 60.0, 1
+                        ),
+                        "engine_temp_c": sample.values.get("engine_temp_c"),
+                        "coolant_temp_c": sample.values.get("coolant_temp_c"),
+                        "oil_pressure_kpa": sample.values.get("oil_pressure_kpa"),
+                        "battery_voltage": sample.values.get("battery_voltage"),
+                    }
+                    for sample in picks
+                ],
+            }
+        )
+        if len(examples) >= limit:
+            break
+    return examples
+
+
 def _feature_quality(rows: Sequence[Any], *, id_field: str) -> dict[str, Any]:
     flattened = [{id_field: getattr(row, id_field), **dict(row.values)} for row in rows]
     return {
@@ -555,12 +620,18 @@ def build_audit_report(session: Session, *, seed: int | None = None, artifacts_r
                     "validation": len(failure_split.validation),
                     "test": len(failure_split.test),
                     "dropped_boundary_windows": failure_split.dropped_boundary_windows,
+                    "train_time": partition_time_range([row.prediction_time for row in failure_split.train]),
+                    "validation_time": partition_time_range(
+                        [row.prediction_time for row in failure_split.validation]
+                    ),
+                    "test_time": partition_time_range([row.prediction_time for row in failure_split.test]),
                 },
                 "precursor": {
                     "mechanical_incidents": len(incidents),
                     "minutes_to_incident": _numeric_distribution(
                         [row.minutes_to_incident for row in failure_features if row.label == 1]
                     ),
+                    "observable_examples": observable_precursor_examples(failure_snapshot, incidents),
                 },
                 "quality": _feature_quality(failure_features, id_field="equipment_id"),
             },
@@ -572,24 +643,26 @@ def build_audit_report(session: Session, *, seed: int | None = None, artifacts_r
                     "train": len(cycle_train),
                     "validation": len(cycle_validation),
                     "test": len(cycle_test),
+                    "train_time": partition_time_range([row.started_at for row in cycle_train]),
+                    "validation_time": partition_time_range([row.started_at for row in cycle_validation]),
+                    "test_time": partition_time_range([row.started_at for row in cycle_test]),
                 },
                 "quality": _feature_quality(cycle_features, id_field="cycle_id"),
             },
         },
     }
     failure_rates = failure_missing_rates(failure_features)
-    readiness = evaluate_readiness(
-        readiness_evidence(
-            failure_snapshot,
-            failure_split,
-            failure_exclusions,
-            incidents,
-            missing_rate_max=required_telemetry_missing_rate(failure_rates),
-            leakage_feature_violations=len(
-                [name for name in FAILURE_FEATURE_NAMES if name in FAILURE_FORBIDDEN_FEATURE_NAMES]
-            ),
-        )
+    evidence = readiness_evidence(
+        failure_snapshot,
+        failure_split,
+        failure_exclusions,
+        incidents,
+        missing_rate_max=required_telemetry_missing_rate(failure_rates),
+        leakage_feature_violations=len(
+            [name for name in FAILURE_FEATURE_NAMES if name in FAILURE_FORBIDDEN_FEATURE_NAMES]
+        ),
     )
+    readiness = evaluate_readiness(evidence)
     failure_times = [
         [row.prediction_time for row in failure_split.train],
         [row.prediction_time for row in failure_split.validation],
@@ -621,6 +694,12 @@ def build_audit_report(session: Session, *, seed: int | None = None, artifacts_r
         "readiness": {
             "verdict": readiness.verdict,
             "do_not_train": readiness.do_not_train,
+            "n_incidents": evidence.n_incidents,
+            "n_incidents_with_60min_precursor": evidence.n_incidents_with_60min_precursor,
+            "n_positive_windows": evidence.n_positive_windows,
+            "n_negative_windows": evidence.n_negative_windows,
+            "downtime_events": evidence.downtime_events,
+            "maintenance_events": evidence.maintenance_events,
             "reasons": readiness.reasons,
             "notes": list(readiness.notes),
         },

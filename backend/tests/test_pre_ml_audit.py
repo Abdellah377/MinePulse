@@ -315,6 +315,50 @@ def test_managed_runner_drops_only_the_exact_database_on_failure(monkeypatch, tm
     ]
 
 
+def test_partition_time_range_reports_first_and_last():
+    from datetime import datetime, timezone
+
+    from scripts.pre_ml_audit import partition_time_range
+
+    start = datetime(2026, 1, 1, 6, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
+    report = partition_time_range([end, None, start])
+
+    assert report == {"n": 2, "first": start.isoformat(), "last": end.isoformat()}
+
+
+def test_observable_precursor_examples_use_only_operational_fields():
+    from datetime import datetime, timedelta, timezone
+
+    from scripts.pre_ml_audit import assert_operational_payload, observable_precursor_examples
+
+    base = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
+    snapshot = SimpleNamespace(
+        equipment={1: SimpleNamespace(code="TRK-001")},
+        telemetry=[
+            SimpleNamespace(
+                equipment_id=1,
+                ts=base - timedelta(minutes=minutes),
+                values={
+                    "engine_temp_c": 90.0 + minutes / 10.0,
+                    "coolant_temp_c": 80.0,
+                    "oil_pressure_kpa": 400.0 - minutes,
+                    "battery_voltage": 24.0,
+                },
+            )
+            for minutes in (80, 60, 40, 20, 5, 1)
+        ],
+    )
+    incident = SimpleNamespace(equipment_id=1, start_time=base, end_time=base + timedelta(minutes=20))
+
+    examples = observable_precursor_examples(snapshot, [incident], limit=3)
+
+    assert len(examples) == 1
+    assert examples[0]["equipment_code"] == "TRK-001"
+    assert examples[0]["samples"][0]["minutes_before_stop"] >= examples[0]["samples"][-1]["minutes_before_stop"]
+    assert_operational_payload({"operational": {"examples": examples}})
+
+
 def test_managed_schema_bootstrap_precedes_additive_migrations(monkeypatch):
     import scripts.run_pre_ml_multiseed as runner
     from sqlalchemy.engine import make_url
