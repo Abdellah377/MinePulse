@@ -94,6 +94,12 @@ missingness, constant features, cycle/state lifecycle anomalies, failure-risk
 labels and splits, precursor coverage, and cycle-time targets/splits. It also
 evaluates only saved artifacts and saved deterministic baselines.
 
+Failure-risk precursor coverage counts incidents that have at least 55 minutes
+of operational telemetry in the 60-minute lookback before `STOPPED_MECHANICAL`
+and at least one surviving labeled positive window. The report also accounts
+for incidents that miss the labeled `[55, 60]` slot on the 15-minute stride
+without treating that sampling gap as missing history.
+
 The report actively rejects simulator-only scenario and hidden-truth fields.
 It contains no causal scenario IDs, ground truth, or developer-only scenario
 summaries.

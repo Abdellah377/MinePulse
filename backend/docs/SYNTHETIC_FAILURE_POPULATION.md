@@ -31,6 +31,13 @@ The seeded population uses a bounded mixture of simulator-only profiles:
 Default degradation lasts 70–110 simulated minutes. Mechanical downtime lasts
 20–50 simulated minutes. At most four incidents progress concurrently, and the
 least-used available trucks are preferred to avoid concentrating failures.
+Scheduling waits 20 minutes of fleet warmup before the first degradation
+scenario starts; warmup is not the 60-minute prediction lookback. Because
+degradation itself lasts at least 70 minutes, prototype `STOPPED_MECHANICAL`
+events are not scheduled until enough observable history exists for a
+60-minute horizon. Early genuine stops would still be counted as incidents,
+but they would not contribute precursor coverage.
+
 Some profiles cross OEM thresholds while ambiguous cases may have no warning.
 
 At an incident, the engine interrupts the active cycle/trip/stage, leaves cycle

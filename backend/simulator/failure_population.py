@@ -4,6 +4,15 @@ This module owns synthetic scheduling and hidden profile labels.  It delegates
 signal progression to the existing causal-scenario manager.  Only the resulting
 telemetry, equipment states, OEM events, downtime and maintenance records are
 persisted by the simulation engine.
+
+Predictive-training incidents are not scheduled until the fleet has warmed up
+(``warmup_min``, default 20 minutes). That warmup is fleet spin-up, not the
+60-minute failure-risk lookback. The 60-minute observable precursor is produced
+by degradation itself (70–110 minutes), so STOPPED_MECHANICAL cannot occur
+until at least 70 minutes of scenario telemetry exist. Combined with warmup,
+the earliest prototype stop is about 90 minutes after simulation start.
+Genuine early stops, if they ever occurred, remain in the incident set and
+simply do not count toward precursor coverage.
 """
 
 from __future__ import annotations

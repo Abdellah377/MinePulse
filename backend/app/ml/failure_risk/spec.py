@@ -7,6 +7,12 @@ gate. It does not train or score a model.
 Horizon choice: measured 5/15/30-minute windows are severely imbalanced;
 60 minutes is manageable and every qualifying incident in the current snapshot
 has 60 minutes of precursor telemetry. Shorter horizons are not used for V1.
+
+Precursor coverage measures observable operational telemetry in the 60-minute
+lookback before STOPPED_MECHANICAL, not whether a 15-minute prediction grid
+lands inside the 5-minute labeled slot [55, 60]. That slot is a sampling
+artifact of STRIDE_MINUTES versus HORIZON_MINUTES; missing it does not mean
+the incident lacked a usable hour of history.
 """
 
 from __future__ import annotations
@@ -24,6 +30,11 @@ MIN_LEAD_TIME_MINUTES = 15
 STRIDE_MINUTES = 15
 HISTORY_LOOKBACK_MINUTES = 60
 MIN_HISTORY_MINUTES = 15
+# Observable telemetry span required inside the 60-minute lookback before stop.
+# Five minutes of slack versus HORIZON_MINUTES absorbs the 120-second telemetry
+# cadence so a full lookback is not rejected for starting 58–59 minutes earlier.
+# This is not a requirement that a labeled window land in [55, 60] on the stride grid.
+PRECURSOR_COVERAGE_MINUTES = 55
 INCIDENT_MERGE_GAP = timedelta(minutes=5)
 
 TRAIN_FRACTION = 0.70
@@ -384,6 +395,32 @@ def iter_prediction_times(
         t = t + step
 
 
+def long_horizon_grid_hit(
+    incident_start: datetime,
+    prediction_times: Sequence[datetime],
+    *,
+    coverage_minutes: float = PRECURSOR_COVERAGE_MINUTES,
+    horizon_minutes: float = HORIZON_MINUTES,
+    min_lead_time_minutes: float = MIN_LEAD_TIME_MINUTES,
+) -> bool:
+    """Return True if the prediction grid lands in the long-horizon labeled slot.
+
+    The V1 positive band is [min_lead_time, horizon]. The long-horizon slot used
+    by the legacy coverage check is [coverage_minutes, horizon], a 5-minute
+    interval when coverage is 55 and horizon is 60. A 15-minute stride cannot
+    hit that slot for most incident alignments.
+    """
+    start = _aware(incident_start)
+    assert start is not None
+    for prediction_time in prediction_times:
+        t = _aware(prediction_time)
+        assert t is not None
+        delta = (start - t).total_seconds() / 60.0
+        if min_lead_time_minutes <= delta <= horizon_minutes and delta >= coverage_minutes:
+            return True
+    return False
+
+
 def labeled_windows(
     *,
     equipment_ids: Sequence[int],
@@ -697,6 +734,14 @@ def specification_dict() -> dict[str, Any]:
             "5/15/30-minute horizons are severely imbalanced on the current snapshot. "
             "60 minutes is manageable, has full precursor coverage, and sits inside the "
             "synthetic degradation window without using hidden simulator labels."
+        ),
+        "precursor_coverage_rationale": (
+            "Readiness requires >=55 minutes of operational telemetry in the 60-minute "
+            "lookback before STOPPED_MECHANICAL, plus at least one surviving labeled "
+            "positive window. The 55-minute floor is the horizon with cadence slack; "
+            "it is not a demand that the 15-minute stride sample the 5-minute slot "
+            "[55, 60]. A 5-minute stride would hit that slot but triple window count "
+            "with highly overlapping lookbacks; V1 keeps STRIDE_MINUTES=15."
         ),
         "lead_time_rationale": (
             "Telemetry cadence is 120 seconds. 72.9% of last samples immediately before "

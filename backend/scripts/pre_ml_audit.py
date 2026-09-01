@@ -467,8 +467,13 @@ def build_audit_report(session: Session, *, seed: int | None = None, artifacts_r
     from app.ml.cycle_time.features import FORBIDDEN_FEATURE_NAMES as CYCLE_FORBIDDEN_FEATURE_NAMES
     from app.ml.cycle_time.features import build_feature_rows as build_cycle_feature_rows
     from app.ml.cycle_time.train import temporal_split
-    from app.ml.failure_risk.dataset import build_window_split, load_snapshot as load_failure_snapshot
-    from app.ml.failure_risk.dataset import readiness_evidence, snapshot_summary as failure_snapshot_summary
+    from app.ml.failure_risk.dataset import (
+        account_precursor_coverage,
+        build_window_split,
+        load_snapshot as load_failure_snapshot,
+        readiness_evidence,
+        snapshot_summary as failure_snapshot_summary,
+    )
     from app.ml.failure_risk.features import FEATURE_NAMES as FAILURE_FEATURE_NAMES
     from app.ml.failure_risk.features import missing_rates as failure_missing_rates
     from app.ml.failure_risk.features import build_feature_rows as build_failure_feature_rows
@@ -505,6 +510,7 @@ def build_audit_report(session: Session, *, seed: int | None = None, artifacts_r
     failure_split, failure_exclusions, incidents = build_window_split(failure_snapshot)
     failure_windows = list(failure_split.train) + list(failure_split.validation) + list(failure_split.test)
     failure_features = build_failure_feature_rows(failure_windows, failure_snapshot)
+    precursor_coverage = account_precursor_coverage(failure_snapshot, incidents, failure_split)
     training_cycles, cycle_exclusions = select_training_cycles(cycle_snapshot.cycles)
     cycle_features = build_cycle_feature_rows(training_cycles, cycle_snapshot, include_target=True)
     cycle_train, cycle_validation, cycle_test = temporal_split(cycle_features)
@@ -631,6 +637,15 @@ def build_audit_report(session: Session, *, seed: int | None = None, artifacts_r
                     "minutes_to_incident": _numeric_distribution(
                         [row.minutes_to_incident for row in failure_features if row.label == 1]
                     ),
+                    "coverage": {
+                        "definition": precursor_coverage["definition"],
+                        "precursor_coverage_minutes": precursor_coverage["precursor_coverage_minutes"],
+                        "counts": precursor_coverage["counts"],
+                        "loss_by_reason": precursor_coverage["loss_by_reason"],
+                        "flags_by_reason": precursor_coverage["flags_by_reason"],
+                        "grid_in_55_to_60": precursor_coverage["grid_in_55_to_60"],
+                        "stride_analysis": precursor_coverage["stride_analysis"],
+                    },
                     "observable_examples": observable_precursor_examples(failure_snapshot, incidents),
                 },
                 "quality": _feature_quality(failure_features, id_field="equipment_id"),
@@ -696,6 +711,9 @@ def build_audit_report(session: Session, *, seed: int | None = None, artifacts_r
             "do_not_train": readiness.do_not_train,
             "n_incidents": evidence.n_incidents,
             "n_incidents_with_60min_precursor": evidence.n_incidents_with_60min_precursor,
+            "precursor_coverage": precursor_coverage["counts"],
+            "precursor_loss_by_reason": precursor_coverage["loss_by_reason"],
+            "precursor_stride_analysis": precursor_coverage["stride_analysis"],
             "n_positive_windows": evidence.n_positive_windows,
             "n_negative_windows": evidence.n_negative_windows,
             "downtime_events": evidence.downtime_events,
@@ -845,4 +863,21 @@ def summarize_seed_reports(reports: Sequence[Mapping[str, Any]]) -> dict[str, An
         and ((report.get("integrity") or {}).get("readiness") or {}).get("do_not_train") is True
     ]
     summary["readiness_do_not_train_seeds"] = readiness_blocked
+    precursor_usable = _points(
+        reports, ("integrity", "readiness", "precursor_coverage", "usable_precursor_incidents")
+    )
+    precursor_total = _points(
+        reports, ("integrity", "readiness", "precursor_coverage", "total_incidents")
+    )
+    legacy_ge55 = _points(
+        reports, ("integrity", "readiness", "precursor_coverage", "legacy_surviving_labeled_ge_55")
+    )
+    if precursor_usable and precursor_total:
+        summary["precursor_coverage"] = {
+            "usable_precursor_incidents": _seed_stat(precursor_usable, higher_is_better=True),
+            "total_incidents": _seed_stat(precursor_total, higher_is_better=True),
+            "legacy_surviving_labeled_ge_55": _seed_stat(legacy_ge55, higher_is_better=True)
+            if legacy_ge55
+            else None,
+        }
     return summary

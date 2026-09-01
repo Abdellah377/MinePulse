@@ -2,7 +2,7 @@
   "audit_database": {
     "disposable": true,
     "dropped_after_run": true,
-    "name": "minepulse_audit_20260901_170049_000d49bb"
+    "name": "minepulse_audit_20260901_173523_c9cc311e"
   },
   "generation": {
     "failure_population_enabled": true,
@@ -181,7 +181,7 @@
           "status": "evaluated_saved_artifact"
         }
       },
-      "canonical_digest": "9c3d478d0a37c7dae4db985804abe1f9d11f54c0cae897c6ae73aa847b0609ea",
+      "canonical_digest": "ac2437262660c87926f29bfd3b6a6fb2a58e400dcd0120cab401874684d5eae3",
       "datasets": {
         "cycle_time": {
           "cycles_loaded": 1131,
@@ -265,6 +265,62 @@
           "maintenance_rows": 69,
           "oem_events": 1033,
           "precursor": {
+            "coverage": {
+              "counts": {
+                "legacy_surviving_labeled_ge_55": 29,
+                "observable_ge_55": 69,
+                "raw_labeled_ge_55": 29,
+                "raw_labeled_positive": 69,
+                "surviving_lead_time_positive": 69,
+                "surviving_temporal_split": 69,
+                "total_incidents": 69,
+                "usable_precursor_incidents": 69
+              },
+              "definition": "A usable precursor incident has >=55 minutes of operational telemetry in the 60-minute lookback before STOPPED_MECHANICAL and at least one surviving labeled positive window after lead-time and leakage-safe splits. Labeled minutes_to_incident>=55 on the 15-minute grid is reported as legacy_labeled_ge_55 and is not the readiness numerator.",
+              "flags_by_reason": {
+                "HAS_LEAD_TIME_EXCLUSIONS": 65,
+                "NONE": 3,
+                "STRIDE_MISSES_55_TO_60_MIN_WINDOW": 40
+              },
+              "grid_in_55_to_60": 29,
+              "loss_by_reason": {},
+              "precursor_coverage_minutes": 55,
+              "stride_analysis": {
+                "10": {
+                  "class_ratio": 0.076754,
+                  "incidents_with_grid_in_55_to_60": 39,
+                  "incidents_with_labeled_ge_55": 39,
+                  "labeled_windows": 4419,
+                  "negative_windows": 4104,
+                  "positive_windows": 315,
+                  "prediction_times": 240,
+                  "size_multiplier_vs_v1": 1.5,
+                  "stride_minutes": 10
+                },
+                "15": {
+                  "class_ratio": 0.076531,
+                  "incidents_with_grid_in_55_to_60": 29,
+                  "incidents_with_labeled_ge_55": 29,
+                  "labeled_windows": 2954,
+                  "negative_windows": 2744,
+                  "positive_windows": 210,
+                  "prediction_times": 160,
+                  "size_multiplier_vs_v1": 1.0,
+                  "stride_minutes": 15
+                },
+                "5": {
+                  "class_ratio": 0.077702,
+                  "incidents_with_grid_in_55_to_60": 69,
+                  "incidents_with_labeled_ge_55": 69,
+                  "labeled_windows": 8835,
+                  "negative_windows": 8198,
+                  "positive_windows": 637,
+                  "prediction_times": 479,
+                  "size_multiplier_vs_v1": 2.994,
+                  "stride_minutes": 5
+                }
+              }
+            },
             "mechanical_incidents": 69,
             "minutes_to_incident": {
               "count": 210,
@@ -500,17 +556,63 @@
           "failure_risk": []
         },
         "readiness": {
-          "do_not_train": true,
+          "do_not_train": false,
           "downtime_events": 69,
           "maintenance_events": 69,
           "n_incidents": 69,
-          "n_incidents_with_60min_precursor": 29,
+          "n_incidents_with_60min_precursor": 69,
           "n_negative_windows": 2744,
           "n_positive_windows": 210,
           "notes": [
             "commission_date is unpopulated; equipment age is excluded from V1 and is not a blocker.",
             "65 windows dropped for being inside the 15-minute immediate-failure gap."
           ],
+          "precursor_coverage": {
+            "legacy_surviving_labeled_ge_55": 29,
+            "observable_ge_55": 69,
+            "raw_labeled_ge_55": 29,
+            "raw_labeled_positive": 69,
+            "surviving_lead_time_positive": 69,
+            "surviving_temporal_split": 69,
+            "total_incidents": 69,
+            "usable_precursor_incidents": 69
+          },
+          "precursor_loss_by_reason": {},
+          "precursor_stride_analysis": {
+            "10": {
+              "class_ratio": 0.076754,
+              "incidents_with_grid_in_55_to_60": 39,
+              "incidents_with_labeled_ge_55": 39,
+              "labeled_windows": 4419,
+              "negative_windows": 4104,
+              "positive_windows": 315,
+              "prediction_times": 240,
+              "size_multiplier_vs_v1": 1.5,
+              "stride_minutes": 10
+            },
+            "15": {
+              "class_ratio": 0.076531,
+              "incidents_with_grid_in_55_to_60": 29,
+              "incidents_with_labeled_ge_55": 29,
+              "labeled_windows": 2954,
+              "negative_windows": 2744,
+              "positive_windows": 210,
+              "prediction_times": 160,
+              "size_multiplier_vs_v1": 1.0,
+              "stride_minutes": 15
+            },
+            "5": {
+              "class_ratio": 0.077702,
+              "incidents_with_grid_in_55_to_60": 69,
+              "incidents_with_labeled_ge_55": 69,
+              "labeled_windows": 8835,
+              "negative_windows": 8198,
+              "positive_windows": 637,
+              "prediction_times": 479,
+              "size_multiplier_vs_v1": 2.994,
+              "stride_minutes": 5
+            }
+          },
           "reasons": {
             "class_imbalance_severe": false,
             "class_imbalance_unusable": false,
@@ -525,9 +627,9 @@
             "precursor_coverage_partial": false,
             "required_feature_partially_missing": false,
             "too_few_independent_incidents": false,
-            "unusable_precursor_coverage": true
+            "unusable_precursor_coverage": false
           },
-          "verdict": "NOT READY \u2014 DATA/SIMULATOR CHANGES REQUIRED"
+          "verdict": "READY TO BUILD FAILURE-RISK V1"
         },
         "site_id": 1
       },
@@ -1032,7 +1134,7 @@
           "status": "evaluated_saved_artifact"
         }
       },
-      "canonical_digest": "126aba77d679c8bc891332ab809c2bb0b1fa9d32f2bca4368512745d8fb90705",
+      "canonical_digest": "d2194cf5fdf45776f35bbfb459f4e0aa930e40e8b246e21845d45d7a6aece9c0",
       "datasets": {
         "cycle_time": {
           "cycles_loaded": 1134,
@@ -1116,6 +1218,62 @@
           "maintenance_rows": 73,
           "oem_events": 1044,
           "precursor": {
+            "coverage": {
+              "counts": {
+                "legacy_surviving_labeled_ge_55": 31,
+                "observable_ge_55": 73,
+                "raw_labeled_ge_55": 31,
+                "raw_labeled_positive": 73,
+                "surviving_lead_time_positive": 73,
+                "surviving_temporal_split": 73,
+                "total_incidents": 73,
+                "usable_precursor_incidents": 73
+              },
+              "definition": "A usable precursor incident has >=55 minutes of operational telemetry in the 60-minute lookback before STOPPED_MECHANICAL and at least one surviving labeled positive window after lead-time and leakage-safe splits. Labeled minutes_to_incident>=55 on the 15-minute grid is reported as legacy_labeled_ge_55 and is not the readiness numerator.",
+              "flags_by_reason": {
+                "HAS_LEAD_TIME_EXCLUSIONS": 66,
+                "NONE": 6,
+                "STRIDE_MISSES_55_TO_60_MIN_WINDOW": 42
+              },
+              "grid_in_55_to_60": 31,
+              "loss_by_reason": {},
+              "precursor_coverage_minutes": 55,
+              "stride_analysis": {
+                "10": {
+                  "class_ratio": 0.080703,
+                  "incidents_with_grid_in_55_to_60": 49,
+                  "incidents_with_labeled_ge_55": 49,
+                  "labeled_windows": 4553,
+                  "negative_windows": 4213,
+                  "positive_windows": 340,
+                  "prediction_times": 247,
+                  "size_multiplier_vs_v1": 1.497,
+                  "stride_minutes": 10
+                },
+                "15": {
+                  "class_ratio": 0.079489,
+                  "incidents_with_grid_in_55_to_60": 31,
+                  "incidents_with_labeled_ge_55": 31,
+                  "labeled_windows": 3042,
+                  "negative_windows": 2818,
+                  "positive_windows": 224,
+                  "prediction_times": 165,
+                  "size_multiplier_vs_v1": 1.0,
+                  "stride_minutes": 15
+                },
+                "5": {
+                  "class_ratio": 0.079427,
+                  "incidents_with_grid_in_55_to_60": 73,
+                  "incidents_with_labeled_ge_55": 73,
+                  "labeled_windows": 9119,
+                  "negative_windows": 8448,
+                  "positive_windows": 671,
+                  "prediction_times": 494,
+                  "size_multiplier_vs_v1": 2.994,
+                  "stride_minutes": 5
+                }
+              }
+            },
             "mechanical_incidents": 73,
             "minutes_to_incident": {
               "count": 222,
@@ -1351,17 +1509,63 @@
           "failure_risk": []
         },
         "readiness": {
-          "do_not_train": true,
+          "do_not_train": false,
           "downtime_events": 73,
           "maintenance_events": 73,
           "n_incidents": 73,
-          "n_incidents_with_60min_precursor": 31,
+          "n_incidents_with_60min_precursor": 73,
           "n_negative_windows": 2818,
           "n_positive_windows": 224,
           "notes": [
             "commission_date is unpopulated; equipment age is excluded from V1 and is not a blocker.",
             "66 windows dropped for being inside the 15-minute immediate-failure gap."
           ],
+          "precursor_coverage": {
+            "legacy_surviving_labeled_ge_55": 31,
+            "observable_ge_55": 73,
+            "raw_labeled_ge_55": 31,
+            "raw_labeled_positive": 73,
+            "surviving_lead_time_positive": 73,
+            "surviving_temporal_split": 73,
+            "total_incidents": 73,
+            "usable_precursor_incidents": 73
+          },
+          "precursor_loss_by_reason": {},
+          "precursor_stride_analysis": {
+            "10": {
+              "class_ratio": 0.080703,
+              "incidents_with_grid_in_55_to_60": 49,
+              "incidents_with_labeled_ge_55": 49,
+              "labeled_windows": 4553,
+              "negative_windows": 4213,
+              "positive_windows": 340,
+              "prediction_times": 247,
+              "size_multiplier_vs_v1": 1.497,
+              "stride_minutes": 10
+            },
+            "15": {
+              "class_ratio": 0.079489,
+              "incidents_with_grid_in_55_to_60": 31,
+              "incidents_with_labeled_ge_55": 31,
+              "labeled_windows": 3042,
+              "negative_windows": 2818,
+              "positive_windows": 224,
+              "prediction_times": 165,
+              "size_multiplier_vs_v1": 1.0,
+              "stride_minutes": 15
+            },
+            "5": {
+              "class_ratio": 0.079427,
+              "incidents_with_grid_in_55_to_60": 73,
+              "incidents_with_labeled_ge_55": 73,
+              "labeled_windows": 9119,
+              "negative_windows": 8448,
+              "positive_windows": 671,
+              "prediction_times": 494,
+              "size_multiplier_vs_v1": 2.994,
+              "stride_minutes": 5
+            }
+          },
           "reasons": {
             "class_imbalance_severe": false,
             "class_imbalance_unusable": false,
@@ -1376,9 +1580,9 @@
             "precursor_coverage_partial": false,
             "required_feature_partially_missing": false,
             "too_few_independent_incidents": false,
-            "unusable_precursor_coverage": true
+            "unusable_precursor_coverage": false
           },
-          "verdict": "NOT READY \u2014 DATA/SIMULATOR CHANGES REQUIRED"
+          "verdict": "READY TO BUILD FAILURE-RISK V1"
         },
         "site_id": 1
       },
@@ -1883,7 +2087,7 @@
           "status": "evaluated_saved_artifact"
         }
       },
-      "canonical_digest": "d0adb91d8d4426c06e1904e5e98f0492bdf22840c87381e58c337c755d61a049",
+      "canonical_digest": "d52a50e28aac354e2920ec8979a2779e5887de118f955a5b3a5d24f634398551",
       "datasets": {
         "cycle_time": {
           "cycles_loaded": 1126,
@@ -1967,6 +2171,62 @@
           "maintenance_rows": 70,
           "oem_events": 1038,
           "precursor": {
+            "coverage": {
+              "counts": {
+                "legacy_surviving_labeled_ge_55": 23,
+                "observable_ge_55": 70,
+                "raw_labeled_ge_55": 23,
+                "raw_labeled_positive": 70,
+                "surviving_lead_time_positive": 70,
+                "surviving_temporal_split": 70,
+                "total_incidents": 70,
+                "usable_precursor_incidents": 70
+              },
+              "definition": "A usable precursor incident has >=55 minutes of operational telemetry in the 60-minute lookback before STOPPED_MECHANICAL and at least one surviving labeled positive window after lead-time and leakage-safe splits. Labeled minutes_to_incident>=55 on the 15-minute grid is reported as legacy_labeled_ge_55 and is not the readiness numerator.",
+              "flags_by_reason": {
+                "HAS_LEAD_TIME_EXCLUSIONS": 63,
+                "NONE": 6,
+                "STRIDE_MISSES_55_TO_60_MIN_WINDOW": 47
+              },
+              "grid_in_55_to_60": 23,
+              "loss_by_reason": {},
+              "precursor_coverage_minutes": 55,
+              "stride_analysis": {
+                "10": {
+                  "class_ratio": 0.078312,
+                  "incidents_with_grid_in_55_to_60": 42,
+                  "incidents_with_labeled_ge_55": 42,
+                  "labeled_windows": 4420,
+                  "negative_windows": 4099,
+                  "positive_windows": 321,
+                  "prediction_times": 239,
+                  "size_multiplier_vs_v1": 1.494,
+                  "stride_minutes": 10
+                },
+                "15": {
+                  "class_ratio": 0.078182,
+                  "incidents_with_grid_in_55_to_60": 23,
+                  "incidents_with_labeled_ge_55": 23,
+                  "labeled_windows": 2965,
+                  "negative_windows": 2750,
+                  "positive_windows": 215,
+                  "prediction_times": 160,
+                  "size_multiplier_vs_v1": 1.0,
+                  "stride_minutes": 15
+                },
+                "5": {
+                  "class_ratio": 0.077644,
+                  "incidents_with_grid_in_55_to_60": 70,
+                  "incidents_with_labeled_ge_55": 70,
+                  "labeled_windows": 8855,
+                  "negative_windows": 8217,
+                  "positive_windows": 638,
+                  "prediction_times": 478,
+                  "size_multiplier_vs_v1": 2.987,
+                  "stride_minutes": 5
+                }
+              }
+            },
             "mechanical_incidents": 70,
             "minutes_to_incident": {
               "count": 213,
@@ -2202,17 +2462,63 @@
           "failure_risk": []
         },
         "readiness": {
-          "do_not_train": true,
+          "do_not_train": false,
           "downtime_events": 70,
           "maintenance_events": 70,
           "n_incidents": 70,
-          "n_incidents_with_60min_precursor": 23,
+          "n_incidents_with_60min_precursor": 70,
           "n_negative_windows": 2750,
           "n_positive_windows": 215,
           "notes": [
             "commission_date is unpopulated; equipment age is excluded from V1 and is not a blocker.",
             "63 windows dropped for being inside the 15-minute immediate-failure gap."
           ],
+          "precursor_coverage": {
+            "legacy_surviving_labeled_ge_55": 23,
+            "observable_ge_55": 70,
+            "raw_labeled_ge_55": 23,
+            "raw_labeled_positive": 70,
+            "surviving_lead_time_positive": 70,
+            "surviving_temporal_split": 70,
+            "total_incidents": 70,
+            "usable_precursor_incidents": 70
+          },
+          "precursor_loss_by_reason": {},
+          "precursor_stride_analysis": {
+            "10": {
+              "class_ratio": 0.078312,
+              "incidents_with_grid_in_55_to_60": 42,
+              "incidents_with_labeled_ge_55": 42,
+              "labeled_windows": 4420,
+              "negative_windows": 4099,
+              "positive_windows": 321,
+              "prediction_times": 239,
+              "size_multiplier_vs_v1": 1.494,
+              "stride_minutes": 10
+            },
+            "15": {
+              "class_ratio": 0.078182,
+              "incidents_with_grid_in_55_to_60": 23,
+              "incidents_with_labeled_ge_55": 23,
+              "labeled_windows": 2965,
+              "negative_windows": 2750,
+              "positive_windows": 215,
+              "prediction_times": 160,
+              "size_multiplier_vs_v1": 1.0,
+              "stride_minutes": 15
+            },
+            "5": {
+              "class_ratio": 0.077644,
+              "incidents_with_grid_in_55_to_60": 70,
+              "incidents_with_labeled_ge_55": 70,
+              "labeled_windows": 8855,
+              "negative_windows": 8217,
+              "positive_windows": 638,
+              "prediction_times": 478,
+              "size_multiplier_vs_v1": 2.987,
+              "stride_minutes": 5
+            }
+          },
           "reasons": {
             "class_imbalance_severe": false,
             "class_imbalance_unusable": false,
@@ -2227,9 +2533,9 @@
             "precursor_coverage_partial": false,
             "required_feature_partially_missing": false,
             "too_few_independent_incidents": false,
-            "unusable_precursor_coverage": true
+            "unusable_precursor_coverage": false
           },
-          "verdict": "NOT READY \u2014 DATA/SIMULATOR CHANGES REQUIRED"
+          "verdict": "READY TO BUILD FAILURE-RISK V1"
         },
         "site_id": 1
       },
@@ -2730,11 +3036,72 @@
         }
       }
     },
-    "readiness_do_not_train_seeds": [
-      42,
-      43,
-      44
-    ],
+    "precursor_coverage": {
+      "legacy_surviving_labeled_ge_55": {
+        "best": {
+          "seed": 43,
+          "value": 31.0
+        },
+        "count": 3,
+        "max": {
+          "seed": 43,
+          "value": 31.0
+        },
+        "mean": 27.6667,
+        "median": 29.0,
+        "min": {
+          "seed": 44,
+          "value": 23.0
+        },
+        "worst": {
+          "seed": 44,
+          "value": 23.0
+        }
+      },
+      "total_incidents": {
+        "best": {
+          "seed": 43,
+          "value": 73.0
+        },
+        "count": 3,
+        "max": {
+          "seed": 43,
+          "value": 73.0
+        },
+        "mean": 70.6667,
+        "median": 70.0,
+        "min": {
+          "seed": 42,
+          "value": 69.0
+        },
+        "worst": {
+          "seed": 42,
+          "value": 69.0
+        }
+      },
+      "usable_precursor_incidents": {
+        "best": {
+          "seed": 43,
+          "value": 73.0
+        },
+        "count": 3,
+        "max": {
+          "seed": 43,
+          "value": 73.0
+        },
+        "mean": 70.6667,
+        "median": 70.0,
+        "min": {
+          "seed": 42,
+          "value": 69.0
+        },
+        "worst": {
+          "seed": 42,
+          "value": 69.0
+        }
+      }
+    },
+    "readiness_do_not_train_seeds": [],
     "seed_count": 3,
     "sequence_fingerprints": {
       "by_seed": {
