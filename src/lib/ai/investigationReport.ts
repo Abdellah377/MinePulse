@@ -556,10 +556,6 @@ export function keyEvidence(result: InvestigationResult, limit = PRIMARY_EVIDENC
   return partitionEvidence(result).primary.slice(0, limit)
 }
 
-export function overflowEvidence(result: InvestigationResult): EvidenceSummary[] {
-  return partitionEvidence(result).overflow
-}
-
 export function missingEvidence(result: InvestigationResult): EvidenceSummary[] {
   return partitionEvidence(result).unavailable
 }
@@ -579,7 +575,7 @@ function canonicalTokens(value: string): Set<string> {
   return tokens
 }
 
-export function similarNarrative(left: string, right: string): boolean {
+function similarNarrative(left: string, right: string): boolean {
   const a = normalizeForCompare(left)
   const b = normalizeForCompare(right)
   if (!a || !b) return false

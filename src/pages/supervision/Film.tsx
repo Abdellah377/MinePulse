@@ -128,8 +128,6 @@ export default function Film({ tab }: Partial<import("@/components/workspace/Wor
         searchRef.current?.blur()
       } else if (e.key === "Enter" && selection) {
         openEquipmentDrawer(selection.equipmentId)
-      } else if ((e.key === "j" || e.key === "k") && selection?.type === "row") {
-        // handled by row list below via visibleRowIds
       }
     }
     window.addEventListener("keydown", handler)

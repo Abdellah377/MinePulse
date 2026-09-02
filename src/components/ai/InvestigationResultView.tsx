@@ -307,7 +307,7 @@ export function InvestigationDetails({ result }: { result: InvestigationResult }
   return (
     <details data-testid="investigation-details" className="rounded-md border border-border bg-surface">
       <summary className={cn(DISCLOSURE_SUMMARY_CLASS, "text-[12px]")}>
-        <h3 className="inline text-[12px] font-semibold">Détails de l’investigation</h3>
+        Détails de l’investigation
       </summary>
       <div className="space-y-2 border-t border-border p-3">
         <InvestigationEvidence result={result} />

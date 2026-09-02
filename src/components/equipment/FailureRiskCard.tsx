@@ -21,6 +21,31 @@ const LEVEL_BADGE: Record<FailureRiskLevel, string> = {
   LOW: "border-transparent bg-muted text-muted",
 }
 
+function PredictiveSignalList({ signals, className }: { signals: string[]; className?: string }) {
+  const extra = signals.length - 3
+  return (
+    <>
+      <ul className={cn("list-disc pl-4", className)}>
+        {signals.slice(0, 3).map((label) => (
+          <li key={label}>{label}</li>
+        ))}
+      </ul>
+      {extra > 0 && (
+        <details className="mt-1">
+          <summary className="cursor-pointer select-none rounded-sm text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            Voir {extra} autre{extra === 1 ? "" : "s"} {extra === 1 ? "signal" : "signaux"}
+          </summary>
+          <ul className={cn("mt-1 list-disc pl-4", className)}>
+            {signals.slice(3).map((label) => (
+              <li key={label}>{label}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </>
+  )
+}
+
 export function FailureRiskCard({
   prediction,
   loading,
@@ -104,23 +129,7 @@ export function FailureRiskCard({
           )}
           {why.signalsAvailable && (
             <div>
-              <ul className="list-disc pl-4 text-[11px] text-muted">
-                {why.signals.slice(0, 3).map((label) => (
-                  <li key={label}>{label}</li>
-                ))}
-              </ul>
-              {why.signals.length > 3 && (
-                <details className="mt-1">
-                  <summary className="cursor-pointer select-none rounded-sm text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    Voir {why.signals.length - 3} autre{why.signals.length - 3 === 1 ? "" : "s"} {why.signals.length - 3 === 1 ? "signal" : "signaux"}
-                  </summary>
-                  <ul className="mt-1 list-disc pl-4 text-[11px] text-muted">
-                    {why.signals.slice(3).map((label) => (
-                      <li key={label}>{label}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
+              <PredictiveSignalList signals={why.signals} className="text-[11px] text-muted" />
             </div>
           )}
           <AiWhyButton expanded={whyOpen} onClick={() => setWhyOpen((open) => !open)} />
@@ -134,25 +143,7 @@ export function FailureRiskCard({
             <AiExplanationBlock label="Horizon">{horizon} min</AiExplanationBlock>
             <AiExplanationBlock label="Pourquoi le modèle estime-t-il ce risque ?">
               {why.signalsAvailable ? (
-                <>
-                  <ul className="list-disc pl-4">
-                    {why.signals.slice(0, 3).map((label) => (
-                      <li key={label}>{label}</li>
-                    ))}
-                  </ul>
-                  {why.signals.length > 3 && (
-                    <details className="mt-2">
-                      <summary className="cursor-pointer select-none rounded-sm text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                        Voir {why.signals.length - 3} autre{why.signals.length - 3 === 1 ? "" : "s"} {why.signals.length - 3 === 1 ? "signal" : "signaux"}
-                      </summary>
-                      <ul className="mt-1 list-disc pl-4">
-                        {why.signals.slice(3).map((label) => (
-                          <li key={label}>{label}</li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                </>
+                <PredictiveSignalList signals={why.signals} />
               ) : (
                 FAILURE_RISK_SIGNALS_UNAVAILABLE
               )}
