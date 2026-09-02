@@ -79,7 +79,7 @@ def _coalesce_existing_alert_findings(candidates: list[MonitoringCandidate]) -> 
 
 
 class MonitoringService:
-    """Run detectors, expose findings as normal alerts, and invoke LangGraph once."""
+    """Run detectors and persist operational alerts. LangGraph is opt-in only."""
 
     def __init__(
         self,
@@ -253,19 +253,29 @@ class MonitoringService:
         session.refresh(alert)
         return alert
 
-    def _mark_attempt(self, session: Session, alert: Alert, candidate: MonitoringCandidate) -> None:
+    def _update_alert(
+        self,
+        session: Session,
+        alert: Alert,
+        candidate: MonitoringCandidate,
+        *,
+        investigated: bool,
+    ) -> None:
         metadata = dict(alert.metadata_ or {})
         monitoring = dict(metadata.get("monitoring") or {})
         monitoring.update({
             "detectorId": candidate.detector_id,
             "deduplicationKey": candidate.deduplication_key,
-            "lastInvestigationStartedAt": candidate.detected_at.isoformat(),
-            "lastInvestigatedSeverity": candidate.severity.value,
             "metric": candidate.metric,
             "value": candidate.value,
             "threshold": candidate.threshold,
             "unit": candidate.unit,
         })
+        if investigated:
+            monitoring.update({
+                "lastInvestigationStartedAt": candidate.detected_at.isoformat(),
+                "lastInvestigatedSeverity": candidate.severity.value,
+            })
         metadata["monitoring"] = monitoring
         alert.metadata_ = metadata
         desired = _AI_TO_ALERT_SEVERITY[candidate.severity.value]
@@ -303,13 +313,24 @@ class MonitoringService:
                 logger.info("Stale monitoring candidate discarded after reset")
                 return False
             alert = self._matching_alert(session, candidate) or self._create_alert(session, candidate)
+            if not self.settings.monitoring_auto_investigate:
+                self._update_alert(session, alert, candidate, investigated=False)
+                logger.info(
+                    "Monitoring alert persisted without automatic investigation",
+                    extra={
+                        "alert_id": alert.alert_id,
+                        "detector_id": candidate.detector_id,
+                        "deduplication_key": candidate.deduplication_key,
+                    },
+                )
+                return False
             if self._should_deduplicate(session, candidate, alert):
                 logger.info(
                     "Monitoring candidate deduplicated",
                     extra={"alert_id": alert.alert_id, "deduplication_key": candidate.deduplication_key},
                 )
                 return False
-            self._mark_attempt(session, alert, candidate)
+            self._update_alert(session, alert, candidate, investigated=True)
         trigger = InvestigationTrigger(
             trigger_type=candidate.trigger_type,
             trigger_source=TriggerSource.AUTOMATIC_MONITORING,

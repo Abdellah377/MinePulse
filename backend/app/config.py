@@ -37,12 +37,19 @@ class Settings(BaseSettings):
     ai_provider_timeout_seconds: float = Field(default=45, ge=5, le=60)
     # Cumulative provider budget per invocation; frontend allows 180s including DB overhead.
     ai_investigation_llm_budget_seconds: float = Field(default=150, ge=10, le=150)
+    # Transient 429/timeout/5xx attempts per structured call. SDK retries stay disabled.
+    ai_provider_max_attempts: int = Field(default=3, ge=1, le=4)
+    # Cap simultaneous LangGraph/LLM investigations process-wide.
+    ai_investigation_max_concurrent: int = Field(default=2, ge=1, le=8)
     # Developer-only investigation trace. Default off; never required for operators.
     ai_debug_mode: bool = False
 
     # Deterministic operational monitoring. Disabled by default so a developer
     # cannot accidentally create paid investigations without opting in.
     monitoring_enabled: bool = False
+    # Even when monitoring is enabled, detectors persist alerts without LangGraph.
+    # True is a legacy opt-in that auto-spends LLM credits per fired alert.
+    monitoring_auto_investigate: bool = False
     monitoring_interval_seconds: float = Field(default=30, ge=5, le=3600)
     monitoring_investigation_cooldown_minutes: float = Field(default=15, ge=1, le=1440)
     monitoring_unexpected_stop_minutes: float = Field(default=2, ge=0.5, le=1440)

@@ -101,16 +101,25 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
     })
   }, [tabId, alertId, result?.investigation_id, selected?.equipmentId, selected?.zoneId, equipment?.code, selectedZone?.name, patchTabContext])
 
-  function investigate() {
-    if (!scope || !selected) return
-    const trigger: InvestigationTriggerInput = {
+  function investigationTrigger(): InvestigationTriggerInput | null {
+    if (!scope || !selected) return null
+    return {
       ...scope, trigger_type: userInvestigateTriggerType(selected), trigger_source: "USER_INVESTIGATE", source: "alertes-ui",
       equipment_id: equipment?.databaseId, zone_id: selectedZone?.databaseId,
       occurred_at: new Date(operationalAlertTime(selected)).toISOString(),
       severity: selected.severity === "critical" ? "CRITICAL" : selected.severity === "warning" ? "WARNING" : "INFO",
       payload: { category: selected.category, title: selected.title, description: selected.description },
     }
+  }
+  function investigate() {
+    const trigger = investigationTrigger()
+    if (!trigger) return
     void start(trigger)
+  }
+  function retryInvestigation() {
+    const trigger = investigationTrigger()
+    if (!trigger) return
+    void start(trigger, { retryFailed: true })
   }
   const context = {
     alertId, equipmentId: selected?.equipmentId ?? undefined, equipmentCode: equipment?.code,
@@ -202,7 +211,7 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
             </dl>
           )}
         </header>
-        {result ? <div id="ai-why-report"><InvestigationResultView result={result} onRetry={() => scope && void lookup(scope, true)} /></div> : <Section title="Rapport d’investigation"><div id="ai-why-report"><p className="text-[12px] font-medium text-foreground">{investigationStatus(entry)}</p><p className="mt-1 text-[11px] text-muted">La cause, la confiance et les preuves seront affichées ici après l’investigation.</p></div></Section>}
+        {result ? <div id="ai-why-report"><InvestigationResultView result={result} onRetry={result.status === "FAILED" ? retryInvestigation : undefined} /></div> : <Section title="Rapport d’investigation"><div id="ai-why-report"><p className="text-[12px] font-medium text-foreground">{investigationStatus(entry)}</p><p className="mt-1 text-[11px] text-muted">La cause, la confiance et les preuves seront affichées ici après l’investigation.</p></div></Section>}
         {segs.length > 0 && (
           <details className="rounded-md border border-border bg-surface">
             <summary className={DISCLOSURE_SUMMARY_CLASS}>Film récent</summary>
@@ -224,12 +233,13 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
     </main>
     <aside aria-label="Panel IA" className="flex w-[28%] min-w-[240px] max-w-[340px] flex-col overflow-y-auto bg-surface p-4">
       {selected ? <div data-testid="panel-ia" className="sticky top-0 space-y-3"><h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Panel IA</h3>
-        {(!result || busy || entry?.phase === "error") && <p role="status" aria-live="polite" className="text-[11px] text-muted">{investigationStatus(entry)}</p>}
+        {(!result || busy || entry?.phase === "error" || result?.status === "FAILED") && <p role="status" aria-live="polite" className="text-[11px] text-muted">{investigationStatus(entry)}</p>}
         {failure && <p role="alert" className="text-xs text-danger">{failure}</p>}
-        {recommendation ? <Button className="w-full gap-1.5" onClick={() => openWorkspace({ type: "actions", context, investigationId: result!.investigation_id })}><Sparkles className="size-3.5" />Ouvrir Actions IA</Button>
+        {recommendation && result?.status !== "FAILED" ? <Button className="w-full gap-1.5" onClick={() => openWorkspace({ type: "actions", context, investigationId: result!.investigation_id })}><Sparkles className="size-3.5" />Ouvrir Actions IA</Button>
+          : result?.status === "FAILED" ? <Button className="w-full gap-1.5" disabled={!scope || busy || !!ops.apiPollError} onClick={retryInvestigation}><Sparkles className="size-3.5" />Relancer l’investigation</Button>
           : <><Button className="w-full gap-1.5" disabled={!scope || !!result || busy || entry?.creationUncertain || !!ops.apiPollError} onClick={investigate}><Sparkles className="size-3.5" />{entry?.phase === "running" ? "Analyse IA en cours" : "Investiguer"}</Button>
             <Button className="w-full" size="sm" variant="outline" onClick={() => openWorkspace({ type: "actions", context: { ...context, alertId } })}>Ouvrir Actions IA</Button></>}
-        <Button className="w-full" size="sm" variant="outline" disabled={!scope || busy} onClick={() => scope && void lookup(scope, true)}>Actualiser le résultat</Button>
+        {(entry?.creationUncertain || busy || (result && result.status !== "FAILED")) && <Button className="w-full" size="sm" variant="outline" disabled={!scope || busy} onClick={() => scope && void lookup(scope, true)}>Actualiser le résultat</Button>}
         {!scope && <p className="text-xs text-muted">Identité opérationnelle indisponible.</p>}
         <p className="text-[10px] leading-relaxed text-muted-2">Validation humaine requise. Aucune application automatique.</p>
       </div> : <p className="text-xs text-muted">Sélectionnez une alerte pour l’analyse IA.</p>}

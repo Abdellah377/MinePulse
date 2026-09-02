@@ -67,7 +67,7 @@ function FailedInvestigation({ result, onRetry }: { result: InvestigationResult;
       <h3 className="mt-1 text-sm font-semibold">MinePulse n’a pas pu terminer l’investigation.</h3>
       <p className="mt-1 text-[12px] text-muted">{investigationFailure(result.error) ?? "Investigation interrompue avant la construction d’une conclusion."}</p>
       {result.evidence.length > 0 && <p className="mt-2 text-[11px] text-muted">{result.evidence.length} élément{result.evidence.length === 1 ? "" : "s"} de preuve déjà collecté{result.evidence.length === 1 ? "" : "s"}.</p>}
-      {onRetry && <Button size="sm" variant="outline" className="mt-3" onClick={onRetry}><RefreshCw />Actualiser l’investigation</Button>}
+      {onRetry && <Button size="sm" variant="outline" className="mt-3" onClick={onRetry}><RefreshCw />Relancer l’investigation</Button>}
     </div></div>
   </section>
 }

@@ -42,7 +42,7 @@ def main() -> int:
             print(json.dumps([item.model_dump(mode="json") for item in findings], indent=2, ensure_ascii=False))
             return 0
         if not settings.monitoring_enabled:
-            parser.error("MONITORING_ENABLED must be true to create alerts/investigations")
+            parser.error("MONITORING_ENABLED must be true to create alerts")
         print(json.dumps(MonitoringService(settings=settings).run_cycle(session), indent=2))
     return 0
 

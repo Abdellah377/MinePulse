@@ -162,6 +162,9 @@ it("running state disables manual creation and persisted provider errors do not 
   mocks.entry = { phase: "ready", result: { ...result, status: "FAILED", conclusion: null, recommendation: null, error: { stage: "analyze", error_type: "ProviderTimeoutError", message: "secret SDK response" } } }
   html = renderToStaticMarkup(createElement(AlertesIA))
   expect(html).toContain("Délai de l’analyse IA dépassé")
+  expect(html).toContain("Relancer l’investigation")
+  expect(html).not.toContain("Investiguer")
+  expect(html.split("data-testid=\"panel-ia\"")[1]).not.toContain("Actualiser le résultat")
   expect(html).not.toContain("secret SDK response")
 })
 it("failure leaves the live panel unavailable, not populated with pseudo-AI", () => {

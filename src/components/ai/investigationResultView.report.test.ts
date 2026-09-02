@@ -161,7 +161,7 @@ describe("InvestigationResultView operator report", () => {
     const html = renderToStaticMarkup(createElement(InvestigationResultView, { result: failed, onRetry }))
     expect(html).toContain("Analyse IA indisponible")
     expect(html).toContain("MinePulse n’a pas pu terminer")
-    expect(html).toContain("Actualiser l’investigation")
+    expect(html).toContain("Relancer l’investigation")
     expect(html).not.toContain("Cause non déterminée")
     expect(html).not.toContain("secret provider payload")
   })

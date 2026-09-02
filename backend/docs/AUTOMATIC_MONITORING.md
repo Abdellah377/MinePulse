@@ -8,6 +8,9 @@ PostgreSQL operational records
   -> Failure-Risk V1 inference (haul trucks, once per site cycle)
   -> monitoring detectors
   -> normal operational alert (RULE or PREDICTION)
+  -> STOP
+
+Operator presses Investiguer
   -> app.ai.service.run_investigation
   -> persisted LangGraph result
   -> Alertes IA
@@ -15,8 +18,13 @@ PostgreSQL operational records
 
 Monitoring reports an observable symptom and threshold. It never reports a
 root cause and never controls equipment, assignments, dispatch, or maintenance.
-LangGraph remains the only diagnosis/recommendation layer, and all actions need
+It also does **not** spend LLM credits when an alert is created. LangGraph
+remains the only diagnosis/recommendation layer, and all actions need
 human validation.
+
+No detector type auto-starts LangGraph. Failure-Risk scoring stays ML-only.
+`MONITORING_AUTO_INVESTIGATE=true` is a legacy opt-in that restores the old
+paid auto-investigation path; it is off by default.
 
 ## Detectors
 
@@ -53,8 +61,9 @@ Production is evaluated only when both actual and target rows are available.
 Cycle monitoring is skipped when no completed-cycle baseline exists.
 
 All thresholds are environment settings documented in `.env.example`.
-`MONITORING_ENABLED=false` is the safe default because a fired detector may
-invoke the configured paid provider.
+`MONITORING_ENABLED=false` is the safe default. Enabling monitoring creates
+deterministic alerts only. Set `MONITORING_AUTO_INVESTIGATE=true` only if you
+intentionally want a fired detector to invoke the configured paid provider.
 
 ## Deduplication
 
@@ -66,9 +75,32 @@ condition may be investigated again. Existing critical FMS/OEM alerts are linked
 instead of copied.
 
 The alert `source_record_id` is `alert-<database id>`, exactly the identifier
-already used by Alertes IA to retrieve investigations. Automatic and manual
-investigations differ only by `trigger_source`: `AUTOMATIC_MONITORING` versus
-`USER_INVESTIGATE`.
+already used by Alertes IA to retrieve investigations. Automatic (legacy opt-in)
+and manual investigations differ only by `trigger_source`: `AUTOMATIC_MONITORING`
+versus `USER_INVESTIGATE`.
+
+## Manual investigation lifecycle
+
+`POST /api/ai/investigations` starts at most one graph run per alert identity
+(`site_id` + `source_record_id`). A non-FAILED durable result is reused and
+does not spend another provider call. A FAILED result remains in audit history;
+**Relancer l’investigation** starts a new investigation id and re-gathers
+deterministic evidence with current tools. The previous failure is not returned
+as the live result.
+
+Provider HTTP retries: the OpenAI SDK keeps `max_retries=0`. MinePulse retries
+only 429, timeout, 5xx, and network errors, up to `AI_PROVIDER_MAX_ATTEMPTS`
+(default 3) with exponential backoff and jitter. Invalid API keys, unsupported
+models, and structured-output parse errors are not retried.
+
+Concurrency: `AI_INVESTIGATION_MAX_CONCURRENT` (default **2**) is an in-process
+semaphore around LangGraph invocation. It prevents a burst of manual starts from
+opening 10+ simultaneous LLM requests. Multi-process production would need a
+shared lock; this prototype is single-process.
+
+Structured logs include investigation id, alert id, trigger source, attempt
+count, failure category, and duration. Prompts, API keys, and chain-of-thought
+are not logged.
 
 ## Lifecycle and diagnostics
 
@@ -104,7 +136,9 @@ python scripts/run_monitoring.py
    ```
 
 2. Open the frontend in API mode. Reset/start the simulator through the existing
-   Simulation Centre, but do not click **Investiguer**.
+   Simulation Centre. Alerts may appear while you stay on Film / Performance / OEM;
+   they must not start LangGraph by themselves. Open **Alertes IA** and press
+   **Investiguer** on the chosen alert.
 3. Start a reproducible causal breakdown using the existing API:
 
    ```powershell
@@ -116,11 +150,10 @@ python scripts/run_monitoring.py
 
 4. At the default 30x speed, let the causal progression reach its warning/final
    stop. Monitoring reuses the critical operational alert when available (or
-   creates a rule alert), then submits an `AUTOMATIC_MONITORING` trigger through
-   the same investigation service as the manual UI.
-5. Open **Alertes IA**. The alert and its persisted result appear under the
-   normal alert/investigation identifier. The UI labels the result as automatic;
-   the recommendation remains advisory.
+   creates a rule alert). It does not submit an `AUTOMATIC_MONITORING` trigger
+   unless `MONITORING_AUTO_INVESTIGATE=true`.
+5. Open **Alertes IA**. The alert appears under the normal identifier with
+   **Investiguer**. After a manual investigation, the recommendation remains advisory.
 
 To diagnose the data path before spending provider tokens, run
 `python scripts/run_monitoring.py --detect-only` after the incident.

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import random
+import time
 from time import monotonic
 from typing import Protocol, TypeVar
 
@@ -42,7 +44,61 @@ class ProviderModelError(LLMProviderError):
     """Model not found or request/model schema unsupported."""
 
 
+class ProviderRateLimitError(LLMProviderError):
+    """The provider rejected the call because of rate limiting (HTTP 429)."""
+
+
+class ProviderUnavailableError(LLMProviderError):
+    """The provider returned a temporary 5xx failure."""
+
+
+class ProviderNetworkError(LLMProviderError):
+    """The provider could not be reached."""
+
+
 logger = logging.getLogger(__name__)
+
+_TRANSIENT_PROVIDER_ERRORS = (
+    ProviderTimeoutError,
+    ProviderRateLimitError,
+    ProviderUnavailableError,
+    ProviderNetworkError,
+)
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def classify_provider_exception(exc: Exception) -> LLMProviderError:
+    """Map SDK/network failures to stable MinePulse types without leaking bodies."""
+    from openai import (
+        APIConnectionError,
+        APIStatusError,
+        APITimeoutError,
+        AuthenticationError,
+        BadRequestError,
+        NotFoundError,
+        PermissionDeniedError,
+        RateLimitError,
+    )
+
+    if isinstance(exc, LLMProviderError):
+        return exc
+    if isinstance(exc, APITimeoutError):
+        return ProviderTimeoutError("AI provider request timed out")
+    if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
+        return ProviderAuthenticationError("AI provider access denied")
+    if isinstance(exc, RateLimitError):
+        return ProviderRateLimitError("AI provider rate limited")
+    if isinstance(exc, (BadRequestError, NotFoundError)):
+        return ProviderModelError("AI provider rejected the model or structured request")
+    if isinstance(exc, APIConnectionError):
+        return ProviderNetworkError("AI provider network error")
+    status = getattr(exc, "status_code", None)
+    if isinstance(exc, APIStatusError) and isinstance(status, int) and status >= 500:
+        return ProviderUnavailableError("AI provider unavailable")
+    return LLMProviderError("AI provider structured response failed")
 
 
 class LLMProvider(Protocol):
@@ -183,7 +239,15 @@ class OpenAILLMProvider:
 
     provider_name = "openai"
 
-    def __init__(self, *, api_key: str, model: str, timeout_seconds: float = 45, budget_seconds: float = 150):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        timeout_seconds: float = 45,
+        budget_seconds: float = 150,
+        max_attempts: int = 3,
+    ):
         if not api_key:
             raise ProviderConfigurationError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
         if not model:
@@ -195,58 +259,78 @@ class OpenAILLMProvider:
         self.model_name = model
         self._timeout_seconds = timeout_seconds
         self._remaining_seconds = budget_seconds
+        self._max_attempts = max(1, int(max_attempts))
         self._client = OpenAI(api_key=api_key, timeout=timeout_seconds, max_retries=0)
         self.last_call_metrics: dict | None = None
+        self.last_attempt_count = 0
 
     def _structured(self, schema: type[_T], system_prompt: str, payload: dict) -> _T:
-        if self._remaining_seconds <= 0:
-            raise ProviderTimeoutError("Investigation provider budget exceeded")
-        started = monotonic()
-        response = None
-        try:
-            response = self._client.responses.parse(
-                model=self.model_name,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                text_format=schema,
-                store=False,
-                timeout=min(self._timeout_seconds, self._remaining_seconds),
-            )
-            parsed = response.output_parsed
-        except Exception as exc:
-            from openai import APITimeoutError, AuthenticationError, PermissionDeniedError, BadRequestError, NotFoundError
-
-            # SDK exceptions can contain request bodies: log only safe metadata.
-            logger.error("AI provider failure model=%s schema=%s type=%s status=%s request_id=%s",
-                self.model_name, schema.__name__, type(exc).__name__,
-                getattr(exc, "status_code", None), getattr(exc, "request_id", None))
-            if isinstance(exc, APITimeoutError):
-                raise ProviderTimeoutError("AI provider request timed out") from exc
-            if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
-                raise ProviderAuthenticationError("AI provider access denied") from exc
-            if isinstance(exc, (BadRequestError, NotFoundError)):
-                raise ProviderModelError("AI provider rejected the model or structured request") from exc
-            raise LLMProviderError("AI provider structured response failed") from exc
-        finally:
-            elapsed = monotonic() - started
-            self._remaining_seconds -= elapsed
-            usage = getattr(response, "usage", None) if response is not None else None
-            self.last_call_metrics = {
-                "model": self.model_name,
-                "schema": schema.__name__,
-                "duration_ms": int(elapsed * 1000),
-                "input_tokens": getattr(usage, "input_tokens", None),
-                "output_tokens": getattr(usage, "output_tokens", None),
-                "total_tokens": getattr(usage, "total_tokens", None),
-            }
-        if parsed is None:
-            raise ProviderResponseError("OpenAI returned no structured output")
-        try:
-            return schema.model_validate(parsed)
-        except Exception as exc:
-            raise ProviderResponseError(f"OpenAI output failed {schema.__name__} validation") from exc
+        last_error: LLMProviderError | None = None
+        attempts = max(1, int(getattr(self, "_max_attempts", 1)))
+        for attempt in range(1, attempts + 1):
+            self.last_attempt_count = attempt
+            if self._remaining_seconds <= 0:
+                raise ProviderTimeoutError("Investigation provider budget exceeded")
+            started = monotonic()
+            response = None
+            try:
+                response = self._client.responses.parse(
+                    model=self.model_name,
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    ],
+                    text_format=schema,
+                    store=False,
+                    timeout=min(self._timeout_seconds, self._remaining_seconds),
+                )
+                parsed = response.output_parsed
+            except Exception as exc:
+                mapped = classify_provider_exception(exc)
+                logger.error(
+                    "AI provider failure model=%s schema=%s type=%s category=%s status=%s request_id=%s attempt=%s/%s",
+                    self.model_name,
+                    schema.__name__,
+                    type(exc).__name__,
+                    type(mapped).__name__,
+                    getattr(exc, "status_code", None),
+                    getattr(exc, "request_id", None),
+                    attempt,
+                    attempts,
+                )
+                last_error = mapped
+                retryable = isinstance(mapped, _TRANSIENT_PROVIDER_ERRORS) and attempt < attempts
+                if not retryable:
+                    raise mapped from exc
+                delay = min(2 ** (attempt - 1), 4) * (0.5 + random.random())
+                logger.info(
+                    "Retrying transient AI provider failure category=%s attempt=%s delay_s=%.2f",
+                    type(mapped).__name__,
+                    attempt,
+                    delay,
+                )
+                _sleep(delay)
+                continue
+            finally:
+                elapsed = monotonic() - started
+                self._remaining_seconds -= elapsed
+                usage = getattr(response, "usage", None) if response is not None else None
+                self.last_call_metrics = {
+                    "model": self.model_name,
+                    "schema": schema.__name__,
+                    "duration_ms": int(elapsed * 1000),
+                    "input_tokens": getattr(usage, "input_tokens", None),
+                    "output_tokens": getattr(usage, "output_tokens", None),
+                    "total_tokens": getattr(usage, "total_tokens", None),
+                    "attempt": attempt,
+                }
+            if parsed is None:
+                raise ProviderResponseError("OpenAI returned no structured output")
+            try:
+                return schema.model_validate(parsed)
+            except Exception as exc:
+                raise ProviderResponseError(f"OpenAI output failed {schema.__name__} validation") from exc
+        raise last_error or LLMProviderError("AI provider structured response failed")
 
     def diagnose(self, payload: dict) -> DiagnosisResult:
         return self._structured(DiagnosisResult, _DIAGNOSIS_PROMPT, payload)
@@ -275,4 +359,5 @@ def create_llm_provider(settings: Settings | None = None) -> LLMProvider:
         model=configured.ai_model or "",
         timeout_seconds=configured.ai_provider_timeout_seconds,
         budget_seconds=configured.ai_investigation_llm_budget_seconds,
+        max_attempts=getattr(configured, "ai_provider_max_attempts", 3),
     )

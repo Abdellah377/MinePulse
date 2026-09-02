@@ -28,11 +28,17 @@ describe("investigation lifecycle", () => {
     expect(useInvestigationStore.getState().entries[key].result).toEqual(result)
     expect(useInvestigationStore.getState().entries[result.investigation_id].result).toEqual(result)
   })
-  it("reuses an investigation recorded before this browser session", async () => {
-    vi.mocked(aiApi.find).mockResolvedValue([result])
+  it("retries a persisted FAILED investigation instead of returning the stale failure", async () => {
+    const failed = { ...result, status: "FAILED" as const, conclusion: null, recommendation: null, error: { stage: "analyze", error_type: "ProviderTimeoutError", message: "safe" } }
+    const recovered = { ...result, investigation_id: "11111111-1111-4111-8111-111111111111" }
+    vi.mocked(aiApi.find).mockResolvedValue([failed])
+    vi.mocked(aiApi.create).mockResolvedValue(recovered)
     await useInvestigationStore.getState().start(trigger)
     expect(aiApi.create).not.toHaveBeenCalled()
-    expect(useInvestigationStore.getState().entries[key].result?.investigation_id).toBe(result.investigation_id)
+    expect(useInvestigationStore.getState().entries[key].result?.status).toBe("FAILED")
+    await useInvestigationStore.getState().start(trigger, { retryFailed: true })
+    expect(aiApi.create).toHaveBeenCalledTimes(1)
+    expect(useInvestigationStore.getState().entries[key].result?.investigation_id).toBe(recovered.investigation_id)
   })
   it("provider failure does not fabricate a result", async () => {
     vi.mocked(aiApi.find).mockResolvedValue([])

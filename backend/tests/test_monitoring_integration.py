@@ -134,6 +134,7 @@ def test_persisted_stop_creates_one_automatic_investigation_then_deduplicates():
         settings = Settings(
             _env_file=None,
             monitoring_enabled=True,
+            monitoring_auto_investigate=True,
             monitoring_unexpected_stop_minutes=4,
             monitoring_investigation_cooldown_minutes=15,
         )

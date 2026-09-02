@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+from time import monotonic
+
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.contracts import (
     InvestigationResult,
+    InvestigationStatus,
     InvestigationTrigger,
     ResolvedOperationalContext,
 )
 from app.ai.debug import DebugEventType, create_debug_recorder
 from app.ai.graph import build_investigation_graph, initial_state
+from app.ai.lifecycle import investigation_gate, latest_investigation, reusable_investigation
 from app.ai.llm.provider import LLMProvider, create_llm_provider
 from app.ai.nodes import InvestigationRuntime
 from app.ai.persistence import state_to_result, verify_investigation_storage
@@ -21,6 +26,8 @@ from app.ai.tools import EvidenceToolRegistry
 from app.config import get_settings
 from app.db.models import Equipment, Shift, Site, Zone
 from app.services.operational.context import OperationalContext, get_operational_context
+
+logger = logging.getLogger(__name__)
 
 
 def validate_trigger_scope(session: Session, trigger: InvestigationTrigger) -> Site:
@@ -92,13 +99,72 @@ def run_investigation(
 ) -> InvestigationResult:
     settings = get_settings()
     verify_investigation_storage(session)
-    llm = provider or create_llm_provider(settings)
     rounds = max_iterations or settings.ai_max_investigation_iterations
     if rounds < 1:
         raise ValueError("max_iterations must be at least 1")
     # Validate before graph creation so invalid foreign-key scope cannot produce
     # an unpersistable failed investigation record.
     validate_trigger_scope(session, trigger)
+    lock = investigation_gate.scope_lock(trigger.site_id, trigger.source_record_id)
+    with lock:
+        existing = latest_investigation(session, trigger)
+        reused = reusable_investigation(existing)
+        if reused is not None:
+            logger.info(
+                "Investigation reused without a new provider run",
+                extra={
+                    "investigation_id": str(reused.investigation_id),
+                    "alert_id": trigger.source_record_id,
+                    "trigger_source": trigger.trigger_source.value,
+                    "status": reused.status.value,
+                },
+            )
+            return reused
+        llm = provider or create_llm_provider(settings)
+        semaphore = investigation_gate.semaphore(getattr(settings, "ai_investigation_max_concurrent", 2))
+        with semaphore:
+            investigation_gate.mark_enter()
+            started = monotonic()
+            category = "success"
+            investigation_id = ""
+            try:
+                mapped = _invoke_investigation_graph(
+                    session,
+                    trigger,
+                    llm=llm,
+                    rounds=rounds,
+                    debug_enabled=settings.ai_debug_mode,
+                )
+                investigation_id = str(mapped.investigation_id)
+                if mapped.status == InvestigationStatus.FAILED and mapped.error is not None:
+                    category = mapped.error.error_type
+                return mapped
+            except Exception as exc:
+                category = type(exc).__name__
+                raise
+            finally:
+                investigation_gate.mark_leave()
+                logger.info(
+                    "Investigation invocation finished",
+                    extra={
+                        "investigation_id": investigation_id,
+                        "alert_id": trigger.source_record_id,
+                        "trigger_source": trigger.trigger_source.value,
+                        "failure_category": category,
+                        "duration_ms": int((monotonic() - started) * 1000),
+                        "max_concurrent": settings.ai_investigation_max_concurrent,
+                    },
+                )
+
+
+def _invoke_investigation_graph(
+    session: Session,
+    trigger: InvestigationTrigger,
+    *,
+    llm: LLMProvider,
+    rounds: int,
+    debug_enabled: bool,
+) -> InvestigationResult:
     state = initial_state(
         trigger,
         max_iterations=rounds,
@@ -106,7 +172,7 @@ def run_investigation(
         model=llm.model_name,
     )
     debug = create_debug_recorder(
-        enabled=settings.ai_debug_mode,
+        enabled=debug_enabled,
         investigation_id=state["investigation_id"],
         model=llm.model_name,
     )
@@ -120,6 +186,17 @@ def run_investigation(
             "max_iterations": rounds,
             "provider": llm.provider_name,
             "model": llm.model_name,
+            "alert_id": trigger.source_record_id,
+        },
+    )
+    logger.info(
+        "Investigation requested",
+        extra={
+            "investigation_id": state["investigation_id"],
+            "alert_id": trigger.source_record_id,
+            "trigger_source": trigger.trigger_source.value,
+            "trigger_type": trigger.trigger_type.value,
+            "provider": llm.provider_name,
         },
     )
     runtime = InvestigationRuntime(
@@ -135,4 +212,19 @@ def run_investigation(
         state,
         config={"recursion_limit": max(25, rounds * 4 + 10)},
     )
-    return state_to_result(result)
+    mapped = state_to_result(result)
+    category = "success"
+    if mapped.status == InvestigationStatus.FAILED and mapped.error is not None:
+        category = mapped.error.error_type
+    logger.info(
+        "Investigation persisted",
+        extra={
+            "investigation_id": str(mapped.investigation_id),
+            "alert_id": trigger.source_record_id,
+            "trigger_source": trigger.trigger_source.value,
+            "status": mapped.status.value,
+            "failure_category": category,
+            "evidence_count": len(mapped.evidence),
+        },
+    )
+    return mapped

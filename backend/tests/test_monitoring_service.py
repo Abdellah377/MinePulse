@@ -29,6 +29,10 @@ def _settings(**overrides):
     return Settings(_env_file=None, **values)
 
 
+def _auto_settings(**overrides):
+    return _settings(monitoring_auto_investigate=True, **overrides)
+
+
 def _candidate(*, severity=Severity.WARNING):
     return MonitoringCandidate(
         detector_id="unit-detector",
@@ -105,7 +109,7 @@ def test_candidate_builds_automatic_trigger_and_deduplicates_second_attempt(monk
             alert for alert in session.alerts.values() if alert.status != AlertStatus.RESOLVED
         ],
     )
-    service = MonitoringService(settings=_settings(), investigation_runner=runner)
+    service = MonitoringService(settings=_auto_settings(), investigation_runner=runner)
     assert service._process_candidate(session, _candidate()) is True
     assert service._process_candidate(session, _candidate()) is False
     assert len(captured) == 1
@@ -137,7 +141,7 @@ def test_severity_escalation_bypasses_cooldown(monkeypatch):
             investigation_id=uuid4(), status=InvestigationStatus.COMPLETED, completed_at=NOW
         )
     )
-    service = MonitoringService(settings=_settings(), investigation_runner=runner)
+    service = MonitoringService(settings=_auto_settings(), investigation_runner=runner)
     service._process_candidate(session, _candidate(severity=Severity.WARNING))
     service._process_candidate(session, _candidate(severity=Severity.CRITICAL))
     assert len(calls) == 2
@@ -153,7 +157,7 @@ def test_expired_cooldown_allows_retrigger(monkeypatch):
             investigation_id=uuid4(), status=InvestigationStatus.COMPLETED, completed_at=trigger.occurred_at
         )
     )
-    service = MonitoringService(settings=_settings(), investigation_runner=runner)
+    service = MonitoringService(settings=_auto_settings(), investigation_runner=runner)
     service._process_candidate(session, _candidate())
     later = _candidate().model_copy(update={"detected_at": NOW + timedelta(minutes=16)})
     service._process_candidate(session, later)
@@ -207,7 +211,7 @@ def test_investigation_failure_is_logged_and_cycle_remains_controlled(monkeypatc
         lambda *_args, **_kwargs: list(session.alerts.values()),
     )
     service = MonitoringService(
-        settings=_settings(),
+        settings=_auto_settings(),
         detectors=(lambda *_: [_candidate()],),
         snapshot_builder=lambda *_: object(),
         investigation_runner=lambda *_: (_ for _ in ()).throw(RuntimeError("provider unavailable")),
@@ -305,7 +309,7 @@ def test_inflight_investigation_finishing_after_reset_is_discarded(monkeypatch):
             completed_at=NOW,
         )
 
-    service = MonitoringService(settings=_settings(), investigation_runner=runner)
+    service = MonitoringService(settings=_auto_settings(), investigation_runner=runner)
     assert service._process_candidate(session, _candidate()) is False
     assert session.alerts == {}
     assert session.investigations == {}
@@ -350,11 +354,9 @@ def test_predicted_failure_risk_alert_is_prediction_source_with_synthetic_metada
     )
     service = MonitoringService(
         settings=_settings(),
-        investigation_runner=lambda *_: SimpleNamespace(
-            investigation_id=uuid4(), status=InvestigationStatus.COMPLETED, completed_at=NOW
-        ),
+        investigation_runner=lambda *_: (_ for _ in ()).throw(AssertionError("prediction alerts must not auto-start LangGraph")),
     )
-    assert service._process_candidate(session, _prediction_candidate()) is True
+    assert service._process_candidate(session, _prediction_candidate()) is False
     alert = session.alerts[1]
     assert alert.source == AlertSource.PREDICTION
     assert alert.predicted_for is None
@@ -382,9 +384,9 @@ def test_predicted_failure_risk_repeated_key_is_deduplicated(monkeypatch):
             investigation_id=uuid4(), status=InvestigationStatus.COMPLETED, completed_at=NOW
         ),
     )
-    assert service._process_candidate(session, _prediction_candidate()) is True
     assert service._process_candidate(session, _prediction_candidate()) is False
-    assert len(calls) == 1
+    assert service._process_candidate(session, _prediction_candidate()) is False
+    assert calls == []
     assert len(session.alerts) == 1
 
 
@@ -476,3 +478,49 @@ def test_attach_failure_risk_scores_only_haul_trucks_and_swallows_scoring_errors
     )
     isolated = attach_failure_risk_predictions(MagicMock(), snapshot)
     assert isolated.failure_risk == {}
+
+
+def test_default_monitoring_creates_alert_without_langgraph(monkeypatch):
+    session = FakeSession()
+    calls = []
+    monkeypatch.setattr(
+        "app.monitoring.service.list_site_alerts",
+        lambda *_args, **_kwargs: [
+            alert for alert in session.alerts.values() if alert.status != AlertStatus.RESOLVED
+        ],
+    )
+    service = MonitoringService(
+        settings=_settings(),
+        investigation_runner=lambda _session, trigger: calls.append(trigger) or SimpleNamespace(
+            investigation_id=uuid4(), status=InvestigationStatus.COMPLETED, completed_at=NOW
+        ),
+    )
+    assert service._process_candidate(session, _candidate()) is False
+    assert calls == []
+    assert len(session.alerts) == 1
+    assert session.alerts[1].source.value == "RULE"
+
+
+def test_ten_congestion_alerts_do_not_start_automatic_investigations(monkeypatch):
+    session = FakeSession()
+    calls = []
+    monkeypatch.setattr(
+        "app.monitoring.service.list_site_alerts",
+        lambda *_args, **_kwargs: [
+            alert for alert in session.alerts.values() if alert.status != AlertStatus.RESOLVED
+        ],
+    )
+    service = MonitoringService(
+        settings=_settings(),
+        investigation_runner=lambda _session, trigger: calls.append(trigger),
+    )
+    for index in range(10):
+        candidate = _candidate().model_copy(update={
+            "equipment_id": 100 + index,
+            "deduplication_key": f"queue:1:{100 + index}",
+            "title": f"Attente prolongée TRK-{index:03d}",
+            "detector_id": "prolonged-idle",
+        })
+        assert service._process_candidate(session, candidate) is False
+    assert calls == []
+    assert len(session.alerts) == 10

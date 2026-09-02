@@ -41,7 +41,7 @@ interface InvestigationStore {
   entries: Record<string, InvestigationEntry>
   lookup: (scope: InvestigationScope, refresh?: boolean) => Promise<void>
   retrieve: (id: string, refresh?: boolean) => Promise<void>
-  start: (trigger: InvestigationTriggerInput) => Promise<void>
+  start: (trigger: InvestigationTriggerInput, options?: { retryFailed?: boolean }) => Promise<void>
 }
 
 export const useInvestigationStore = create<InvestigationStore>((set, get) => {
@@ -61,25 +61,26 @@ export const useInvestigationStore = create<InvestigationStore>((set, get) => {
     entries: {},
     lookup(scope, refresh = false) {
       const key = investigationKey(scope)
-      return once(key, async () => {
+      return once(`lookup:${key}`, async () => {
         const previous = get().entries[key]
         if (previous && !refresh) return
-        put(key, { ...previous, phase: "loading" })
+        put(key, { ...previous, phase: previous?.phase === "running" ? "running" : "loading" })
         try {
           const results = await aiApi.find(scope)
           if (results[0]) save(key, results[0])
+          else if (previous?.phase === "running") put(key, { phase: "running" })
           else if (previous?.creationUncertain) put(key, {
             phase: "error", creationUncertain: true,
             error: "Résultat pas encore enregistré. L’exécution peut continuer côté serveur ; actualisez sans relancer.",
           })
           else put(key, { phase: "absent" })
         } catch (error) {
-          put(key, { ...previous, phase: "error", error: errorLabel(error), creationUncertain: previous?.creationUncertain })
+          put(key, { ...previous, phase: previous?.phase === "running" ? "running" : "error", error: errorLabel(error), creationUncertain: previous?.creationUncertain })
         }
       })
     },
     retrieve(id, refresh = false) {
-      return once(id, async () => {
+      return once(`retrieve:${id}`, async () => {
         if (get().entries[id] && !refresh) return
         const previous = get().entries[id]
         put(id, { ...previous, phase: "loading" })
@@ -87,17 +88,22 @@ export const useInvestigationStore = create<InvestigationStore>((set, get) => {
         catch (error) { put(id, { ...previous, phase: "error", error: errorLabel(error) }) }
       })
     },
-    start(trigger) {
+    start(trigger, options) {
+      const retryFailed = options?.retryFailed === true
       const scope = { site_id: trigger.site_id, shift_id: trigger.shift_id, source_record_id: trigger.source_record_id ?? "" }
       const key = investigationKey(scope)
-      return once(key, async () => {
-        if (get().entries[key]?.result || get().entries[key]?.creationUncertain) return
+      return once(`start:${key}`, async () => {
+        const previous = get().entries[key]
+        if (previous?.creationUncertain) return
+        if (previous?.result && previous.result.status !== "FAILED") return
+        if (previous?.result?.status === "FAILED" && !retryFailed) return
         put(key, { phase: "loading" })
         let posted = false
         try {
-          // Recheck durable history immediately before spending an LLM call.
           const existing = await aiApi.find(scope)
-          if (existing[0]) { save(key, existing[0]); return }
+          const latest = existing[0]
+          if (latest && latest.status !== "FAILED") { save(key, latest); return }
+          if (latest?.status === "FAILED" && !retryFailed) { save(key, latest); return }
           put(key, { phase: "running" })
           posted = true
           save(key, await aiApi.create(trigger))
