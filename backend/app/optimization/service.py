@@ -7,9 +7,9 @@ import logging
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.enums import EquipmentType
 from app.optimization.eligibility import NOT_APPLICABLE as ELIG_NOT_APPLICABLE
 from app.optimization.eligibility import eligibility_for_alert
+from app.optimization.inputs import build_trusted_optimization_input
 from app.optimization.persistence import latest_run_for_alert, list_runs_for_alert, persist_run, run_to_dict
 from app.optimization.solver import (
     DEFAULT_WEIGHTS,
@@ -21,20 +21,21 @@ from app.optimization.solver import (
     explain_run,
     generate_candidates,
     snapshot_digest,
-    candidate_loader_ids,
 )
 from app.services.external_context.weather import get_weather_context
 from app.services.operational.alerts import get_site_alert_or_404
-from app.services.operational.assignments import bulk_current_assignments, current_assignment
 from app.services.operational.context import OperationalContext
-from app.services.operational.equipment import latest_positions, list_site_equipment
-from app.services.operational.loading import loading_service_context
-from app.services.operational.road_catalog import list_road_catalog, resolve_haul_endpoints
 
 logger = logging.getLogger(__name__)
 
 
-def create_optimization_run(session: Session, ctx: OperationalContext, alert_id: str) -> dict:
+def create_optimization_run(
+    session: Session,
+    ctx: OperationalContext,
+    alert_id: str,
+    *,
+    extra_snapshot: dict | None = None,
+) -> dict:
     alert = get_site_alert_or_404(session, ctx.site_id, alert_id)
     pk = alert.alert_id
     eligibility = eligibility_for_alert(alert)
@@ -60,62 +61,31 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
             candidates: list[dict] = []
             missing_reason = None
         else:
-            equipment = list_site_equipment(session, ctx)
-            by_id = {row.equipment_id: row for row in equipment}
-            truck = by_id.get(alert.equipment_id) if alert.equipment_id else None
-            assignment = current_assignment(session, truck.equipment_id, ctx) if truck else None
-            roads, zone_by_id = list_road_catalog(session, ctx)
-            zone_codes = {zone.zone_id: zone.code for zone in zone_by_id.values()}
-            origin, dest = resolve_haul_endpoints(
-                session,
-                ctx,
-                zone_by_id,
-                equipment_id=truck.equipment_id if truck else None,
-                zone_id=alert.zone_id,
-            )
-            if dest is None and assignment is not None and assignment.destination_zone_id is not None:
-                dest = zone_codes.get(assignment.destination_zone_id)
-            loaders = [row for row in equipment if row.type in {EquipmentType.EXCAVATOR, EquipmentType.LOADER}]
-            candidate_ids = candidate_loader_ids(assignment=assignment, loaders=loaders)
-            loading = loading_service_context(
-                session,
-                ctx,
-                equipment_id=truck.equipment_id if truck else None,
-                zone_id=None,
-                loader_ids=candidate_ids,
-            )
-            loader_zones = _loader_zone_codes(session, ctx, equipment, zone_codes)
-            snapshot.update(
-                {
-                    "truckId": truck.equipment_id if truck else None,
-                    "truckCode": getattr(truck, "code", None),
-                    "assignmentId": assignment.assignment_id if assignment else None,
-                    "originZoneCode": origin,
-                    "destZoneCode": dest,
-                    "loaderCount": len(loaders),
-                    "loadingLoaderCount": len(loading.get("loaders") or []),
-                    "candidateLoaderIds": candidate_ids,
-                    "loadingLoaderIds": [row.get("loaderId") for row in (loading.get("loaders") or [])],
-                    "loaderZones": loader_zones,
-                }
-            )
-            candidates: list[dict] = []
-            if truck is None or dest is None:
-                outcome, missing_reason = dispatch_outcome(truck=truck, dest=dest, candidates=[])
+            trusted = build_trusted_optimization_input(session, ctx, alert)
+            snapshot.update(trusted.snapshot_fields)
+            candidates = []
+            if trusted.truck is None or trusted.dest_code is None:
+                outcome, missing_reason = dispatch_outcome(
+                    truck=trusted.truck, dest=trusted.dest_code, candidates=[]
+                )
             else:
                 candidates = generate_candidates(
-                    truck=truck,
-                    assignment=assignment,
-                    loaders=loaders,
-                    roads=roads,
-                    zone_codes=zone_codes,
-                    loading=loading,
-                    origin_code=origin,
-                    dest_code=dest,
+                    truck=trusted.truck,
+                    assignment=trusted.assignment,
+                    loaders=trusted.loaders,
+                    roads=trusted.roads,
+                    zone_codes=trusted.zone_codes,
+                    loading=trusted.loading,
+                    origin_code=trusted.origin_code,
+                    dest_code=trusted.dest_code,
                     weights=weights,
-                    loader_zones=loader_zones,
+                    loader_zones=trusted.loader_zones,
                 )
-                outcome, missing_reason = dispatch_outcome(truck=truck, dest=dest, candidates=candidates)
+                outcome, missing_reason = dispatch_outcome(
+                    truck=trusted.truck, dest=trusted.dest_code, candidates=candidates
+                )
+        if extra_snapshot:
+            snapshot.update(extra_snapshot)
         explanation = explain_run(
             outcome=outcome,
             eligibility=eligibility,
@@ -146,6 +116,8 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
         raise
     except Exception:
         logger.exception("optimization run failed alert_id=%s", pk)
+        if extra_snapshot:
+            snapshot.update(extra_snapshot)
         row = persist_run(
             session,
             alert_id=pk,
@@ -171,6 +143,50 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
         return payload
 
 
+def persist_evaluated_run(
+    session: Session,
+    ctx: OperationalContext,
+    *,
+    alert_id: int,
+    eligibility: str,
+    outcome: str,
+    candidates: list[dict],
+    recommended_candidate_id: str | None,
+    weather_status: str | None,
+    snapshot: dict,
+    weights: dict | None = None,
+    explanation: dict | None = None,
+) -> dict:
+    resolved_weights = dict(weights or DEFAULT_WEIGHTS)
+    resolved_explanation = explanation or explain_run(
+        outcome=outcome,
+        eligibility=eligibility,
+        candidates=candidates,
+        weights=resolved_weights,
+        weather_status=weather_status,
+    )
+    if recommended_candidate_id is None:
+        recommended_candidate_id = resolved_explanation.get("recommendedCandidateId")
+    payload_snapshot = _jsonable({**snapshot, "explanation": resolved_explanation})
+    row = persist_run(
+        session,
+        alert_id=alert_id,
+        site_id=ctx.site_id,
+        optimizer_version=OPTIMIZER_VERSION,
+        weights=resolved_weights,
+        eligibility=eligibility,
+        outcome=outcome,
+        snapshot_digest=snapshot_digest(snapshot),
+        candidates=candidates,
+        recommended_candidate_id=recommended_candidate_id,
+        weather_status=weather_status,
+        snapshot=payload_snapshot,
+    )
+    payload = run_to_dict(row)
+    payload["explanation"] = resolved_explanation
+    return payload
+
+
 def list_optimization_runs(session: Session, ctx: OperationalContext, alert_id: str) -> list[dict]:
     alert = get_site_alert_or_404(session, ctx.site_id, alert_id)
     return [run_to_dict(row) for row in list_runs_for_alert(session, alert.alert_id)]
@@ -179,34 +195,3 @@ def list_optimization_runs(session: Session, ctx: OperationalContext, alert_id: 
 def latest_optimization_outcome(session: Session, alert_id: int) -> str | None:
     row = latest_run_for_alert(session, alert_id)
     return row.outcome if row is not None else None
-
-
-def _loader_zone_codes(
-    session: Session,
-    ctx: OperationalContext,
-    equipment: list,
-    zone_codes: dict[int, str],
-) -> dict[int, str]:
-    """Loader pit from truck assignments, then equipment position. Never invents a zone."""
-    truck_ids = [row.equipment_id for row in equipment if row.type == EquipmentType.HAUL_TRUCK]
-    loader_ids = {
-        row.equipment_id
-        for row in equipment
-        if row.type in {EquipmentType.EXCAVATOR, EquipmentType.LOADER}
-    }
-    zones: dict[int, str] = {}
-    for assignment in bulk_current_assignments(session, truck_ids, ctx).values():
-        if assignment.loader_id not in loader_ids or assignment.origin_zone_id is None:
-            continue
-        code = zone_codes.get(assignment.origin_zone_id)
-        if code and assignment.loader_id not in zones:
-            zones[assignment.loader_id] = code
-    positions = latest_positions(session, ctx.site_id)
-    for loader_id in loader_ids:
-        position = positions.get(loader_id)
-        if position is None or position.zone_id is None:
-            continue
-        code = zone_codes.get(position.zone_id)
-        if code:
-            zones[loader_id] = code
-    return zones

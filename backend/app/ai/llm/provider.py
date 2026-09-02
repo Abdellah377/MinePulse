@@ -17,6 +17,7 @@ from app.ai.contracts import (
     InvestigationRecommendation,
     RecommendationDiscussionReply,
 )
+from app.optimization.contracts import OptimizationPlannerDecision, OptimizationReview
 from app.config import Settings, get_settings
 
 
@@ -112,6 +113,10 @@ class LLMProvider(Protocol):
     def build_recommendation(self, payload: dict) -> InvestigationRecommendation: ...
 
     def discuss_recommendation(self, payload: dict) -> RecommendationDiscussionReply: ...
+
+    def plan_optimization(self, payload: dict) -> OptimizationPlannerDecision: ...
+
+    def review_optimization(self, payload: dict) -> OptimizationReview: ...
 
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -343,6 +348,16 @@ class OpenAILLMProvider:
 
     def discuss_recommendation(self, payload: dict) -> RecommendationDiscussionReply:
         return self._structured(RecommendationDiscussionReply, _DISCUSSION_PROMPT, payload)
+
+    def plan_optimization(self, payload: dict) -> OptimizationPlannerDecision:
+        from app.ai.optimization.prompts import PLANNER_BODY
+
+        return self._structured(OptimizationPlannerDecision, _COMMON_POLICY + "\n\n" + PLANNER_BODY, payload)
+
+    def review_optimization(self, payload: dict) -> OptimizationReview:
+        from app.ai.optimization.prompts import REVIEWER_BODY
+
+        return self._structured(OptimizationReview, _COMMON_POLICY + "\n\n" + REVIEWER_BODY, payload)
 
 
 def create_llm_provider(settings: Settings | None = None) -> LLMProvider:

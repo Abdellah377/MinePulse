@@ -52,10 +52,21 @@ describe("visibleOptimizationPlans", () => {
     expect(persisted).toHaveLength(5)
   })
 
-  it("keeps the recommended candidate when it is ranked first", () => {
-    const persisted = [candidate("c-best"), candidate("c-2"), candidate("c-3"), candidate("c-4")]
-    const { visible } = visibleOptimizationPlans(persisted)
-    expect(visible[0]?.candidateId).toBe("c-best")
+  it("hides the current plan and uses displayedCandidateIds when provided", () => {
+    const current = { ...candidate("now"), isCurrent: true }
+    const alt = { ...candidate("alt"), isCurrent: false }
+    const extra = { ...candidate("extra"), isCurrent: false }
+    expect(visibleOptimizationPlans([current, alt, extra]).visible.map((row) => row.candidateId)).toEqual(["alt", "extra"])
+    expect(visibleOptimizationPlans([current, alt, extra], ["alt"]).visible.map((row) => row.candidateId)).toEqual(["alt"])
+    expect(visibleOptimizationPlans([current, alt], []).visible).toEqual([])
+  })
+
+  it("labels equivalents without presenting the current plan as a recommendation", () => {
+    const current = { ...candidate("now"), isCurrent: true }
+    const tied = { ...candidate("eq"), isCurrent: false, candidateRelation: "EQUIVALENT" as const }
+    expect(planCandidateLabel(tied, "eq", 1)).toBe("Recommandé")
+    expect(planCandidateLabel(tied, "now", 1)).toBe("Équivalent")
+    expect(planCandidateLabel(current, "now", 1)).toBe("Plan actuel · Recommandé")
   })
 })
 
@@ -202,5 +213,9 @@ describe("optimizerOperatorStatus", () => {
 
   it("names an unroutable plan", () => {
     expect(optimizerOperatorStatus({ outcome: "NO_FEASIBLE_PLAN", explanation: { missingReason: "Aucun itinéraire faisable" } })).toBe("Aucun itinéraire faisable")
+  })
+
+  it("states no change when the current plan remains best", () => {
+    expect(optimizerOperatorStatus({ outcome: "FEASIBLE", workflowStatus: "NO_CHANGE_RECOMMENDED" })).toContain("Aucune modification recommandée")
   })
 })

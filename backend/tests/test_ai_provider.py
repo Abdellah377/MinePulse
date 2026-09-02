@@ -47,6 +47,19 @@ def test_diagnosis_schema_can_be_converted_to_openai_strict_schema():
     assert "reasoning_summary" in schema["required"]
 
 
+def test_optimization_schemas_can_be_converted_to_openai_strict_schema():
+    from openai.lib._pydantic import to_strict_json_schema
+
+    from app.optimization.contracts import OptimizationPlannerDecision, OptimizationReview
+
+    planner = to_strict_json_schema(OptimizationPlannerDecision)
+    review = to_strict_json_schema(OptimizationReview)
+    assert planner["additionalProperties"] is False
+    assert review["additionalProperties"] is False
+    assert "selected_optimizers" in planner["required"]
+    assert "status" in review["required"]
+
+
 def test_provider_disables_retries_and_bounds_each_call(monkeypatch):
     import openai
     client = MagicMock()

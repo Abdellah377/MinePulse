@@ -2,6 +2,11 @@ import type { OptimizationCandidate } from "@/lib/api/types/optimization"
 
 export const VISIBLE_OPTIMIZATION_PLAN_COUNT = 3
 
+export const NO_CHANGE_OPERATOR_COPY =
+  "Aucune modification recommandée — le plan actuel reste le meilleur parmi les options évaluées."
+
+export const REVIEW_UNAVAILABLE_COPY = "Résultats calculés — revue IA indisponible."
+
 export const IMPACT_METRIC_LABEL = {
   waitMinutes: "Attente",
   travelMinutes: "Trajet",
@@ -186,8 +191,12 @@ export function compactPlanImpact(plan: Pick<OptimizationCandidate, ImpactMetric
 
 export function optimizerOperatorStatus(run: {
   outcome?: string | null
+  workflowStatus?: string | null
+  reviewUnavailable?: boolean
+  deterministicOnly?: boolean
   explanation?: { why?: string | null; missingReason?: string | null } | null
 }): string {
+  if (run.workflowStatus === "NO_CHANGE_RECOMMENDED") return NO_CHANGE_OPERATOR_COPY
   const missing = run.explanation?.missingReason?.trim()
   const why = run.explanation?.why?.trim()
   const generic = !why || why.includes("métrique absente")
@@ -204,24 +213,49 @@ export function optimizerOperatorStatus(run: {
   return run.outcome ? String(run.outcome) : "Optimisation indisponible"
 }
 
-export function visibleOptimizationPlans<T extends Pick<OptimizationCandidate, "candidateId">>(
+export function optimizationWorkflowBanner(run: {
+  workflowStatus?: string | null
+  reviewUnavailable?: boolean
+  deterministicOnly?: boolean
+  reviewerCaution?: string | null
+} | null | undefined): string | null {
+  if (!run) return null
+  if (run.workflowStatus === "NO_CHANGE_RECOMMENDED") return NO_CHANGE_OPERATOR_COPY
+  if (run.reviewUnavailable || run.workflowStatus === "REVIEW_UNAVAILABLE") return REVIEW_UNAVAILABLE_COPY
+  if (run.deterministicOnly || run.workflowStatus === "DETERMINISTIC_ONLY") {
+    return "Résultats calculés — orchestration IA indisponible, plan déterministe conservé."
+  }
+  if (run.reviewerCaution) return run.reviewerCaution
+  return null
+}
+
+export function visibleOptimizationPlans<T extends Pick<OptimizationCandidate, "candidateId" | "isCurrent">>(
   candidates: T[] | null | undefined,
+  displayedCandidateIds?: string[] | null,
 ): { visible: T[]; hiddenCount: number } {
   const all = candidates ?? []
-  return {
-    visible: all.slice(0, VISIBLE_OPTIMIZATION_PLAN_COUNT),
-    hiddenCount: Math.max(0, all.length - VISIBLE_OPTIMIZATION_PLAN_COUNT),
+  const recs = all.filter((row) => !row.isCurrent)
+  if (displayedCandidateIds != null) {
+    const byId = new Map(all.map((row) => [row.candidateId, row]))
+    const visible = displayedCandidateIds.flatMap((id) => {
+      const row = byId.get(id)
+      return row && !row.isCurrent ? [row] : []
+    })
+    return { visible, hiddenCount: Math.max(0, recs.length - visible.length) }
   }
+  const visible = recs.slice(0, VISIBLE_OPTIMIZATION_PLAN_COUNT)
+  return { visible, hiddenCount: Math.max(0, recs.length - visible.length) }
 }
 
 export function planCandidateLabel(
-  plan: Pick<OptimizationCandidate, "candidateId" | "isCurrent">,
+  plan: Pick<OptimizationCandidate, "candidateId" | "isCurrent" | "candidateRelation">,
   recommendedCandidateId: string | null | undefined,
   alternativeIndex: number,
 ): string {
   const parts: string[] = []
   if (plan.isCurrent) parts.push("Plan actuel")
   if (plan.candidateId === recommendedCandidateId) parts.push("Recommandé")
+  else if (plan.candidateRelation === "EQUIVALENT") parts.push("Équivalent")
   if (parts.length) return parts.join(" · ")
   return `Alternative ${alternativeIndex}`
 }

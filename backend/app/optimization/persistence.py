@@ -67,8 +67,26 @@ def latest_run_for_alert(session: Session, alert_id: int) -> AiOptimizationRun |
     )
 
 
-def run_to_dict(row: AiOptimizationRun) -> dict:
+def workflow_fields_from_snapshot(snapshot: dict | None) -> dict:
+    """Additive orchestration envelope. Missing on pre-V1 rows."""
+    wf = (snapshot or {}).get("workflow") or {}
+    status = wf.get("workflowStatus")
     return {
+        "workflowStatus": status,
+        "reviewStatus": wf.get("reviewStatus"),
+        "displayedCandidateIds": wf.get("displayedCandidateIds"),
+        "baselineCandidateId": wf.get("baselineCandidateId"),
+        "reviewerCaution": wf.get("cautionSummary") or wf.get("reviewerCaution"),
+        "operatorSummary": wf.get("operatorSummary"),
+        "deterministicOnly": status == "DETERMINISTIC_ONLY",
+        "reviewUnavailable": status == "REVIEW_UNAVAILABLE",
+        "reoptimizationOccurred": bool(wf.get("reoptimizationOccurred")),
+        "optimizationPassCount": wf.get("optimizationPassCount"),
+    }
+
+
+def run_to_dict(row: AiOptimizationRun) -> dict:
+    payload = {
         "runId": str(row.run_id),
         "alertId": f"alert-{row.alert_id}",
         "siteId": row.site_id,
@@ -82,3 +100,5 @@ def run_to_dict(row: AiOptimizationRun) -> dict:
         "weatherStatus": row.weather_status,
         "createdAt": row.created_at.isoformat() if row.created_at else None,
     }
+    payload.update(workflow_fields_from_snapshot(row.snapshot))
+    return payload

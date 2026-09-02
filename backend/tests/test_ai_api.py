@@ -33,6 +33,7 @@ def test_investigation_api_routes_are_registered():
     assert "/api/external-context/weather" in paths
     assert "/api/actions/inbox" in paths
     assert "/api/optimization/runs" in paths
+    assert "/api/optimization/workflows" in paths
     assert "/api/alerts/active-count" in paths
 
 

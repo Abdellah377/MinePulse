@@ -10,6 +10,7 @@ import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
 import { mergeInboxItems, pickInboxSelection, removeInboxItem } from "@/lib/ai/actionsInbox"
 import {
   classifyOptimizationImpact,
+  optimizationWorkflowBanner,
   optimizerOperatorStatus,
   planCandidateLabel,
   visibleOptimizationPlans,
@@ -147,19 +148,9 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
       const latest = detail.latestRun
       const stale = !latest || latest.outcome === "INSUFFICIENT_DATA" || latest.outcome === "ERROR"
       const fromLatest = (): OptimizationRun => ({
-        runId: latest!.runId,
+        ...latest!,
         alertId,
-        siteId: 0,
-        optimizerVersion: latest!.optimizerVersion,
-        weights: (latest!.weights ?? {}) as Record<string, number>,
-        eligibility: latest!.eligibility,
-        outcome: latest!.outcome,
-        snapshotDigest: null,
-        candidates: latest!.candidates,
-        recommendedCandidateId: latest!.recommendedCandidateId,
-        weatherStatus: latest!.weatherStatus,
-        createdAt: latest!.createdAt,
-        explanation: latest!.explanation,
+        snapshotDigest: latest!.snapshotDigest ?? null,
       })
       if (latest && !stale) {
         nextRun = fromLatest()
@@ -178,7 +169,10 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
       setRun(nextRun)
       if (nextRun) {
         setInbox((rows) => rows.map((row) => row.id === alertId ? { ...row, latestRunOutcome: nextRun!.outcome, optimizationEligible: nextRun!.eligibility === "OPTIMIZABLE" || detail.alert.optimizationEligible } : row))
-        setSelectedPlanId(nextRun.recommendedCandidateId ?? nextRun.candidates.find((plan) => !plan.isCurrent)?.candidateId ?? nextRun.candidates[0]?.candidateId ?? null)
+        const displayedId = nextRun.displayedCandidateIds?.[0]
+        const fallbackRec = nextRun.candidates.find((plan) => !plan.isCurrent)?.candidateId
+        const baselineId = nextRun.baselineCandidateId ?? nextRun.candidates.find((plan) => plan.isCurrent)?.candidateId
+        setSelectedPlanId(displayedId ?? fallbackRec ?? baselineId ?? nextRun.recommendedCandidateId ?? null)
       } else {
         setSelectedPlanId(null)
       }
@@ -335,9 +329,12 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     setBusy(true)
     setActionError(null)
     try {
-      const next = await aiApi.createOptimizationRun(alertId, opsCtx())
+      const next = await aiApi.createOptimizationWorkflow(alertId, opsCtx())
       setRun(next)
-      setSelectedPlanId(next.recommendedCandidateId ?? next.candidates.find((plan) => !plan.isCurrent)?.candidateId ?? next.candidates[0]?.candidateId ?? null)
+      const displayedId = next.displayedCandidateIds?.[0]
+      const fallbackRec = next.candidates.find((plan) => !plan.isCurrent)?.candidateId
+      const baselineId = next.baselineCandidateId ?? next.candidates.find((plan) => plan.isCurrent)?.candidateId
+      setSelectedPlanId(displayedId ?? fallbackRec ?? baselineId ?? next.recommendedCandidateId ?? null)
       setInbox((rows) => rows.map((row) => row.id === alertId ? { ...row, latestRunOutcome: next.outcome, optimizationEligible: next.eligibility === "OPTIMIZABLE" } : row))
     } catch {
       setActionError("Optimisation de dispatch indisponible.")
@@ -519,7 +516,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
             <summary className="cursor-pointer text-[12px] font-semibold text-foreground">
               <span className="inline-flex items-center gap-1.5"><MessageSquare className="size-3.5" />Discuter cette recommandation</span>
             </summary>
-            <p className="mt-1 text-[11px] text-muted">Hors investigation. L’envoi d’un message est le seul appel IA de cet écran.</p>
+            <p className="mt-1 text-[11px] text-muted">Hors investigation. Optimiser/Recalculer orchestre le plan ; l’envoi d’un message discute la recommandation. Consulter un dossier n’appelle pas l’IA.</p>
             {id && (
               <div className="mt-3 space-y-2" data-testid="recommendation-discussion">
                 <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border border-border bg-background p-2">
@@ -613,18 +610,22 @@ function OptimizationPlans({
   selectedPlanId: string | null
   onSelectPlan: (id: string) => void
 }) {
-  const { visible: plans, hiddenCount } = visibleOptimizationPlans(run.candidates)
-  const recommendedId = run.recommendedCandidateId
+  const { visible: plans, hiddenCount } = visibleOptimizationPlans(run.candidates, run.displayedCandidateIds)
+  const recommendedId = run.displayedCandidateIds?.[0] ?? run.recommendedCandidateId
+  const banner = optimizationWorkflowBanner(run)
   let alternativeIndex = 0
   return (
     <div className="mt-2 space-y-2">
       <p className="text-[11px] text-muted">{optimizerOperatorStatus(run)}</p>
+      {banner && banner !== optimizerOperatorStatus(run) && (
+        <p className={cn("text-[11px]", run.reviewerCaution === banner ? "text-warning" : "text-muted-2")}>{banner}</p>
+      )}
       {run.weatherStatus && <p className="text-[10px] text-muted-2">Météo : {run.weatherStatus} (affichage uniquement, non notée)</p>}
-      {!plans.length && run.outcome !== "FEASIBLE" && (
+      {!plans.length && run.workflowStatus !== "NO_CHANGE_RECOMMENDED" && run.outcome !== "FEASIBLE" && (
         <p className="text-[11px] text-muted">Aucun candidat de dispatch à afficher. Aucun impact n’est inventé.</p>
       )}
       {plans.map((plan) => {
-        const named = Boolean(plan.isCurrent || plan.candidateId === recommendedId)
+        const named = Boolean(plan.candidateId === recommendedId || plan.candidateRelation === "EQUIVALENT")
         if (!named) alternativeIndex += 1
         return (
           <PlanCandidateButton

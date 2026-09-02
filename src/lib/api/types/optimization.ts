@@ -1,5 +1,4 @@
 import type { Alert } from "@/lib/mock/types"
-import type { JsonValue } from "@/lib/api/types/ai"
 import type { RecommendationDecisionRecord } from "@/lib/api/types/actionsIa"
 
 export type OptimizationOutcome =
@@ -26,6 +25,8 @@ export type OptimizationCandidate = {
   isCurrent?: boolean
   rankReason: string
   rank?: number
+  candidateRelation?: "BASELINE" | "IMPROVEMENT" | "EQUIVALENT" | "TRADEOFF"
+  equivalentGroupId?: string | null
 }
 
 export type OptimizationExplanation = {
@@ -39,6 +40,13 @@ export type OptimizationExplanation = {
   why: string
   missingReason?: string | null
 }
+
+export type OptimizationWorkflowStatus =
+  | "ORCHESTRATED"
+  | "DETERMINISTIC_ONLY"
+  | "REVIEW_UNAVAILABLE"
+  | "NO_CHANGE_RECOMMENDED"
+  | "INSUFFICIENT_EVIDENCE"
 
 export type OptimizationRun = {
   runId: string
@@ -54,6 +62,16 @@ export type OptimizationRun = {
   weatherStatus: string | null
   createdAt: string | null
   explanation?: OptimizationExplanation | null
+  workflowStatus?: OptimizationWorkflowStatus | string | null
+  reviewStatus?: string | null
+  displayedCandidateIds?: string[] | null
+  baselineCandidateId?: string | null
+  reviewerCaution?: string | null
+  operatorSummary?: string | null
+  deterministicOnly?: boolean
+  reviewUnavailable?: boolean
+  reoptimizationOccurred?: boolean
+  optimizationPassCount?: number | null
 }
 
 export type ActionsInboxItem = Alert & {
@@ -77,16 +95,5 @@ export type ActionsInboxDetail = {
   alert: ActionsInboxItem
   investigationId: string | null
   decision: RecommendationDecisionRecord | null
-  latestRun: {
-    runId: string
-    outcome: string
-    eligibility: string
-    candidates: OptimizationCandidate[]
-    recommendedCandidateId: string | null
-    weatherStatus: string | null
-    weights: Record<string, JsonValue>
-    optimizerVersion: string
-    createdAt: string | null
-    explanation?: OptimizationExplanation | null
-  } | null
+  latestRun: OptimizationRun | null
 }

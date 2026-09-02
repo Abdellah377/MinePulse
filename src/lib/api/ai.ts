@@ -91,6 +91,14 @@ export const aiApi = {
       body: JSON.stringify({ alert_id: alertId }),
     })
   },
+  createOptimizationWorkflow(alertId: string, ctx?: { siteCode?: string; shiftId?: string }): Promise<import("./types/optimization").OptimizationRun> {
+    requireApi()
+    return fetchJson(`/optimization/workflows${opsQueryString(ctx)}`, {
+      method: "POST",
+      body: JSON.stringify({ alert_id: alertId }),
+      timeoutMs: 180_000,
+    })
+  },
   listOptimizationRuns(alertId: string, ctx?: { siteCode?: string; shiftId?: string }): Promise<import("./types/optimization").OptimizationRun[]> {
     requireApi()
     return fetchJson(`/optimization/runs${opsQueryString(ctx, { alert_id: alertId })}`)

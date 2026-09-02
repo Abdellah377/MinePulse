@@ -9,7 +9,7 @@ from app.ai.persistence import find_investigations
 from app.db.models import Alert, Equipment, Zone
 from app.mappers.dto import alert_to_dto
 from app.optimization.eligibility import OPTIMIZABLE, eligibility_for_alert
-from app.optimization.persistence import latest_run_for_alert
+from app.optimization.persistence import latest_run_for_alert, run_to_dict
 from app.services.operational.alerts import ALERT_PAGE_DEFAULT, get_site_alert_or_404, page_site_alerts
 from app.services.operational.context import OperationalContext
 from app.ai.feedback import load_decision_row, load_decision_row_for_alert, to_decision_record
@@ -79,18 +79,12 @@ def inbox_detail(session: Session, ctx: OperationalContext, alert_id: str) -> di
         "alert": {**dto, **flags},
         "investigationId": flags["investigationId"],
         "decision": decision,
-        "latestRun": {
-            "runId": str(run.run_id),
-            "outcome": run.outcome,
-            "eligibility": run.eligibility,
-            "candidates": run.candidates or [],
-            "recommendedCandidateId": run.recommended_candidate_id,
-            "weatherStatus": run.weather_status,
-            "weights": run.weights or {},
-            "optimizerVersion": run.optimizer_version,
-            "createdAt": run.created_at.isoformat() if run.created_at else None,
-            "explanation": (run.snapshot or {}).get("explanation"),
-        }
-        if run is not None
-        else None,
+        "latestRun": (
+            {
+                **run_to_dict(run),
+                "explanation": (run.snapshot or {}).get("explanation"),
+            }
+            if run is not None
+            else None
+        ),
     }

@@ -140,6 +140,7 @@ it("Actions IA decisions do not start investigations; only discussion posts gene
   expect(source.indexOf("<OptimizationPlans")).toBeLessThan(source.indexOf("<OptimizationImpactCard view={impact}"))
   expect(readFileSync("src/components/ai/OptimizationImpact.tsx", "utf8")).toMatch(/Impact estimé/)
   expect(source).toMatch(/createOptimizationRun/)
+  expect(source).toMatch(/createOptimizationWorkflow/)
   expect(source).not.toMatch(/JSON\.stringify/)
   expect(source).not.toMatch(/Ouvrir Alertes IA/)
   expect(source).not.toMatch(/Retour aux alertes/)

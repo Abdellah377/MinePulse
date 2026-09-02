@@ -9,3 +9,4 @@ def test_alert_and_optimizer_routes_registered():
     assert "/api/actions/inbox" in paths
     assert "/api/actions/inbox/{alert_id}" in paths
     assert "/api/optimization/runs" in paths
+    assert "/api/optimization/workflows" in paths
