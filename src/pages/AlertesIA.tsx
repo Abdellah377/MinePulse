@@ -27,7 +27,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { MiniTimelineStrip } from "@/components/equipment/MiniTimelineStrip"
 import { InvestigationAlerts } from "@/components/ai/InvestigationAlerts"
-import { Section, Fact, AiBlock } from "@/components/ai/InvestigationLayout"
+import { Section, Fact } from "@/components/ai/InvestigationLayout"
+import { DISCLOSURE_SUMMARY_CLASS } from "@/components/ai/EvidenceCard"
 
 type SeverityFilter = "all" | AlertSeverity
 
@@ -236,10 +237,7 @@ function DemoAlertesIA({ tab }: Partial<WorkspacePanelProps> = {}) {
                 <Badge variant="outline">{selected.statusLabel}</Badge>
               </div>
               <h2 className="text-[16px] font-semibold text-foreground">{selected.title}</h2>
-            </header>
-
-            <Section title="Résumé">
-              <p className="text-[12px] leading-relaxed text-muted">{selected.summary}</p>
+              <p className="mt-1 text-[12px] leading-relaxed text-muted">{selected.summary}</p>
               <dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                 <Fact label="Où" value={selected.zoneName ?? "—"} />
                 <Fact
@@ -247,41 +245,79 @@ function DemoAlertesIA({ tab }: Partial<WorkspacePanelProps> = {}) {
                   value={selected.timeLabel}
                 />
                 <Fact label="Équipement" value={selected.equipmentCode ?? "—"} mono />
-                <Fact label="Confiance" value={`${selected.confidence} %`} />
               </dl>
+            </header>
+
+            <Section title="Conclusion">
+              <h3 className="text-[15px] font-semibold leading-snug text-foreground">{selected.probableCause}</h3>
+              <p className="mt-1 text-[11px] text-muted">Confiance : {selected.confidence} %</p>
             </Section>
 
-            <Section title="Pourquoi">
-              <p className="text-[12px] font-medium text-foreground">{selected.probableCause}</p>
-            </Section>
-
-            <Section title="Preuves / signaux">
-              <ul className="list-inside list-disc text-[11px] text-muted">
-                {selected.signals.map((s) => (
+            <Section title="Pourquoi MinePulse pense cela">
+              <ul className="list-inside list-disc text-[12px] text-muted">
+                {selected.signals.slice(0, 3).map((s) => (
                   <li key={s}>{s}</li>
                 ))}
               </ul>
-              {segs.length > 0 && (
-                <div className="mt-2">
-                  <p className="mb-1 text-[10px] font-semibold uppercase text-muted-2">Film récent</p>
+              {selected.signals.length > 3 && (
+                <details className="mt-2">
+                  <summary className={DISCLOSURE_SUMMARY_CLASS}>
+                    Voir {selected.signals.length - 3} autre{selected.signals.length - 3 === 1 ? "" : "s"} élément{selected.signals.length - 3 === 1 ? "" : "s"}
+                  </summary>
+                  <ul className="mt-1 list-inside list-disc text-[12px] text-muted">
+                    {selected.signals.slice(3).map((s) => (
+                      <li key={s}>{s}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </Section>
+
+            <Section title="Action recommandée">
+              <p className="text-[13px] font-semibold leading-relaxed text-foreground">{selected.suggestedAction}</p>
+              <p className="mt-2 text-[10px] font-medium text-foreground">Validation humaine requise · aucune action automatique</p>
+            </Section>
+
+            <details data-testid="investigation-details" className="rounded-md border border-border bg-surface">
+              <summary className={cn(DISCLOSURE_SUMMARY_CLASS, "text-[12px]")}>
+                <h3 className="inline text-[12px] font-semibold">Détails de l’investigation</h3>
+              </summary>
+              <div className="space-y-3 border-t border-border p-3">
+                {selected.impact && (
+                  <section>
+                    <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-2">Impact estimé</h4>
+                    <p className="text-[12px] text-muted">{selected.impact}</p>
+                    <p className="mt-1 text-[11px] text-muted-2">Si ignoré : {selected.ifIgnored}</p>
+                  </section>
+                )}
+                {selected.signals.length > 0 && (
+                  <section>
+                    <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-2">Preuves complètes</h4>
+                    <ul className="list-inside list-disc text-[11px] text-muted">
+                      {selected.signals.map((s) => (
+                        <li key={s}>{s}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+              </div>
+            </details>
+
+            {segs.length > 0 && (
+              <details className="rounded-md border border-border bg-surface">
+                <summary className={DISCLOSURE_SUMMARY_CLASS}>Film récent</summary>
+                <div className="border-t border-border p-3">
                   <MiniTimelineStrip
                     segments={segs}
                     rangeStart={segs[0].start}
                     rangeEnd={simNowIso ? new Date(simNowIso).getTime() : segs[segs.length - 1]?.end ?? Date.now()}
                   />
                 </div>
-              )}
-            </Section>
-
-            <Section title="Impact">
-              <p className="text-[12px] text-muted">{selected.impact}</p>
-              <p className="mt-1 text-[11px] text-muted-2">
-                Si ignoré : {selected.ifIgnored}
-              </p>
-            </Section>
-
-            <Section title="Liens utiles">
-              <div className="flex flex-col gap-1.5">
+              </details>
+            )}
+            <details className="rounded-md border border-border bg-surface">
+              <summary className={DISCLOSURE_SUMMARY_CLASS}>Liens utiles</summary>
+              <div className="flex flex-col gap-1.5 border-t border-border p-3">
                 <Button
                   size="sm"
                   variant="outline"
@@ -339,31 +375,24 @@ function DemoAlertesIA({ tab }: Partial<WorkspacePanelProps> = {}) {
                   </Button>
                 )}
               </div>
-            </Section>
+            </details>
           </div>
         )}
       </main>
 
-      {/* AI panel */}
       <aside className="flex w-[28%] min-w-[240px] max-w-[340px] flex-col overflow-y-auto bg-surface p-4">
         {selected ? (
           <>
             <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">
               Panel IA
             </h3>
-            <div className="mt-3 space-y-3">
-              <AiBlock label="Cause probable" value={selected.probableCause} />
-              <AiBlock label="Confiance" value={`${selected.confidence} %`} />
-              <AiBlock label="Impact estimé" value={selected.impact} />
-              <AiBlock label="Action immédiate suggérée" value={selected.suggestedAction} />
-            </div>
             <Button className="mt-4 w-full gap-1.5" onClick={() => openActions(selected)}>
               <Sparkles className="size-3.5" />
               Générer des solutions IA
             </Button>
             <p className="mt-2 text-[10px] leading-relaxed text-muted-2">
-              Ouvre un espace Actions IA contextualisé — Préparer / Marquer / Ignorer, sans
-              application automatique.
+              Validation humaine requise. Ouvre un espace Actions IA contextualisé — Préparer /
+              Marquer / Ignorer, sans application automatique.
             </p>
           </>
         ) : (

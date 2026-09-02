@@ -7,6 +7,20 @@ import type {
 
 export type EvidenceDirection = "up" | "down" | "stable" | "none"
 export type EvidenceFamily = "electrical" | "thermal" | "oil" | "fuel" | "queue" | "production" | "connectivity" | "oem" | "timeline" | "other"
+export type EvidenceRole = "observation" | "coverage"
+
+export const PRIMARY_EVIDENCE_LIMIT = 3
+
+const COVERAGE_METRICS = new Set([
+  "fleet_snapshot",
+  "completed_cycle_time_samples",
+  "downtime_by_reason",
+  "active_site_alerts",
+  "equipment_state_timeline",
+  "current_assignments",
+  "operational_context",
+  "equipment_timeline",
+])
 
 export type EvidenceSummary = {
   key: string
@@ -19,6 +33,8 @@ export type EvidenceSummary = {
   direction: EvidenceDirection
   available: boolean
   family: EvidenceFamily
+  role: EvidenceRole
+  sampleCount?: number | null
 }
 
 export type HypothesisRank = "BEST_SUPPORTED" | "CONTRADICTED" | "STRONG" | "MEDIUM" | "WEAK" | "ALTERNATIVE"
@@ -245,12 +261,14 @@ function trendSummaries(evidence: EvidenceItem, value: { [key: string]: JsonValu
       evidenceId: evidence.evidence_id,
       label: metricLabel(metric),
       value: `${formatNumber(first)} → ${formatNumber(last)}${unit ? ` ${unit}` : ""}`,
-      meaning: `${direction.meaning ?? "Évolution mesurée"} · ${sampleCount} mesures`,
+      meaning: direction.meaning ?? "Évolution mesurée",
       why: null,
       timestamp: stringValue(candidate.lastObservedAt) ?? evidence.observed_at,
       direction: direction.direction,
       available: true,
       family,
+      role: "observation",
+      sampleCount,
     }]
   })
 }
@@ -278,8 +296,9 @@ function loadingSummary(evidence: EvidenceItem, value: { [key: string]: JsonValu
     why: null,
     timestamp: evidence.observed_at,
     direction: change === null ? "none" : change > 0 ? "up" : change < 0 ? "down" : "stable",
-    available: true,
+    available: waiting !== null || facts.length > 0,
     family: "queue",
+    role: waiting !== null || facts.length > 0 ? "observation" : "coverage",
   }]
 }
 
@@ -303,6 +322,7 @@ function oemSummaries(evidence: EvidenceItem): EvidenceSummary[] {
       direction: "none",
       available: true,
       family: "oem",
+      role: "observation",
     }]
   }
   return coded.slice(0, 4).map((row, index) => {
@@ -318,27 +338,44 @@ function oemSummaries(evidence: EvidenceItem): EvidenceSummary[] {
       direction: "none" as const,
       available: true,
       family: "oem" as const,
+      role: "observation" as const,
     }
   })
+}
+
+function coverageCountLabel(metric: string): string | null {
+  const labels: Record<string, string> = {
+    fleet_snapshot: "équipements observés",
+    completed_cycle_time_samples: "cycles terminés analysés",
+    downtime_by_reason: "causes d’arrêt observées",
+    active_site_alerts: "alertes actives",
+    equipment_state_timeline: "segments d’état observés",
+    current_assignments: "affectations actives",
+  }
+  return labels[metric] ?? null
+}
+
+function isCoverageMetric(metric: string): boolean {
+  return COVERAGE_METRICS.has(metric)
 }
 
 function singleEvidenceSummary(evidence: EvidenceItem): EvidenceSummary {
   let value: string | null = null
   let meaning = evidence.notes
+  let role: EvidenceRole = isCoverageMetric(evidence.metric) ? "coverage" : "observation"
+  let sampleCount: number | null = null
   if (Array.isArray(evidence.value)) {
-    const countLabel: Record<string, string> = {
-      fleet_snapshot: "équipements observés",
-      completed_cycle_time_samples: "cycles terminés analysés",
-      downtime_by_reason: "causes d’arrêt observées",
-      active_site_alerts: "alertes actives",
-      equipment_state_timeline: "segments d’état observés",
-      current_assignments: "affectations actives",
+    const countLabel = coverageCountLabel(evidence.metric)
+    if (countLabel) {
+      sampleCount = evidence.value.length
+      value = `${evidence.value.length} ${countLabel}`
+      role = "coverage"
     }
-    value = countLabel[evidence.metric] ? `${evidence.value.length} ${countLabel[evidence.metric]}` : null
   } else if (isRecord(evidence.value) && evidence.metric === "operational_context") {
     value = stringValue(evidence.value.siteName) ?? "Contexte du site récupéré"
     meaning = stringValue(evidence.value.shiftName) ?? meaning
-  } else if (isRecord(evidence.value) && evidence.metric === "shift_production_summary") {
+    role = "coverage"
+  } else if (isRecord(evidence.value) && (evidence.metric === "shift_production_summary" || evidence.metric === "shift_production" || evidence.metric === "production")) {
     const shiftly = evidence.value.shiftly
     const row = Array.isArray(shiftly) ? shiftly.find(isRecord) : null
     const tonnage = row ? numberValue(row.tonnage) : null
@@ -346,10 +383,12 @@ function singleEvidenceSummary(evidence: EvidenceItem): EvidenceSummary {
     const attainment = row ? numberValue(row.attainmentPct) : null
     value = tonnage === null ? "Production non mesurée" : `${formatNumber(tonnage)} tonnes produites`
     meaning = target === null ? "Objectif non disponible" : `objectif ${formatNumber(target)} t${attainment === null ? "" : ` · atteinte ${formatNumber(attainment)} %`}`
+    role = tonnage === null ? "coverage" : "observation"
   }
   const primitive = typeof evidence.value === "number" || typeof evidence.value === "string"
     ? `${String(evidence.value)}${evidence.unit ? ` ${evidence.unit}` : ""}`
     : value ?? "Données structurées disponibles"
+  if (primitive === "Données structurées disponibles") role = "coverage"
   const family = /oem|error|diagnostic/.test(evidence.source_tool) || /oem/.test(evidence.metric)
     ? "oem"
     : /timeline|state/.test(evidence.metric)
@@ -366,6 +405,8 @@ function singleEvidenceSummary(evidence: EvidenceItem): EvidenceSummary {
     direction: "none",
     available: evidence.available && evidence.value !== null,
     family,
+    role,
+    sampleCount,
   }
 }
 
@@ -386,21 +427,6 @@ function topHypothesis(result: InvestigationResult): Hypothesis | undefined {
   const supported = result.conclusion?.supported_hypothesis_ids ?? []
   return result.hypotheses.find((hypothesis) => supported.includes(hypothesis.hypothesis_id))
     ?? result.hypotheses[0]
-}
-
-function referencedEvidenceIds(result: InvestigationResult): string[] {
-  const top = topHypothesis(result)
-  const conclusion = result.conclusion
-  return [
-    ...(top?.supporting_evidence_ids ?? []),
-    ...(conclusion?.observed_fact_evidence_ids ?? []),
-    ...(conclusion?.derived_metric_evidence_ids ?? []),
-    ...(conclusion?.contributing_factors.flatMap((factor) => factor.evidence_ids) ?? []),
-    ...(result.recommendation?.evidence_ids ?? []),
-    ...result.evidence
-      .filter((evidence) => /oem|error|diagnostic/.test(evidence.source_tool) || /timeline|state/.test(evidence.metric))
-      .map((evidence) => evidence.evidence_id),
-  ].filter((id, index, ids) => ids.indexOf(id) === index)
 }
 
 function annotateWhy(
@@ -444,11 +470,51 @@ function missingElectricalCard(): EvidenceSummary {
     direction: "none",
     available: false,
     family: "electrical",
+    role: "observation",
   }
 }
 
-export function keyEvidence(result: InvestigationResult, limit = 5): EvidenceSummary[] {
-  const byId = new Map(result.evidence.map((evidence) => [evidence.evidence_id, evidence]))
+function matchesDiagnosisFamily(item: EvidenceSummary, families: Set<EvidenceFamily>): boolean {
+  if (!families.size) return true
+  return item.family === "oem" || item.family === "other" || families.has(item.family)
+}
+
+function rankScore(
+  item: EvidenceSummary,
+  families: Set<EvidenceFamily>,
+  topIds: Set<string>,
+  factIds: Set<string>,
+  derivedIds: Set<string>,
+  factorIds: Set<string>,
+  recIds: Set<string>,
+): number {
+  let value = 0
+  if (item.role === "observation") value += 100
+  if (item.role === "coverage") value -= 40
+  if (item.family === "oem") value += 90
+  if (topIds.has(item.evidenceId)) value += 80
+  if (factIds.has(item.evidenceId)) value += 40
+  if (derivedIds.has(item.evidenceId)) value += 30
+  if (factorIds.has(item.evidenceId)) value += 25
+  if (recIds.has(item.evidenceId)) value += 10
+  if (families.has(item.family)) value += 50
+  if (item.available) value += 8
+  if (item.direction !== "none") value += 4
+  if (!item.available) value -= 80
+  if (families.size && item.family !== "oem" && item.family !== "other" && !families.has(item.family)) value -= 60
+  return value
+}
+
+function dedupeSummaries(items: EvidenceSummary[]): EvidenceSummary[] {
+  const unique: EvidenceSummary[] = []
+  for (const item of items) {
+    if (unique.some((existing) => existing.label === item.label && existing.value === item.value)) continue
+    unique.push(item)
+  }
+  return unique
+}
+
+export function rankEvidenceSummaries(result: InvestigationResult): EvidenceSummary[] {
   const families = diagnosisFamilies(result)
   const top = topHypothesis(result)
   const topIds = new Set(top?.supporting_evidence_ids ?? [])
@@ -456,49 +522,46 @@ export function keyEvidence(result: InvestigationResult, limit = 5): EvidenceSum
   const derivedIds = new Set(result.conclusion?.derived_metric_evidence_ids ?? [])
   const factorIds = new Set(result.conclusion?.contributing_factors.flatMap((factor) => factor.evidence_ids) ?? [])
   const recIds = new Set(result.recommendation?.evidence_ids ?? [])
-  const summaries: EvidenceSummary[] = []
-  for (const evidenceId of referencedEvidenceIds(result)) {
-    const evidence = byId.get(evidenceId)
-    if (!evidence) continue
-    summaries.push(...summarizeEvidence(evidence))
-  }
-  const focused = families.size > 0
-    ? summaries.filter((item) =>
-      item.family === "oem"
-      || item.family === "timeline"
-      || item.family === "other"
-      || families.has(item.family))
-    : summaries
+  const summaries = result.evidence.flatMap(summarizeEvidence)
   const electricalMissing = families.has("electrical")
     && !result.evidence.some(isDirectElectricalMeasurement)
-    && !focused.some((item) => item.available && item.family === "electrical")
-  const ranked = (electricalMissing ? [missingElectricalCard(), ...focused] : focused)
+    && !summaries.some((item) => item.available && item.family === "electrical")
+  const ranked = (electricalMissing ? [...summaries, missingElectricalCard()] : summaries)
     .map((item) => annotateWhy(item, topIds, families))
-    .sort((a, b) => {
-      const score = (item: EvidenceSummary) => {
-        let value = 0
-        if (item.family === "oem") value += 90
-        if (topIds.has(item.evidenceId)) value += 80
-        if (factIds.has(item.evidenceId)) value += 40
-        if (derivedIds.has(item.evidenceId)) value += 30
-        if (factorIds.has(item.evidenceId)) value += 25
-        if (recIds.has(item.evidenceId)) value += 10
-        if (families.has(item.family)) value += 50
-        if (item.key === "missing-electrical") value += 70
-        if (item.available) value += 8
-        if (item.direction !== "none") value += 4
-        if (families.size && item.family !== "oem" && item.family !== "timeline" && !families.has(item.family) && item.family !== "other") value -= 60
-        return value
-      }
-      return score(b) - score(a)
-    })
-  const unique: EvidenceSummary[] = []
-  for (const item of ranked) {
-    if (unique.some((existing) => existing.label === item.label && existing.value === item.value)) continue
-    unique.push(item)
-    if (unique.length >= limit) break
-  }
-  return unique
+    .sort((a, b) =>
+      rankScore(b, families, topIds, factIds, derivedIds, factorIds, recIds)
+      - rankScore(a, families, topIds, factIds, derivedIds, factorIds, recIds)
+    )
+  return dedupeSummaries(ranked)
+}
+
+export function partitionEvidence(result: InvestigationResult) {
+  const all = rankEvidenceSummaries(result)
+  const families = diagnosisFamilies(result)
+  const availableObservations = all.filter((item) => item.available && item.role === "observation")
+  const familyMatched = availableObservations.filter((item) => matchesDiagnosisFamily(item, families))
+  const primaryPool = familyMatched.length
+    ? familyMatched
+    : availableObservations.length
+      ? availableObservations
+      : all.filter((item) => item.available)
+  const primary = primaryPool.slice(0, PRIMARY_EVIDENCE_LIMIT)
+  const overflow = primaryPool.slice(PRIMARY_EVIDENCE_LIMIT)
+  const unavailable = all.filter((item) => !item.available)
+  const coverage = all.filter((item) => item.role === "coverage")
+  return { primary, overflow, unavailable, coverage, all }
+}
+
+export function keyEvidence(result: InvestigationResult, limit = PRIMARY_EVIDENCE_LIMIT): EvidenceSummary[] {
+  return partitionEvidence(result).primary.slice(0, limit)
+}
+
+export function overflowEvidence(result: InvestigationResult): EvidenceSummary[] {
+  return partitionEvidence(result).overflow
+}
+
+export function missingEvidence(result: InvestigationResult): EvidenceSummary[] {
+  return partitionEvidence(result).unavailable
 }
 
 function normalizeForCompare(value: string): string {
@@ -516,7 +579,7 @@ function canonicalTokens(value: string): Set<string> {
   return tokens
 }
 
-function similarNarrative(left: string, right: string): boolean {
+export function similarNarrative(left: string, right: string): boolean {
   const a = normalizeForCompare(left)
   const b = normalizeForCompare(right)
   if (!a || !b) return false
@@ -543,7 +606,7 @@ export function causalStorySteps(result: InvestigationResult): string[] {
     ? operatorText(conclusion.observed_condition)
     : "Condition opérationnelle signalée"
   const mechanism = conclusion.root_cause ? operatorText(conclusion.root_cause) : null
-  const oem = keyEvidence(result, 5).find((item) => item.family === "oem" && item.available)
+  const oem = rankEvidenceSummaries(result).find((item) => item.family === "oem" && item.available)
   const oemStep = oem?.available ? oem.value : null
   const distinctMechanism = Boolean(mechanism && !isSymptomRestatement(mechanism, observed))
   const depth = conclusion.causal_depth
@@ -556,6 +619,21 @@ export function causalStorySteps(result: InvestigationResult): string[] {
     if (!steps.includes(unknown)) steps.push(unknown)
   }
   return steps.slice(0, 4)
+}
+
+export function causalStoryIsUseful(result: InvestigationResult): boolean {
+  const conclusion = result.conclusion
+  if (!conclusion) return false
+  const steps = causalStorySteps(result)
+  if (steps.length < 2) return false
+  const oem = rankEvidenceSummaries(result).find((item) => item.family === "oem" && item.available)
+  if (oem && steps.some((step) => step === oem.value || step.includes(oem.value))) return true
+  const incident = conclusion.observed_condition ? operatorText(conclusion.observed_condition) : ""
+  const cause = conclusion.root_cause ? operatorText(conclusion.root_cause) : ""
+  return steps.some((step) =>
+    (!incident || !similarNarrative(step, incident))
+    && (!cause || !similarNarrative(step, cause))
+  )
 }
 
 export function hypothesisRank(

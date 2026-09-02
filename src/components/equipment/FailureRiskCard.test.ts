@@ -111,6 +111,24 @@ it("Pourquoi ? uses supplied topSignals and stays honest when they are absent", 
   expect(FAILURE_RISK_SIGNALS_UNAVAILABLE).toContain("ne sont pas disponibles")
 })
 
+it("shows the top 3 predictive signal names and hides the rest behind overflow", () => {
+  const html = renderToStaticMarkup(createElement(FailureRiskCard, {
+    prediction: prediction({
+      topPredictiveSignals: [
+        "oil_pressure_kpa",
+        "engine_temp_c",
+        "coolant_temp_c",
+        "fuel_rate_lph",
+        "engine_load_pct",
+      ],
+    }),
+  }))
+  expect(html).toContain("Voir 2 autres signaux")
+  expect(html).toContain("Pression")
+  expect(html).toContain("Température moteur")
+  expect(html).toContain("liquide de refroidissement")
+})
+
 it("API-mode inspector does not import mock world generator for the score", () => {
   const source = readFileSync("src/components/equipment/EquipmentDetailContent.tsx", "utf8")
   expect(source).not.toMatch(/mock\/generator/)

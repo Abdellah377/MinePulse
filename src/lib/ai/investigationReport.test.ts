@@ -4,7 +4,9 @@ import {
   causalStorySteps,
   compactOperatorText,
   keyEvidence,
+  missingEvidence,
   operatorText,
+  partitionEvidence,
   uniqueDisplayStrings,
 } from "./investigationReport"
 import type { InvestigationResult } from "@/lib/api/types/ai"
@@ -114,10 +116,11 @@ it("maps known backend English strings and keeps canonical codes", () => {
 it("prioritizes OEM electrical evidence over unrelated thermal telemetry", () => {
   const cards = keyEvidence(batteryResult())
   expect(cards[0]?.value).toBe("SIM-BATT-VOLT-LOW")
-  expect(cards.some((card) => card.label === "Mesure électrique directe" && !card.available)).toBe(true)
+  expect(cards).toHaveLength(1)
+  expect(cards.some((card) => card.label === "Mesure électrique directe" && !card.available)).toBe(false)
   expect(cards.some((card) => card.label === "Température moteur")).toBe(false)
   expect(cards.some((card) => card.label === "Pression d’huile")).toBe(false)
-  expect(cards.some((card) => card.value === "SIM-BATT-VOLT-LOW")).toBe(true)
+  expect(missingEvidence(batteryResult()).some((card) => card.label === "Mesure électrique directe" && !card.available)).toBe(true)
 })
 
 it("surfaces missing electrical measurements when the diagnosis is electrical", () => {
@@ -127,8 +130,9 @@ it("surfaces missing electrical measurements when the diagnosis is electrical", 
     conclusion: { ...batteryResult().conclusion!, observed_fact_evidence_ids: [], supported_hypothesis_ids: ["hyp-batt"] },
   })
   const cards = keyEvidence(withoutOem)
-  expect(cards.some((card) => card.label === "Mesure électrique directe" && !card.available)).toBe(true)
-  expect(cards.some((card) => card.label === "Température moteur")).toBe(false)
+  expect(cards.some((card) => card.label === "Mesure électrique directe" && !card.available)).toBe(false)
+  expect(cards.some((card) => card.available)).toBe(true)
+  expect(missingEvidence(withoutOem).some((card) => card.label === "Mesure électrique directe" && !card.available)).toBe(true)
 })
 
 it("keeps thermal and oil telemetry for a mechanical diagnosis", () => {
@@ -160,9 +164,122 @@ it("keeps thermal and oil telemetry for a mechanical diagnosis", () => {
     },
   }
   const cards = keyEvidence(mechanical)
+  expect(cards.length).toBeLessThanOrEqual(3)
   expect(cards.some((card) => card.label === "Température moteur")).toBe(true)
-  expect(cards.some((card) => card.label === "Pression d’huile")).toBe(true)
+  expect(cards.some((card) => card.label === "Pression d’huile" || card.label === "Température liquide de refroidissement" || card.value === "SIM-ENG-TEMP-HIGH")).toBe(true)
   expect(cards.some((card) => card.label === "Mesure électrique directe")).toBe(false)
+})
+
+it("keeps coverage counts and unavailable measurements out of the primary top 3", () => {
+  const withCoverage = batteryResult({
+    evidence: [
+      ...batteryResult().evidence,
+      {
+        evidence_id: "ev-cycles",
+        kind: "FACT",
+        source_tool: "completed_cycle_time_samples",
+        source_service: "app.services.operational.timeline",
+        metric: "completed_cycle_time_samples",
+        value: Array.from({ length: 9 }, (_, index) => ({ cycleId: index })),
+        available: true,
+        status: "AVAILABLE",
+        unit: null,
+        site_id: 17,
+        shift_id: 29,
+        equipment_id: 10,
+        zone_id: null,
+        observed_at: "2026-08-26T07:04:00Z",
+        source_record_ids: [],
+        metadata: {},
+        notes: null,
+      },
+    ],
+  })
+  const { primary, coverage } = partitionEvidence(withCoverage)
+  expect(primary).toHaveLength(1)
+  expect(primary[0]?.value).toBe("SIM-BATT-VOLT-LOW")
+  expect(primary.some((card) => /cycles terminés/.test(card.value))).toBe(false)
+  expect(coverage.some((card) => card.value.includes("9 cycles"))).toBe(true)
+})
+
+it("uses loading-queue observations for congestion instead of coverage counts", () => {
+  const congestion: InvestigationResult = {
+    ...batteryResult(),
+    trigger: {
+      ...batteryResult().trigger,
+      trigger_type: "CONGESTION_RISK",
+      payload: { title: "Congestion au chargement", category: "QUEUE" },
+    },
+    evidence: [
+      {
+        evidence_id: "ev-loading",
+        kind: "DERIVED_METRIC",
+        source_tool: "loading_queue_and_service_context",
+        source_service: "app.services.operational.context",
+        metric: "loading_queue_and_service_context",
+        value: {
+          loaders: [{
+            loaderCode: "SHV-02",
+            waitingTruckCount: 4,
+            recentAverageLoadingMinutes: 6.2,
+            baselineAverageLoadingMinutes: 4.1,
+            loadingDurationChangePct: 51,
+          }],
+        },
+        available: true,
+        status: "AVAILABLE",
+        unit: null,
+        site_id: 17,
+        shift_id: 29,
+        equipment_id: null,
+        zone_id: 3,
+        observed_at: "2026-08-26T07:10:00Z",
+        source_record_ids: ["zone:3"],
+        metadata: {},
+        notes: null,
+      },
+      {
+        evidence_id: "ev-cycles",
+        kind: "FACT",
+        source_tool: "completed_cycle_time_samples",
+        source_service: "app.services.operational.timeline",
+        metric: "completed_cycle_time_samples",
+        value: [{}, {}, {}, {}, {}, {}, {}, {}, {}],
+        available: true,
+        status: "AVAILABLE",
+        unit: null,
+        site_id: 17,
+        shift_id: 29,
+        equipment_id: null,
+        zone_id: 3,
+        observed_at: "2026-08-26T07:10:00Z",
+        source_record_ids: [],
+        metadata: {},
+        notes: null,
+      },
+    ],
+    hypotheses: [{
+      hypothesis_id: "hyp-queue",
+      statement: "File d’attente allongée au point de chargement SHV-02",
+      supporting_evidence_ids: ["ev-loading"],
+      contradictory_evidence_ids: [],
+      confidence: "HIGH",
+      causal_depth: 1,
+      rationale: "Le nombre de camions en attente et l’allongement du service soutiennent la congestion.",
+    }],
+    conclusion: {
+      ...batteryResult().conclusion!,
+      summary: "Congestion au chargement SHV-02.",
+      observed_condition: "Quatre camions attendent au chargement SHV-02.",
+      root_cause: "File d’attente allongée au point de chargement SHV-02",
+      supported_hypothesis_ids: ["hyp-queue"],
+      observed_fact_evidence_ids: [],
+      derived_metric_evidence_ids: ["ev-loading"],
+    },
+  }
+  const cards = keyEvidence(congestion)
+  expect(cards[0]?.value).toContain("4 camions en attente")
+  expect(cards.some((card) => /cycles terminés/.test(card.value))).toBe(false)
 })
 
 it("does not build a circular electrical causal chain", () => {

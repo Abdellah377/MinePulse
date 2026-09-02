@@ -1,31 +1,29 @@
 import {
-  Activity,
-  AlertTriangle,
-  ArrowDown,
-  ArrowRight,
-  ArrowUp,
   Check,
   CheckCircle2,
   CircleHelp,
   Database,
   GitBranch,
-  Minus,
   RefreshCw,
   Search,
   ShieldCheck,
   UserCheck,
   XCircle,
+  AlertTriangle,
+  ArrowRight,
 } from "lucide-react"
 import type { ReactNode } from "react"
 
 import type { EvidenceItem, InvestigationResult } from "@/lib/api/types/ai"
 import {
+  causalStoryIsUseful,
   causalStorySteps,
   formatInvestigationTime,
   hypothesisRank,
-  keyEvidence,
   metricLabel,
+  missingEvidence,
   operatorText,
+  partitionEvidence,
   uniqueDisplayStrings,
 } from "@/lib/ai/investigationReport"
 import {
@@ -36,6 +34,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { DISCLOSURE_SUMMARY_CLASS, EvidenceCard, PrimaryEvidenceGrid } from "./EvidenceCard"
 
 const DIAGNOSIS_VISUAL = {
   CONFIRMED: { badge: "success" as const, border: "border-success/35", surface: "bg-success/5", icon: CheckCircle2 },
@@ -52,15 +51,8 @@ const HYPOTHESIS_LABEL = {
   CONTRADICTED: "Contredite",
 }
 
-function ReportHeading({ children }: { children: ReactNode }) {
-  return <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-2">{children}</h3>
-}
-
-function DirectionIcon({ direction }: { direction: "up" | "down" | "stable" | "none" }) {
-  if (direction === "up") return <ArrowUp aria-label="Hausse" className="size-4 text-warning" />
-  if (direction === "down") return <ArrowDown aria-label="Baisse" className="size-4 text-accent" />
-  if (direction === "stable") return <Minus aria-label="Stable" className="size-4 text-muted" />
-  return <Activity aria-hidden="true" className="size-4 text-muted-2" />
+function ReportHeading({ children, as: Tag = "h3" }: { children: ReactNode; as?: "h3" | "h4" }) {
+  return <Tag className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-2">{children}</Tag>
 }
 
 export function EvidenceValue({ evidence }: { evidence: EvidenceItem }) {
@@ -85,11 +77,13 @@ function DiagnosisSummary({ result }: { result: InvestigationResult }) {
   if (!conclusion) return null
   const visual = DIAGNOSIS_VISUAL[conclusion.diagnosis_status]
   const Icon = visual.icon
-  const cause = conclusion.root_cause ? operatorText(conclusion.root_cause) : "Les preuves disponibles ne permettent pas d’identifier une cause racine fiable."
+  const cause = conclusion.root_cause
+    ? operatorText(conclusion.root_cause)
+    : operatorText(conclusion.summary || "Les preuves disponibles ne permettent pas d’identifier une cause racine fiable.")
   const uncertainty = conclusion.unresolved_uncertainties[0]
-  const normalizedCause = conclusion.root_cause?.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
+  const normalizedCause = (conclusion.root_cause ?? conclusion.summary).toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
   const normalizedSummary = conclusion.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
-  const summaryAddsInformation = !normalizedCause || !normalizedSummary.includes(normalizedCause)
+  const summaryAddsInformation = Boolean(conclusion.root_cause) && !normalizedSummary.includes(normalizedCause)
   return <section className={cn("rounded-lg border p-4", visual.border, visual.surface)}>
     <div className="flex items-start gap-3"><Icon className="mt-0.5 size-5 shrink-0" /><div className="min-w-0 flex-1">
       <div className="flex flex-wrap items-center gap-2">
@@ -105,47 +99,65 @@ function DiagnosisSummary({ result }: { result: InvestigationResult }) {
 }
 
 function KeyEvidence({ result }: { result: InvestigationResult }) {
-  const evidence = keyEvidence(result)
-  return <section data-testid="key-evidence"><ReportHeading>Pourquoi MinePulse pense cela</ReportHeading>
-    {evidence.length === 0 ? <div className="rounded-md border border-border bg-surface px-3 py-3 text-[11px] text-muted">Aucune preuve déterminante disponible.</div> : <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {evidence.map((item) => <article key={item.key} data-evidence-summary="true" className="rounded-md border border-border bg-surface px-3 py-2.5"><div className="flex items-start gap-2"><DirectionIcon direction={item.direction} /><div className="min-w-0">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-2">{item.label}</p>
-        <p className={cn("mt-0.5 text-[13px] font-semibold tabular-nums", !item.available && "text-muted")}>{item.value}</p>
-        {item.meaning && <p className="mt-0.5 text-[10px] text-muted">{item.meaning}</p>}
-        {item.timestamp && <time className="mt-1 block text-[10px] tabular-nums text-muted-2" dateTime={item.timestamp}>{formatInvestigationTime(item.timestamp)}</time>}
-        {item.why && <p className="mt-1 text-[10px] text-foreground/80">→ {item.why}</p>}
-      </div></div></article>)}
-    </div>}
+  const { primary, overflow } = partitionEvidence(result)
+  return <section data-testid="key-evidence">
+    <ReportHeading>Pourquoi MinePulse pense cela</ReportHeading>
+    {primary.length === 0
+      ? <div className="rounded-md border border-border bg-surface px-3 py-3 text-[11px] text-muted">Aucune preuve déterminante disponible.</div>
+      : <PrimaryEvidenceGrid items={primary} markSummary />}
+    {overflow.length > 0 && (
+      <details className="mt-2 rounded-md border border-border bg-surface">
+        <summary className={DISCLOSURE_SUMMARY_CLASS}>
+          Voir {overflow.length} autre{overflow.length === 1 ? "" : "s"} élément{overflow.length === 1 ? "" : "s"}
+        </summary>
+        <div className="border-t border-border p-3">
+          <PrimaryEvidenceGrid items={overflow} />
+        </div>
+      </details>
+    )}
   </section>
 }
 
 function CausalStory({ result }: { result: InvestigationResult }) {
   const conclusion = result.conclusion
-  if (!conclusion) return null
+  if (!conclusion || !causalStoryIsUseful(result)) return null
   const hasCausalMechanism = conclusion.causal_depth > 0 && Boolean(conclusion.root_cause)
   const steps = causalStorySteps(result)
-  return <section data-testid="causal-story"><ReportHeading>Ce qui semble s’être passé</ReportHeading><div className="rounded-md border border-border bg-surface px-3 py-3">
-    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">{steps.map((step, index) => <div key={`${step}-${index}`} className="contents">
-      <div className={cn("min-w-0 flex-1 rounded-md px-2.5 py-2 text-[11px] font-medium", index === 0 && hasCausalMechanism ? "bg-accent-soft text-accent-strong" : "bg-surface-2 text-foreground")}>{step}</div>
-      {index < steps.length - 1 && <ArrowRight aria-hidden="true" className="mx-auto size-3.5 shrink-0 rotate-90 text-muted-2 sm:rotate-0" />}
-    </div>)}</div>
-    {conclusion.contributing_factors.length > 0 && <div className="mt-2 border-t border-border pt-2"><p className="text-[10px] font-medium text-muted">Facteurs contributifs</p><ul className="mt-1 space-y-1 text-[10px] text-muted">{conclusion.contributing_factors.map((factor, index) => <li key={index} className="flex min-w-0 gap-1.5"><span aria-hidden="true">•</span><span className="min-w-0 break-words">{operatorText(factor.statement)}</span></li>)}</ul></div>}
-  </div></section>
+  return <section data-testid="causal-story">
+    <ReportHeading>Ce qui semble s’être passé</ReportHeading>
+    <div className="rounded-md border border-border bg-surface px-3 py-3">
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">{steps.map((step, index) => <div key={`${step}-${index}`} className="contents">
+        <div className={cn("min-w-0 flex-1 rounded-md px-2.5 py-2 text-[11px] font-medium", index === 0 && hasCausalMechanism ? "bg-accent-soft text-accent-strong" : "bg-surface-2 text-foreground")}>{step}</div>
+        {index < steps.length - 1 && <ArrowRight aria-hidden="true" className="mx-auto size-3.5 shrink-0 rotate-90 text-muted-2 sm:rotate-0" />}
+      </div>)}</div>
+    </div>
+  </section>
 }
 
 function Recommendation({ result }: { result: InvestigationResult }) {
   const recommendation = result.recommendation
-  return <section><ReportHeading>Action recommandée</ReportHeading><div className="rounded-md border border-accent/25 bg-accent-soft/35 px-3.5 py-3">
-    {recommendation ? <><p className="text-[13px] font-semibold leading-relaxed text-foreground">{operatorText(recommendation.description)}</p><p className="mt-2 text-[11px] leading-relaxed text-muted"><span className="font-medium text-foreground">Pourquoi :</span> {operatorText(recommendation.rationale)}</p>
-      {recommendation.operational_constraints.length > 0 && <ul className="mt-2 list-inside list-disc text-[10px] text-muted">{recommendation.operational_constraints.map((constraint) => <li key={constraint}>{operatorText(constraint)}</li>)}</ul>}
-    </> : <p className="text-[12px] text-muted">Aucune action recommandée disponible.</p>}
-    <div className="mt-2 flex items-center gap-1.5 border-t border-accent/15 pt-2 text-[10px] font-medium text-foreground"><UserCheck className="size-3.5 text-accent" />Validation humaine requise · aucune action automatique</div>
-  </div></section>
+  return <section>
+    <ReportHeading>Action recommandée</ReportHeading>
+    <div className="rounded-md border border-accent/25 bg-accent-soft/35 px-3.5 py-3">
+      {recommendation ? (
+        <>
+          <p className="text-[13px] font-semibold leading-relaxed text-foreground">{operatorText(recommendation.description)}</p>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted">
+            <span className="font-medium text-foreground">Pourquoi :</span> {operatorText(recommendation.rationale)}
+          </p>
+        </>
+      ) : <p className="text-[12px] text-muted">Aucune action recommandée disponible.</p>}
+      <div className="mt-2 flex items-center gap-1.5 border-t border-accent/15 pt-2 text-[10px] font-medium text-foreground">
+        <UserCheck className="size-3.5 text-accent" />Validation humaine requise · aucune action automatique
+      </div>
+    </div>
+  </section>
 }
 
 function InvestigationProcess({ result }: { result: InvestigationResult }) {
   const sourceCount = new Set(result.evidence.map((item) => item.source_tool)).size
   const extraRequests = result.evidence_request_history.filter((item) => item.outcome !== "DUPLICATE_SKIPPED").length
+  const coverage = partitionEvidence(result).coverage
   const stages = [
     result.operational_context ? "Contexte opérationnel récupéré" : "Contexte opérationnel indisponible",
     `${sourceCount} source${sourceCount === 1 ? "" : "s"} de preuve analysée${sourceCount === 1 ? "" : "s"}`,
@@ -155,49 +167,156 @@ function InvestigationProcess({ result }: { result: InvestigationResult }) {
     ...(result.conclusion ? ["Conclusion construite"] : []),
     ...(result.recommendation ? ["Recommandation générée"] : []),
   ]
-  return <details className="rounded-md border border-border bg-surface"><summary className="cursor-pointer select-none px-3 py-2.5 text-[11px] font-semibold">Processus d’investigation</summary><ol className="space-y-1 border-t border-border px-3 py-2.5 text-[11px] text-muted">
-    {stages.map((stage, index) => <li key={stage} className="flex items-center gap-2"><Check className="size-3.5 text-success" /><span>{stage}</span>{index === 1 && <span className="ml-auto text-[10px] text-muted-2">{result.evidence.length} élément{result.evidence.length === 1 ? "" : "s"}</span>}</li>)}
-  </ol></details>
+  return <details className="rounded-md border border-border bg-surface">
+    <summary className={DISCLOSURE_SUMMARY_CLASS}>Processus d’investigation</summary>
+    <ol className="space-y-1 border-t border-border px-3 py-2.5 text-[11px] text-muted">
+      {stages.map((stage, index) => (
+        <li key={stage} className="flex items-center gap-2">
+          <Check className="size-3.5 text-success" />
+          <span>{stage}</span>
+          {index === 1 && <span className="ml-auto text-[10px] text-muted-2">{result.evidence.length} élément{result.evidence.length === 1 ? "" : "s"}</span>}
+        </li>
+      ))}
+    </ol>
+    {coverage.length > 0 && (
+      <ul className="space-y-1 border-t border-border px-3 py-2.5 text-[11px] text-muted">
+        {coverage.map((item) => (
+          <li key={item.key}>{item.label} : {item.value}</li>
+        ))}
+      </ul>
+    )}
+  </details>
 }
 
 function Hypotheses({ result }: { result: InvestigationResult }) {
-  return <details data-testid="hypotheses-detail" className="rounded-md border border-border bg-surface"><summary className="cursor-pointer select-none px-3 py-2.5 text-[11px] font-semibold">Hypothèses examinées ({result.hypotheses.length})</summary><div className="space-y-2 border-t border-border p-3">
-    {result.hypotheses.length === 0 && <p className="text-[11px] text-muted">Aucune hypothèse exploitable.</p>}
-    {result.hypotheses.map((hypothesis, index) => {
-      const rank = hypothesisRank(hypothesis, result, index)
-      return <article key={hypothesis.hypothesis_id} className="rounded-md border border-border bg-background px-3 py-2.5"><div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-semibold">{index + 1}. {operatorText(hypothesis.statement)}</span>
-        <Badge variant={rank === "BEST_SUPPORTED" ? "accent" : rank === "CONTRADICTED" ? "danger" : "outline"}>{HYPOTHESIS_LABEL[rank]}</Badge>
-        <span className="ml-auto text-[10px] text-muted">Support : {CONFIDENCE_LABEL[hypothesis.confidence]}</span>
-      </div><p className="mt-1 text-[11px] leading-relaxed text-muted">{operatorText(hypothesis.rationale)}</p>
-      {hypothesis.contradictory_evidence_ids.length > 0 && <p className="mt-1 text-[10px] text-danger">{hypothesis.contradictory_evidence_ids.length} preuve{hypothesis.contradictory_evidence_ids.length === 1 ? "" : "s"} contradictoire{hypothesis.contradictory_evidence_ids.length === 1 ? "" : "s"}</p>}
-      </article>
-    })}
-  </div></details>
+  return <details data-testid="hypotheses-detail" className="rounded-md border border-border bg-surface">
+    <summary className={DISCLOSURE_SUMMARY_CLASS}>Hypothèses examinées ({result.hypotheses.length})</summary>
+    <div className="space-y-2 border-t border-border p-3">
+      {result.hypotheses.length === 0 && <p className="text-[11px] text-muted">Aucune hypothèse exploitable.</p>}
+      {result.hypotheses.map((hypothesis, index) => {
+        const rank = hypothesisRank(hypothesis, result, index)
+        return <article key={hypothesis.hypothesis_id} className="rounded-md border border-border bg-background px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-semibold">{index + 1}. {operatorText(hypothesis.statement)}</span>
+            <Badge variant={rank === "BEST_SUPPORTED" ? "accent" : rank === "CONTRADICTED" ? "danger" : "outline"}>{HYPOTHESIS_LABEL[rank]}</Badge>
+            <span className="ml-auto text-[10px] text-muted">Support : {CONFIDENCE_LABEL[hypothesis.confidence]}</span>
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted">{operatorText(hypothesis.rationale)}</p>
+          {hypothesis.contradictory_evidence_ids.length > 0 && (
+            <p className="mt-1 text-[10px] text-danger">
+              {hypothesis.contradictory_evidence_ids.length} preuve{hypothesis.contradictory_evidence_ids.length === 1 ? "" : "s"} contradictoire{hypothesis.contradictory_evidence_ids.length === 1 ? "" : "s"}
+            </p>
+          )}
+        </article>
+      })}
+    </div>
+  </details>
 }
 
 export function InvestigationUncertainty({ result }: { result: InvestigationResult }) {
   const uncertainties = uniqueDisplayStrings(result.conclusion?.unresolved_uncertainties ?? [])
   const contradictions = uniqueDisplayStrings(result.contradictions.map((item) => item.description))
   const requested = uniqueDisplayStrings(result.requested_information.map((item) => item.reason))
-  const total = uncertainties.length + requested.length + contradictions.length
+  const missing = missingEvidence(result)
+  const contributing = result.conclusion?.contributing_factors ?? []
+  const total = uncertainties.length + requested.length + contradictions.length + missing.length + contributing.length
   if (!total) return null
-  return <details data-testid="uncertainty-detail" className="rounded-md border border-border bg-surface"><summary className="cursor-pointer select-none px-3 py-2.5 text-[11px] font-semibold">Incertitudes et contradictions ({total})</summary><div className="space-y-3 border-t border-border px-3 py-2.5 text-[11px]">
-    {uncertainties.length > 0 && <section><p className="font-medium">Ce qui empêche une confirmation complète</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{uncertainties.map((item) => <li key={item}>{item}</li>)}</ul></section>}
-    {contradictions.length > 0 && <section><p className="font-medium">Signaux contradictoires</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{contradictions.map((item) => <li key={item}>{item}</li>)}</ul></section>}
-    {requested.length > 0 && <section><p className="font-medium">Informations encore recherchées</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{requested.map((item) => <li key={item}>{item}</li>)}</ul></section>}
-  </div></details>
+  return <details data-testid="uncertainty-detail" className="rounded-md border border-border bg-surface">
+    <summary className={DISCLOSURE_SUMMARY_CLASS}>Incertitudes et contradictions ({total})</summary>
+    <div className="space-y-3 border-t border-border px-3 py-2.5 text-[11px]">
+      {uncertainties.length > 0 && <section><p className="font-medium">Ce qui empêche une confirmation complète</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{uncertainties.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+      {contradictions.length > 0 && <section><p className="font-medium">Signaux contradictoires</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{contradictions.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+      {requested.length > 0 && <section><p className="font-medium">Informations encore recherchées</p><ul className="mt-1 list-inside list-disc space-y-1 text-muted">{requested.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+      {contributing.length > 0 && (
+        <section>
+          <p className="font-medium">Facteurs contributifs</p>
+          <ul className="mt-1 list-inside list-disc space-y-1 text-muted">
+            {contributing.map((factor, index) => <li key={index}>{operatorText(factor.statement)}</li>)}
+          </ul>
+        </section>
+      )}
+      {missing.length > 0 && (
+        <section>
+          <p className="font-medium">Preuves indisponibles</p>
+          <div className="mt-2 grid grid-cols-1 gap-2">
+            {missing.map((item) => <EvidenceCard key={item.key} item={item} />)}
+          </div>
+        </section>
+      )}
+    </div>
+  </details>
+}
+
+function evidenceRelation(evidenceId: string, result: InvestigationResult): "supporting" | "contradictory" | null {
+  const supporting = result.hypotheses.some((hypothesis) => hypothesis.supporting_evidence_ids.includes(evidenceId))
+  const contradictory = result.hypotheses.some((hypothesis) => hypothesis.contradictory_evidence_ids.includes(evidenceId))
+  if (contradictory) return "contradictory"
+  if (supporting) return "supporting"
+  return null
 }
 
 export function InvestigationEvidence({ result }: { result: InvestigationResult }) {
-  return <details data-testid="technical-evidence" className="rounded-md border border-border bg-surface"><summary className="cursor-pointer select-none px-3 py-2.5 text-[11px] font-semibold">Voir toutes les preuves ({result.evidence.length})</summary><div className="border-t border-border p-3 text-[11px]">
-    {result.evidence.length === 0 && <p className="text-muted">Éléments opérationnels indisponibles.</p>}
-    {result.evidence.map((evidence) => <details key={evidence.evidence_id} className="mb-2 rounded-md border border-border bg-background p-2 last:mb-0"><summary className="cursor-pointer"><span className="font-medium">{metricLabel(evidence.metric)}</span><span className="ml-2 text-[10px] text-muted">{evidence.kind} · {evidence.available ? "Disponible" : "Indisponible"}</span></summary>
-      <dl className="mt-2 grid gap-1 text-[10px] text-muted sm:grid-cols-2"><div><dt className="text-muted-2">Source</dt><dd>{evidence.source_tool}</dd></div><div><dt className="text-muted-2">Horodatage</dt><dd>{formatInvestigationTime(evidence.observed_at)}</dd></div><div className="sm:col-span-2"><dt className="text-muted-2">Provenance</dt><dd className="break-all">{evidence.source_service}</dd></div></dl>
-      {evidence.notes && <p className="mt-2 text-muted">{evidence.notes}</p>}
-      <details className="mt-2 rounded border border-dashed border-border px-2 py-1.5 font-mono text-[10px]"><summary className="cursor-pointer text-muted-2">Données structurées et identifiants</summary><div className="mt-2 max-h-60 overflow-auto"><EvidenceValue evidence={evidence} /></div><p className="mt-2 break-all text-muted-2">{evidence.evidence_id}</p></details>
-    </details>)}
-  </div></details>
+  const summaries = partitionEvidence(result).all
+  const constraints = result.recommendation?.operational_constraints ?? []
+  return <details data-testid="technical-evidence" className="rounded-md border border-border bg-surface">
+    <summary className={DISCLOSURE_SUMMARY_CLASS}>Preuves complètes ({result.evidence.length})</summary>
+    <div className="border-t border-border p-3 text-[11px]">
+      {summaries.length > 0 && (
+        <div className="mb-3 grid grid-cols-1 gap-2">
+          {summaries.map((item) => <EvidenceCard key={item.key} item={item} />)}
+        </div>
+      )}
+      {constraints.length > 0 && (
+        <section className="mb-3">
+          <p className="font-medium">Contraintes opérationnelles</p>
+          <ul className="mt-1 list-inside list-disc text-muted">
+            {constraints.map((constraint) => <li key={constraint}>{operatorText(constraint)}</li>)}
+          </ul>
+        </section>
+      )}
+      {result.evidence.length === 0 && <p className="text-muted">Éléments opérationnels indisponibles.</p>}
+      {result.evidence.map((evidence) => {
+        const relation = evidenceRelation(evidence.evidence_id, result)
+        return (
+          <details key={evidence.evidence_id} className="mb-2 rounded-md border border-border bg-background p-2 last:mb-0">
+            <summary className={DISCLOSURE_SUMMARY_CLASS}>
+              <span className="font-medium">{metricLabel(evidence.metric)}</span>
+              <span className="ml-2 text-[10px] text-muted">{evidence.kind} · {evidence.available ? "Disponible" : "Indisponible"}</span>
+              {relation === "supporting" && <span className="ml-2 text-[10px] text-success">Soutient une hypothèse</span>}
+              {relation === "contradictory" && <span className="ml-2 text-[10px] text-danger">Contredit une hypothèse</span>}
+            </summary>
+            <dl className="mt-2 grid gap-1 text-[10px] text-muted sm:grid-cols-2">
+              <div><dt className="text-muted-2">Source</dt><dd>{evidence.source_tool}</dd></div>
+              <div><dt className="text-muted-2">Horodatage</dt><dd>{formatInvestigationTime(evidence.observed_at)}</dd></div>
+              <div className="sm:col-span-2"><dt className="text-muted-2">Provenance</dt><dd className="break-all">{evidence.source_service}</dd></div>
+            </dl>
+            {evidence.notes && <p className="mt-2 text-muted">{evidence.notes}</p>}
+            <details className="mt-2 rounded border border-dashed border-border px-2 py-1.5 font-mono text-[10px]">
+              <summary className={cn(DISCLOSURE_SUMMARY_CLASS, "px-0 py-1 text-muted-2")}>Données techniques</summary>
+              <div className="mt-2 max-h-60 overflow-auto"><EvidenceValue evidence={evidence} /></div>
+              <p className="mt-2 break-all text-muted-2">{evidence.evidence_id}</p>
+            </details>
+          </details>
+        )
+      })}
+    </div>
+  </details>
+}
+
+export function InvestigationDetails({ result }: { result: InvestigationResult }) {
+  return (
+    <details data-testid="investigation-details" className="rounded-md border border-border bg-surface">
+      <summary className={cn(DISCLOSURE_SUMMARY_CLASS, "text-[12px]")}>
+        <h3 className="inline text-[12px] font-semibold">Détails de l’investigation</h3>
+      </summary>
+      <div className="space-y-2 border-t border-border p-3">
+        <InvestigationEvidence result={result} />
+        <Hypotheses result={result} />
+        <InvestigationUncertainty result={result} />
+        <InvestigationProcess result={result} />
+      </div>
+    </details>
+  )
 }
 
 export function InvestigationResultView({ result, onRetry }: { result: InvestigationResult; onRetry?: () => void }) {
@@ -207,8 +326,7 @@ export function InvestigationResultView({ result, onRetry }: { result: Investiga
     <KeyEvidence result={result} />
     <CausalStory result={result} />
     <Recommendation result={result} />
-    <section><ReportHeading>Impact</ReportHeading><div className="rounded-md border border-border bg-surface px-3 py-2.5 text-[11px] text-muted">Impact non quantifié</div></section>
-    <div className="space-y-2"><Hypotheses result={result} /><InvestigationUncertainty result={result} /><InvestigationProcess result={result} /><InvestigationEvidence result={result} /></div>
+    <InvestigationDetails result={result} />
     <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[10px] text-muted-2">
       <span className="inline-flex items-center gap-1"><Database className="size-3" />{result.operational_context?.site_name ?? `Site ${result.trigger.site_id}`}</span>
       <span className="inline-flex items-center gap-1"><Search className="size-3" />{result.iteration_count} cycle{result.iteration_count === 1 ? "" : "s"} d’analyse</span>

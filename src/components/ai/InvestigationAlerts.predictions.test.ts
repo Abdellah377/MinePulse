@@ -219,6 +219,10 @@ it("shows an existing automatic investigation for a prediction without posting a
   const html = renderAlertes(alertsTab({ predictionId: fixtures.prediction.id }))
   expect(html).toContain("Détecté automatiquement")
   expect(html).toContain(result.conclusion!.summary)
+  const panel = html.split("data-testid=\"panel-ia\"")[1]?.split("</aside>")[0] ?? ""
+  expect(panel).not.toContain(result.conclusion!.summary)
+  expect(panel).not.toContain("Confiance causale")
+  expect(panel).toContain("Ouvrir Actions IA")
   expect(fixtures.start).not.toHaveBeenCalled()
   expect(fixtures.demo).not.toHaveBeenCalled()
 })

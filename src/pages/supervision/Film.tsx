@@ -9,19 +9,16 @@ import {
   FILM_STATE_GROUP_LABEL,
 } from "@/lib/mock/types"
 import type { EquipmentType, FilmStateGroup, TimelineSegment } from "@/lib/mock/types"
-import { FILM_GROUP_CONFIG } from "@/lib/status"
+import { FILM_GROUP_CONFIG, STATE_CONFIG } from "@/lib/status"
 import { formatElapsedHms, formatShortTime, formatTimeHms } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { fetchTimeline, useApiMode } from "@/lib/api/client"
 import { sortEquipmentByCode } from "@/lib/equipmentOrder"
-import { filmSegmentInsight } from "@/lib/ai/placeholders"
-import { AiSlot } from "@/components/ai/AiSlot"
 import { StatusLegend } from "@/components/shared/StatusLegend"
 import { PeriodFilters } from "@/components/shared/PeriodFilters"
 import { analysisWindowMs } from "@/lib/ops/analysisWindow"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Select,
   SelectContent,
@@ -574,7 +571,7 @@ export default function Film({ tab }: Partial<import("@/components/workspace/Wor
         </div>
 
         <div className="w-[300px] shrink-0 overflow-y-auto border-l border-border bg-surface">
-          <DetailPanel
+          <FilmDetailPanel
             selection={selection}
             equipment={equipment}
             allSegmentsByEquipment={allSegmentsByEquipment}
@@ -730,7 +727,16 @@ function TimelineRow({
   )
 }
 
-function DetailPanel({
+function EventFact({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-2">{label}</dt>
+      <dd className={cn("mt-0.5 text-[13px] leading-snug text-foreground", mono && "font-mono tabular-nums")}>{value}</dd>
+    </div>
+  )
+}
+
+export function FilmDetailPanel({
   selection,
   equipment,
   allSegmentsByEquipment,
@@ -747,8 +753,8 @@ function DetailPanel({
 }) {
   if (!selection) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
-        <p className="text-[11px] text-muted">
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-4 py-8 text-center">
+        <p className="text-[12px] leading-relaxed text-muted">
           Sélectionnez un segment ou un engin.
         </p>
       </div>
@@ -760,52 +766,27 @@ function DetailPanel({
 
   if (selection.type === "segment") {
     const seg = selection.segment
-    const group = FILM_STATE_GROUP[seg.state]
-    const cfg = FILM_GROUP_CONFIG[group]
-    const insight = filmSegmentInsight(seg.id, cfg.label)
-    const unexplained = seg.state === "arret_indetermine"
+    const cfg = STATE_CONFIG[seg.state]
     return (
-      <div className="flex flex-col gap-2 p-3">
-        <div className="border-b border-border pb-2">
-          <p className="mb-1 flex items-center gap-2 text-[12px] font-semibold text-foreground">
-            <span className={cn("size-2.5", cfg.dot)} />
+      <div className="flex flex-col gap-4 p-4">
+        <header>
+          <p className="flex items-center gap-2 text-[15px] font-semibold leading-snug text-foreground">
+            <span className={cn("size-2.5 shrink-0 rounded-full", cfg.dot)} aria-hidden="true" />
             {cfg.label}
           </p>
-          <p className="font-mono text-[11px] text-muted">
-            {eq.code} · {formatTimeHms(seg.start)} → {formatTimeHms(seg.end)}
-          </p>
-          <p className="font-mono text-[11px] text-muted-2">
-            Durée {formatElapsedHms(seg.end - seg.start)}
-          </p>
-          {seg.zoneName && <p className="mt-1 text-[11px] text-muted-2">Zone : {seg.zoneName}</p>}
-        </div>
-        <Tabs defaultValue="faits">
-          <TabsList className="h-7 w-full rounded-lg bg-surface-2 p-0.5">
-            <TabsTrigger value="faits" className="h-6 flex-1 text-[10px]">Faits</TabsTrigger>
-            <TabsTrigger value="cause" className="h-6 flex-1 text-[10px]">Cause</TabsTrigger>
-            <TabsTrigger value="ia" className="h-6 flex-1 text-[10px]">IA</TabsTrigger>
-          </TabsList>
-          <TabsContent value="faits" className="mt-2 space-y-1 text-[11px] text-muted">
-            <p>État : {cfg.label}</p>
-            <p>Début : {formatTimeHms(seg.start)}</p>
-            <p>Fin : {formatTimeHms(seg.end)}</p>
-            <p>Zone : {seg.zoneName ?? "—"}</p>
-          </TabsContent>
-          <TabsContent value="cause" className="mt-2 text-[11px] text-muted">
-            {unexplained ? (
-              <p className="text-danger">
-                Arrêt sans cause déclarée — à classer (exploitation / matériel / extérieur).
-              </p>
-            ) : (
-              <p>{useApiMode ? "Cause non renseignée. Un état équipement ne détermine pas une cause." : `Cause opérationnelle probable liée à l’état « ${cfg.label} » sur ce créneau.`}</p>
-            )}
-          </TabsContent>
-          <TabsContent value="ia" className="mt-2">
-            <AiSlot insight={insight} label="Pourquoi" />
-          </TabsContent>
-        </Tabs>
-        <Button size="sm" className="h-7 rounded-xl" onClick={() => onOpenEquipment(eq.id)}>
-          Ouvrir l'équipement
+          <p className="mt-1 font-mono text-[12px] text-muted">{eq.code}</p>
+          {eq.model && <p className="text-[11px] text-muted-2">{eq.model}</p>}
+        </header>
+        <dl className="grid grid-cols-1 gap-3">
+          <EventFact label="État" value={cfg.label} />
+          <EventFact label="Équipement" value={eq.code} mono />
+          <EventFact label="Début" value={formatTimeHms(seg.start)} mono />
+          <EventFact label="Fin" value={formatTimeHms(seg.end)} mono />
+          <EventFact label="Durée" value={formatElapsedHms(seg.end - seg.start)} mono />
+          <EventFact label="Zone" value={seg.zoneName ?? "—"} />
+        </dl>
+        <Button size="sm" className="mt-1 h-8 w-full" onClick={() => onOpenEquipment(eq.id)}>
+          Ouvrir l’équipement
         </Button>
       </div>
     )
@@ -813,29 +794,23 @@ function DetailPanel({
 
   const mySegments = (allSegmentsByEquipment.get(eq.id) ?? []).sort((a, b) => a.start - b.start)
   return (
-    <div className="flex flex-col gap-3 p-3">
-      <div className="border-b border-border pb-2">
-        <p className="font-mono text-[13px] font-semibold text-foreground">{eq.code}</p>
-        <p className="text-[11px] text-muted">{eq.model}</p>
-      </div>
+    <div className="flex flex-col gap-4 p-4">
+      <header>
+        <p className="font-mono text-[15px] font-semibold text-foreground">{eq.code}</p>
+        {eq.model && <p className="mt-0.5 text-[12px] text-muted">{eq.model}</p>}
+      </header>
       <div>
-        <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-2">
+        <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wide text-muted-2">
           Film du poste
         </span>
         <MiniTimelineStrip segments={mySegments} rangeStart={rangeStart} rangeEnd={rangeEnd} />
       </div>
-      <div className="grid grid-cols-2 gap-2 border border-border bg-background p-2 text-[11px]">
-        <div>
-          <p className="text-muted-2">Voyages</p>
-          <p className="font-mono font-semibold tabular-nums">{eq.tripsThisShift}</p>
-        </div>
-        <div>
-          <p className="text-muted-2">Attente</p>
-          <p className="font-mono font-semibold tabular-nums">{eq.waitingMinutesThisShift.toFixed(0)}m</p>
-        </div>
-      </div>
-      <Button size="sm" className="h-7 rounded-xl" onClick={() => onOpenEquipment(eq.id)}>
-        Ouvrir l'inspecteur
+      <dl className="grid grid-cols-2 gap-3">
+        <EventFact label="Voyages" value={String(eq.tripsThisShift)} mono />
+        <EventFact label="Attente" value={`${eq.waitingMinutesThisShift.toFixed(0)} min`} mono />
+      </dl>
+      <Button size="sm" className="mt-1 h-8 w-full" onClick={() => onOpenEquipment(eq.id)}>
+        Ouvrir l’équipement
       </Button>
     </div>
   )

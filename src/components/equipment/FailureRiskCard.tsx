@@ -102,6 +102,27 @@ export function FailureRiskCard({
           {why.evaluatedAt && (
             <p className="text-[10px] text-muted-2">Télémétrie : {why.evaluatedAt}</p>
           )}
+          {why.signalsAvailable && (
+            <div>
+              <ul className="list-disc pl-4 text-[11px] text-muted">
+                {why.signals.slice(0, 3).map((label) => (
+                  <li key={label}>{label}</li>
+                ))}
+              </ul>
+              {why.signals.length > 3 && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer select-none rounded-sm text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    Voir {why.signals.length - 3} autre{why.signals.length - 3 === 1 ? "" : "s"} {why.signals.length - 3 === 1 ? "signal" : "signaux"}
+                  </summary>
+                  <ul className="mt-1 list-disc pl-4 text-[11px] text-muted">
+                    {why.signals.slice(3).map((label) => (
+                      <li key={label}>{label}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
           <AiWhyButton expanded={whyOpen} onClick={() => setWhyOpen((open) => !open)} />
           <AiExplanationPanel open={whyOpen}>
             <AiExplanationBlock label="Ce que l’IA a observé">
@@ -113,11 +134,25 @@ export function FailureRiskCard({
             <AiExplanationBlock label="Horizon">{horizon} min</AiExplanationBlock>
             <AiExplanationBlock label="Pourquoi le modèle estime-t-il ce risque ?">
               {why.signalsAvailable ? (
-                <ul className="list-disc pl-4">
-                  {why.signals.map((label) => (
-                    <li key={label}>{label}</li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="list-disc pl-4">
+                    {why.signals.slice(0, 3).map((label) => (
+                      <li key={label}>{label}</li>
+                    ))}
+                  </ul>
+                  {why.signals.length > 3 && (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer select-none rounded-sm text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                        Voir {why.signals.length - 3} autre{why.signals.length - 3 === 1 ? "" : "s"} {why.signals.length - 3 === 1 ? "signal" : "signaux"}
+                      </summary>
+                      <ul className="mt-1 list-disc pl-4">
+                        {why.signals.slice(3).map((label) => (
+                          <li key={label}>{label}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </>
               ) : (
                 FAILURE_RISK_SIGNALS_UNAVAILABLE
               )}

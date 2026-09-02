@@ -25,37 +25,6 @@ const DISABLED_AI: AiInsight = {
 }
 
 
-/** Slot IA — panneau détail Film (segment sélectionné). */
-export function filmSegmentInsight(seed: string, stateLabel: string): AiInsight {
-  if (useApiMode) {
-    return {
-      title: `État — ${stateLabel}`,
-      body: "Analyse IA non activée — contexte factuel uniquement.",
-      evidence: [],
-      next: "Activer le moteur IA pour des hypothèses.",
-      action: "Vérifier sur Film / Carte",
-    }
-  }
-  const S = MERAH_SHIFT_SCENARIO
-  const causes = [
-    `File Banc B saturée (~${S.congestion.truckCount} camions) — ${S.spotlight.maintExcavator} en maintenance.`,
-    `${S.spotlight.stopTruck} en arrêt non défini allonge la file amont.`,
-    "Cycle amont ralenti après 11:00 — attentes de chargement en hausse.",
-    "Relève / régulation manuelle en cours sur la zone concernée.",
-  ] as const
-  return {
-    title: `Raison probable — ${stateLabel}`,
-    body: pickFrom(seed, causes),
-    confidence: confidenceFrom(seed),
-    evidence: [
-      `Congestion ${S.congestion.zoneName} depuis 10:30`,
-      `${S.spotlight.maintExcavator} hors service`,
-    ],
-    next: S.narrative.next,
-    action: S.narrative.action,
-  }
-}
-
 /** Slot IA — expand Cycle actuel / onglet Cycle (Inspecteur). */
 export function cycleLongInsight(seed: string): AiInsight {
   if (useApiMode) return { ...DISABLED_AI, title: "Cycle — analyse IA non activée" }
