@@ -5,10 +5,10 @@ Mutations stay in ``app.services.operational.roads`` and must not be imported he
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, defer
 
-from app.db.models import HaulRoad, Zone
+from app.db.models import Cycle, HaulRoad, Zone
 from app.services.operational.assignments import current_assignment
 from app.services.operational.context import OperationalContext
 from app.services.operational.equipment import latest_positions
@@ -83,6 +83,22 @@ def resolve_haul_endpoints(
         position = latest_positions(session, ctx.site_id).get(equipment_id)
         if position is not None and position.zone_id is not None:
             origin = origin or codes.get(position.zone_id)
+        if origin is None or destination is None:
+            cycle = session.scalar(
+                select(Cycle)
+                .where(
+                    Cycle.truck_id == equipment_id,
+                    Cycle.started_at <= ctx.sim_now,
+                    or_(Cycle.completed_at.is_(None), Cycle.completed_at > ctx.sim_now),
+                )
+                .order_by(Cycle.started_at.desc())
+                .limit(1)
+            )
+            if cycle is not None:
+                if cycle.origin_zone_id is not None:
+                    origin = origin or codes.get(cycle.origin_zone_id)
+                if cycle.destination_zone_id is not None:
+                    destination = destination or codes.get(cycle.destination_zone_id)
     if zone_id is not None:
         origin = origin or codes.get(zone_id)
     return origin, destination

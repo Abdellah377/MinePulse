@@ -70,20 +70,24 @@ def loading_service_context(
     truck_ids = [row.equipment_id for row in equipment if row.type == EquipmentType.HAUL_TRUCK]
     assignments = bulk_current_assignments(session, truck_ids, ctx)
 
-    relevant_loader_ids: set[int] = set()
+    relevant_loader_ids: list[int] = []
     target = by_id.get(equipment_id) if equipment_id is not None else None
     target_assignment = assignments.get(equipment_id) if equipment_id is not None else None
     if target and target.type in _LOADER_TYPES:
-        relevant_loader_ids.add(target.equipment_id)
+        relevant_loader_ids.append(target.equipment_id)
     if target_assignment and target_assignment.loader_id is not None:
-        relevant_loader_ids.add(target_assignment.loader_id)
+        relevant_loader_ids.append(target_assignment.loader_id)
+    for assignment in assignments.values():
+        if assignment.loader_id is None:
+            continue
+        if zone_id is not None and assignment.origin_zone_id != zone_id:
+            continue
+        relevant_loader_ids.append(assignment.loader_id)
     if not relevant_loader_ids:
         for assignment in assignments.values():
-            if assignment.loader_id is None:
-                continue
-            if zone_id is None or assignment.origin_zone_id == zone_id:
-                relevant_loader_ids.add(assignment.loader_id)
-    relevant_loader_ids = set(sorted(relevant_loader_ids)[:MAX_LOADERS])
+            if assignment.loader_id is not None:
+                relevant_loader_ids.append(assignment.loader_id)
+    relevant_loader_ids = list(dict.fromkeys(relevant_loader_ids))[:MAX_LOADERS]
 
     current_state_rows = list(
         session.scalars(

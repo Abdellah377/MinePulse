@@ -14,21 +14,19 @@ from app.optimization.persistence import latest_run_for_alert, list_runs_for_ale
 from app.optimization.solver import (
     DEFAULT_WEIGHTS,
     ERROR,
-    FEASIBLE,
-    INSUFFICIENT_DATA,
-    NO_FEASIBLE_PLAN,
     NOT_APPLICABLE,
     OPTIMIZER_VERSION,
     _jsonable,
+    dispatch_outcome,
     explain_run,
     generate_candidates,
     snapshot_digest,
 )
 from app.services.external_context.weather import get_weather_context
 from app.services.operational.alerts import get_site_alert_or_404
-from app.services.operational.assignments import current_assignment
+from app.services.operational.assignments import bulk_current_assignments, current_assignment
 from app.services.operational.context import OperationalContext
-from app.services.operational.equipment import list_site_equipment
+from app.services.operational.equipment import latest_positions, list_site_equipment
 from app.services.operational.loading import loading_service_context
 from app.services.operational.road_catalog import list_road_catalog, resolve_haul_endpoints
 
@@ -59,6 +57,7 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
         if eligibility == ELIG_NOT_APPLICABLE:
             outcome = NOT_APPLICABLE
             candidates: list[dict] = []
+            missing_reason = None
         else:
             equipment = list_site_equipment(session, ctx)
             by_id = {row.equipment_id: row for row in equipment}
@@ -79,9 +78,10 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
                 session,
                 ctx,
                 equipment_id=truck.equipment_id if truck else None,
-                zone_id=alert.zone_id,
+                zone_id=None,
             )
             loaders = [row for row in equipment if row.type in {EquipmentType.EXCAVATOR, EquipmentType.LOADER}]
+            loader_zones = _loader_zone_codes(session, ctx, equipment, zone_codes)
             snapshot.update(
                 {
                     "truckId": truck.equipment_id if truck else None,
@@ -91,11 +91,12 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
                     "destZoneCode": dest,
                     "loaderCount": len(loaders),
                     "loadingLoaderCount": len(loading.get("loaders") or []),
+                    "loaderZones": loader_zones,
                 }
             )
+            candidates: list[dict] = []
             if truck is None or dest is None:
-                outcome = INSUFFICIENT_DATA
-                candidates = []
+                outcome, missing_reason = dispatch_outcome(truck=truck, dest=dest, candidates=[])
             else:
                 candidates = generate_candidates(
                     truck=truck,
@@ -107,19 +108,16 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
                     origin_code=origin,
                     dest_code=dest,
                     weights=weights,
+                    loader_zones=loader_zones,
                 )
-                if not candidates:
-                    outcome = NO_FEASIBLE_PLAN
-                elif all(item.get("score") is None for item in candidates):
-                    outcome = INSUFFICIENT_DATA
-                else:
-                    outcome = FEASIBLE
+                outcome, missing_reason = dispatch_outcome(truck=truck, dest=dest, candidates=candidates)
         explanation = explain_run(
             outcome=outcome,
             eligibility=eligibility,
             candidates=candidates,
             weights=weights,
             weather_status=weather_status,
+            missing_reason=missing_reason,
         )
         digest = snapshot_digest(snapshot)
         row = persist_run(
@@ -176,3 +174,34 @@ def list_optimization_runs(session: Session, ctx: OperationalContext, alert_id: 
 def latest_optimization_outcome(session: Session, alert_id: int) -> str | None:
     row = latest_run_for_alert(session, alert_id)
     return row.outcome if row is not None else None
+
+
+def _loader_zone_codes(
+    session: Session,
+    ctx: OperationalContext,
+    equipment: list,
+    zone_codes: dict[int, str],
+) -> dict[int, str]:
+    """Loader pit from truck assignments, then equipment position. Never invents a zone."""
+    truck_ids = [row.equipment_id for row in equipment if row.type == EquipmentType.HAUL_TRUCK]
+    loader_ids = {
+        row.equipment_id
+        for row in equipment
+        if row.type in {EquipmentType.EXCAVATOR, EquipmentType.LOADER}
+    }
+    zones: dict[int, str] = {}
+    for assignment in bulk_current_assignments(session, truck_ids, ctx).values():
+        if assignment.loader_id not in loader_ids or assignment.origin_zone_id is None:
+            continue
+        code = zone_codes.get(assignment.origin_zone_id)
+        if code and assignment.loader_id not in zones:
+            zones[assignment.loader_id] = code
+    positions = latest_positions(session, ctx.site_id)
+    for loader_id in loader_ids:
+        position = positions.get(loader_id)
+        if position is None or position.zone_id is None:
+            continue
+        code = zone_codes.get(position.zone_id)
+        if code:
+            zones[loader_id] = code
+    return zones

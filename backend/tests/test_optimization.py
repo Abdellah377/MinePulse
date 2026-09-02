@@ -195,3 +195,196 @@ def test_generate_candidates_is_deterministic():
     assert [row["candidateId"] for row in first] == [row["candidateId"] for row in second]
     assert [row["score"] for row in first] == [row["score"] for row in second]
 
+
+def _complete_roads():
+    return [
+        {
+            "id": "R-1",
+            "fromZoneId": "L1",
+            "toZoneId": "D1",
+            "status": "OPEN",
+            "distanceKm": 2.0,
+            "speedLimitKmh": 30.0,
+        },
+        {
+            "id": "R-2",
+            "fromZoneId": "L2",
+            "toZoneId": "D1",
+            "status": "OPEN",
+            "distanceKm": 3.0,
+            "speedLimitKmh": 30.0,
+        },
+    ]
+
+
+def _available_loader(equipment_id: int, code: str, zone_id: int):
+    from app.db.enums import EquipmentState
+
+    return SimpleNamespace(
+        equipment_id=equipment_id,
+        code=code,
+        active=True,
+        current_state=EquipmentState.LOADING,
+        current_zone_id=zone_id,
+    )
+
+
+def test_complete_operational_scenario_produces_feasible_scored_candidate():
+    from app.optimization.solver import FEASIBLE, dispatch_outcome
+
+    candidates = generate_candidates(
+        truck=SimpleNamespace(equipment_id=1, code="TRK-1"),
+        assignment=SimpleNamespace(loader_id=10, origin_zone_id=1, destination_zone_id=3),
+        loaders=[_available_loader(10, "LD-1", 1), _available_loader(11, "LD-2", 2)],
+        roads=_complete_roads(),
+        zone_codes={1: "L1", 2: "L2", 3: "D1"},
+        loading={
+            "loaders": [
+                {"loaderId": 10, "waitingTruckCount": 1, "waitingTrucks": [{"waitingMinutes": 8.0}]},
+                {"loaderId": 11, "waitingTruckCount": 0, "waitingTrucks": []},
+            ]
+        },
+        origin_code="L1",
+        dest_code="D1",
+        loader_zones={10: "L1", 11: "L2"},
+    )
+    scored = [row for row in candidates if row["score"] is not None]
+    assert scored
+    assert all(row["travelMinutes"] is not None and row["waitMinutes"] is not None for row in scored)
+    outcome, missing = dispatch_outcome(
+        truck=SimpleNamespace(equipment_id=1),
+        dest="D1",
+        candidates=candidates,
+    )
+    assert outcome == FEASIBLE
+    assert missing is None
+    empty_wait = next(row for row in candidates if row["loaderId"] == 11)
+    assert empty_wait["waitMinutes"] == 0.0
+    assert empty_wait["score"] is not None
+
+
+def test_missing_travel_time_is_insufficient_data_with_explicit_reason():
+    from app.optimization.solver import INSUFFICIENT_DATA, dispatch_outcome, explain_run
+
+    candidates = generate_candidates(
+        truck=SimpleNamespace(equipment_id=1, code="TRK-1"),
+        assignment=SimpleNamespace(loader_id=10, origin_zone_id=1, destination_zone_id=3),
+        loaders=[_available_loader(10, "LD-1", 1)],
+        roads=[
+            {
+                "id": "R-1",
+                "fromZoneId": "L1",
+                "toZoneId": "D1",
+                "status": "OPEN",
+                "distanceKm": 2.0,
+                "speedLimitKmh": None,
+            }
+        ],
+        zone_codes={1: "L1", 3: "D1"},
+        loading={"loaders": [{"loaderId": 10, "waitingTruckCount": 0, "waitingTrucks": []}]},
+        origin_code="L1",
+        dest_code="D1",
+    )
+    assert candidates
+    assert all(row["travelMinutes"] is None for row in candidates)
+    assert all(row["score"] is None for row in candidates)
+    outcome, missing = dispatch_outcome(truck=SimpleNamespace(equipment_id=1), dest="D1", candidates=candidates)
+    assert outcome == INSUFFICIENT_DATA
+    assert missing == "Temps de trajet indisponible"
+    why = explain_run(
+        outcome=outcome,
+        eligibility="OPTIMIZABLE",
+        candidates=candidates,
+        weights=DEFAULT_WEIGHTS,
+        weather_status="UNAVAILABLE",
+        missing_reason=missing,
+    )["why"]
+    assert "Temps de trajet indisponible" in why
+    assert why != "Données insuffisantes pour évaluer un plan de dispatch (métrique absente ≠ 0)."
+
+
+def test_missing_wait_time_is_insufficient_data_with_explicit_reason():
+    from app.optimization.solver import INSUFFICIENT_DATA, dispatch_outcome, explain_run
+
+    candidates = generate_candidates(
+        truck=SimpleNamespace(equipment_id=1, code="TRK-1"),
+        assignment=SimpleNamespace(loader_id=10, origin_zone_id=1, destination_zone_id=3),
+        loaders=[_available_loader(10, "LD-1", 1), _available_loader(11, "LD-2", 2)],
+        roads=_complete_roads(),
+        zone_codes={1: "L1", 2: "L2", 3: "D1"},
+        loading={"loaders": []},
+        origin_code="L1",
+        dest_code="D1",
+        loader_zones={10: "L1", 11: "L2"},
+    )
+    assert candidates
+    assert all(row["travelMinutes"] is not None for row in candidates)
+    assert all(row["waitMinutes"] is None for row in candidates)
+    assert all(row["score"] is None for row in candidates)
+    outcome, missing = dispatch_outcome(truck=SimpleNamespace(equipment_id=1), dest="D1", candidates=candidates)
+    assert outcome == INSUFFICIENT_DATA
+    assert missing == "Temps d'attente chargeur indisponible"
+    why = explain_run(
+        outcome=outcome,
+        eligibility="OPTIMIZABLE",
+        candidates=candidates,
+        weights=DEFAULT_WEIGHTS,
+        weather_status="UNAVAILABLE",
+        missing_reason=missing,
+    )["why"]
+    assert "Temps d'attente chargeur indisponible" in why
+
+
+def test_missing_destination_is_insufficient_data_with_explicit_reason():
+    from app.optimization.solver import INSUFFICIENT_DATA, dispatch_outcome, explain_run
+
+    candidates = generate_candidates(
+        truck=SimpleNamespace(equipment_id=1, code="TRK-1"),
+        assignment=SimpleNamespace(loader_id=10, origin_zone_id=1, destination_zone_id=None),
+        loaders=[_available_loader(10, "LD-1", 1)],
+        roads=_complete_roads(),
+        zone_codes={1: "L1", 3: "D1"},
+        loading={"loaders": [{"loaderId": 10, "waitingTruckCount": 0, "waitingTrucks": []}]},
+        origin_code="L1",
+        dest_code=None,
+    )
+    assert candidates == []
+    outcome, missing = dispatch_outcome(truck=SimpleNamespace(equipment_id=1), dest=None, candidates=candidates)
+    assert outcome == INSUFFICIENT_DATA
+    assert missing == "Destination actuelle inconnue"
+    why = explain_run(
+        outcome=outcome,
+        eligibility="OPTIMIZABLE",
+        candidates=[],
+        weights=DEFAULT_WEIGHTS,
+        weather_status="UNAVAILABLE",
+        missing_reason=missing,
+    )["why"]
+    assert "Destination actuelle inconnue" in why
+
+
+def test_null_metrics_are_never_coerced_to_zero():
+    from app.optimization.solver import score_candidate
+
+    assert score_candidate(None, 0.0, DEFAULT_WEIGHTS) is None
+    assert score_candidate(0.0, None, DEFAULT_WEIGHTS) is None
+    assert score_candidate(None, None, DEFAULT_WEIGHTS) is None
+    assert score_candidate(0.0, 0.0, DEFAULT_WEIGHTS) == 0.0
+    candidates = generate_candidates(
+        truck=SimpleNamespace(equipment_id=1, code="TRK-1"),
+        assignment=SimpleNamespace(loader_id=10, origin_zone_id=1, destination_zone_id=3),
+        loaders=[_available_loader(10, "LD-1", 1), _available_loader(11, "LD-2", 2)],
+        roads=_complete_roads(),
+        zone_codes={1: "L1", 2: "L2", 3: "D1"},
+        loading={"loaders": [{"loaderId": 10, "waitingTruckCount": 0, "waitingTrucks": []}]},
+        origin_code="L1",
+        dest_code="D1",
+        loader_zones={10: "L1", 11: "L2"},
+    )
+    current = next(row for row in candidates if row["loaderId"] == 10)
+    other = next(row for row in candidates if row["loaderId"] == 11)
+    assert current["waitMinutes"] == 0.0
+    assert current["score"] is not None
+    assert other["waitMinutes"] is None
+    assert other["score"] is None
+

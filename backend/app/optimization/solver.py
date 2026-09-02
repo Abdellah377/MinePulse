@@ -105,6 +105,7 @@ def generate_candidates(
     origin_code: str | None,
     dest_code: str | None,
     weights: dict | None = None,
+    loader_zones: dict[int, str] | None = None,
 ) -> list[dict]:
     """Bounded generation around the subject truck. Never invents a dump destination."""
     weights = weights or dict(DEFAULT_WEIGHTS)
@@ -117,11 +118,14 @@ def generate_candidates(
     current_loader_id = assignment.loader_id if assignment is not None else None
     available_loaders = [row for row in loaders if _is_available(row)]
     pairs: list[tuple[Any, str]] = []
+    loader_zones = loader_zones or {}
     for loader in available_loaders:
-        loader_zone = None
-        if assignment is not None and loader.equipment_id == current_loader_id and assignment.origin_zone_id:
+        loader_zone = loader_zones.get(loader.equipment_id)
+        if loader_zone is None and assignment is not None and loader.equipment_id == current_loader_id and assignment.origin_zone_id:
             loader_zone = zone_codes.get(assignment.origin_zone_id)
-        loader_zone = loader_zone or zone_codes.get(getattr(loader, "current_zone_id", None) or 0)
+        attr_zone_id = getattr(loader, "current_zone_id", None)
+        if loader_zone is None and attr_zone_id:
+            loader_zone = zone_codes.get(attr_zone_id)
         origin = loader_zone or origin_code
         if origin is None:
             continue
@@ -188,7 +192,47 @@ def generate_candidates(
     return candidates
 
 
-def explain_run(*, outcome: str, eligibility: str, candidates: list[dict], weights: dict, weather_status: str | None) -> dict:
+def dispatch_outcome(
+    *,
+    truck: Any,
+    dest: str | None,
+    candidates: list[dict],
+) -> tuple[str, str | None]:
+    """Classify a dispatch run. Missing metrics stay missing — never coerced to zero."""
+    if truck is None:
+        return INSUFFICIENT_DATA, "Camion sujet inconnu"
+    if dest is None:
+        return INSUFFICIENT_DATA, "Destination actuelle inconnue"
+    if not candidates:
+        return NO_FEASIBLE_PLAN, None
+    if all(item.get("score") is None for item in candidates):
+        return INSUFFICIENT_DATA, missing_metric_reason(candidates)
+    return FEASIBLE, None
+
+
+def missing_metric_reason(candidates: list[dict]) -> str:
+    if not candidates:
+        return "Destination actuelle inconnue"
+    travel_all_none = all(item.get("travelMinutes") is None for item in candidates)
+    wait_all_none = all(item.get("waitMinutes") is None for item in candidates)
+    if travel_all_none and wait_all_none:
+        return "Temps de trajet et temps d'attente chargeur indisponibles"
+    if travel_all_none:
+        return "Temps de trajet indisponible"
+    if wait_all_none:
+        return "Temps d'attente chargeur indisponible"
+    return "Temps de trajet ou temps d'attente chargeur indisponible"
+
+
+def explain_run(
+    *,
+    outcome: str,
+    eligibility: str,
+    candidates: list[dict],
+    weights: dict,
+    weather_status: str | None,
+    missing_reason: str | None = None,
+) -> dict:
     recommended = next((item for item in candidates if item.get("score") is not None), None)
     return {
         "eligibility": eligibility,
@@ -198,15 +242,23 @@ def explain_run(*, outcome: str, eligibility: str, candidates: list[dict], weigh
         "weatherStatus": weather_status,
         "weatherScored": False,
         "recommendedCandidateId": recommended["candidateId"] if recommended else None,
-        "why": _why_text(outcome, eligibility, recommended, weights),
+        "why": _why_text(outcome, eligibility, recommended, weights, missing_reason),
+        "missingReason": missing_reason,
     }
 
 
-def _why_text(outcome: str, eligibility: str, recommended: dict | None, weights: dict) -> str:
+def _why_text(
+    outcome: str,
+    eligibility: str,
+    recommended: dict | None,
+    weights: dict,
+    missing_reason: str | None = None,
+) -> str:
     if eligibility == NOT_APPLICABLE:
         return "Optimisation de dispatch non applicable."
     if outcome == INSUFFICIENT_DATA:
-        return "Données insuffisantes pour évaluer un plan de dispatch (métrique absente ≠ 0)."
+        detail = missing_reason or "métrique absente ≠ 0"
+        return f"Données insuffisantes pour évaluer un plan de dispatch ({detail})."
     if outcome == NO_FEASIBLE_PLAN:
         return "Aucun plan faisable sous les contraintes dures (équipement, routes CLOSED/UNKNOWN, destination actuelle)."
     if outcome == ERROR:
