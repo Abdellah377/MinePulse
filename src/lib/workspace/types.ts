@@ -46,6 +46,10 @@ export interface WorkspaceContext {
   oemFamily?: OemFamily
   oemView?: OemView
   mapFocusAt?: number
+  /** Canonical module-home workspace. Survives incidental selection patches. */
+  _home?: boolean
+  /** Intentional duplicate from duplicateTab(). */
+  _dup?: number | string
   [key: string]: unknown
 }
 
@@ -84,17 +88,17 @@ export const MODULE_HOME: Record<
   WorkspaceModule,
   { type: WorkspaceType; title: string; context?: WorkspaceContext }
 > = {
-  alertes: { type: "alerts", title: "Alertes IA" },
-  actions: { type: "actions", title: "Actions IA" },
+  alertes: { type: "alerts", title: "Alertes IA", context: { _home: true } },
+  actions: { type: "actions", title: "Actions IA", context: { _home: true } },
   performance: {
     type: "performance",
     title: "Performance — Production",
-    context: { metric: "production" },
+    context: { metric: "production", _home: true },
   },
   oem: {
     type: "oem",
     title: "Connectivité",
-    context: { oemFamily: "connectivite", oemView: "connectivite" },
+    context: { oemFamily: "connectivite", oemView: "connectivite", _home: true },
   },
-  parametres: { type: "settings", title: "Paramètres" },
+  parametres: { type: "settings", title: "Paramètres", context: { _home: true } },
 }

@@ -9,12 +9,12 @@ import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure } from "
 import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
 import { mergeInboxItems, pickInboxSelection, removeInboxItem } from "@/lib/ai/actionsInbox"
 import {
-  IMPACT_METRIC_LABEL,
-  IMPACT_METRIC_UNIT,
-  optimizationImpactPreview,
+  classifyOptimizationImpact,
   optimizerOperatorStatus,
+  planCandidateLabel,
   visibleOptimizationPlans,
 } from "@/lib/ai/optimizationDisplay"
+import { CompactPlanImpact, OptimizationImpactCard } from "@/components/ai/OptimizationImpact"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
@@ -56,12 +56,6 @@ function formatWhen(value?: string | null) {
   if (Number.isNaN(date.getTime())) return null
   return date.toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })
 }
-
-function formatMetric(value: number | null, unit: string) {
-  if (value == null) return "Non disponible"
-  return `${value} ${unit}`
-}
-
 function opsCtx() {
   const ops = useOpsStore.getState()
   return { siteCode: ops.selectedSiteId, shiftId: ops.selectedShiftId }
@@ -227,7 +221,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const eligible = selected?.optimizationEligible ?? false
   const handled = selected?.status === "resolved"
   const impact = useMemo(
-    () => optimizationImpactPreview(run?.candidates, selectedPlanId),
+    () => classifyOptimizationImpact(run?.candidates, selectedPlanId),
     [run?.candidates, selectedPlanId],
   )
   const showOptimization = eligible || Boolean(run && run.outcome !== "NOT_APPLICABLE")
@@ -497,24 +491,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
             </section>
           )}
 
-          {impact && (
-            <section className="rounded-md border border-border bg-surface px-3.5 py-3">
-              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Impact estimé</h2>
-              <p className="mt-1 text-[11px] text-muted">Avant / après à partir du plan actuel et du plan sélectionné. Aucun gain n’est inventé.</p>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
-                <p className="text-muted-2" />
-                <p className="font-semibold text-muted-2">Avant</p>
-                <p className="font-semibold text-muted-2">Après</p>
-                {impact.rows.map((row) => (
-                  <div key={row.key} className="contents">
-                    <p className="text-foreground">{IMPACT_METRIC_LABEL[row.key]}</p>
-                    <p className="tabular-nums text-muted">{formatMetric(row.before, IMPACT_METRIC_UNIT[row.key])}</p>
-                    <p className="tabular-nums font-medium text-foreground">{formatMetric(row.after, IMPACT_METRIC_UNIT[row.key])}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+          {showOptimization && run && <OptimizationImpactCard view={impact} />}
 
           {whyPoints.length > 0 && (
             <details className="rounded-md border border-border bg-surface px-3.5 py-3">
@@ -637,6 +614,8 @@ function OptimizationPlans({
   onSelectPlan: (id: string) => void
 }) {
   const { visible: plans, hiddenCount } = visibleOptimizationPlans(run.candidates)
+  const recommendedId = run.recommendedCandidateId
+  let alternativeIndex = 0
   return (
     <div className="mt-2 space-y-2">
       <p className="text-[11px] text-muted">{optimizerOperatorStatus(run)}</p>
@@ -644,38 +623,62 @@ function OptimizationPlans({
       {!plans.length && run.outcome !== "FEASIBLE" && (
         <p className="text-[11px] text-muted">Aucun candidat de dispatch à afficher. Aucun impact n’est inventé.</p>
       )}
-      {plans.map((plan: OptimizationCandidate, index) => {
-        const recommended = plan.candidateId === run.recommendedCandidateId
-        const selected = plan.candidateId === selectedPlanId
-        const rankLabel = recommended ? "Recommandé" : plan.isCurrent ? "Actuel" : `Alternative ${index + 1}`
+      {plans.map((plan) => {
+        const named = Boolean(plan.isCurrent || plan.candidateId === recommendedId)
+        if (!named) alternativeIndex += 1
         return (
-          <button
+          <PlanCandidateButton
             key={plan.candidateId}
-            type="button"
-            onClick={() => onSelectPlan(plan.candidateId)}
-            className={cn(
-              "w-full rounded-md border px-3 py-2 text-left",
-              selected ? "border-accent/50 bg-accent-soft/40" : "border-border hover:bg-surface-2/70",
-            )}
-          >
-            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-              <Badge variant="outline">{rankLabel}</Badge>
-              {plan.score == null && <Badge variant="outline">non évalué</Badge>}
-              <span className="ml-auto tabular-nums text-muted-2">{plan.score != null ? `score ${plan.score}` : "score —"}</span>
-            </div>
-            <p className="mt-1 text-[12px] font-medium text-foreground">{plan.loaderCode ?? "Chargeuse"} → {plan.destZoneCode ?? "destination actuelle"}</p>
-            <p className="text-[11px] text-muted">
-              Trajet {plan.travelMinutes != null ? `${plan.travelMinutes} min` : "inconnu"} · Attente {plan.waitMinutes != null ? `${plan.waitMinutes} min` : "inconnue"}
-              {plan.distanceKm != null ? ` · ${plan.distanceKm} km` : ""}
-              {plan.roadIds.length ? ` · ${plan.roadIds.join(" → ")}` : ""}
-            </p>
-            {plan.constraintNotes.length > 0 && <p className="text-[10px] text-muted-2">{plan.constraintNotes.join(" · ")}</p>}
-          </button>
+            plan={plan}
+            rankLabel={planCandidateLabel(plan, recommendedId, alternativeIndex)}
+            selected={plan.candidateId === selectedPlanId}
+            onSelect={() => onSelectPlan(plan.candidateId)}
+            compactImpact={!named}
+          />
         )
       })}
       {hiddenCount > 0 && (
         <p className="text-[10px] text-muted-2">+ {hiddenCount} autre{hiddenCount > 1 ? "s" : ""} candidat{hiddenCount > 1 ? "s" : ""} conservé{hiddenCount > 1 ? "s" : ""} dans l’historique</p>
       )}
     </div>
+  )
+}
+
+function PlanCandidateButton({
+  plan,
+  rankLabel,
+  selected,
+  onSelect,
+  compactImpact,
+}: {
+  plan: OptimizationCandidate
+  rankLabel: string
+  selected: boolean
+  onSelect: () => void
+  compactImpact: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "w-full min-w-0 rounded-md border px-3 py-2 text-left",
+        selected ? "border-accent/50 bg-accent-soft/40" : "border-border hover:bg-surface-2/70",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+        <Badge variant="outline">{rankLabel}</Badge>
+        {plan.score == null && <Badge variant="outline">non évalué</Badge>}
+      </div>
+      <p className="mt-1 text-[12px] font-medium text-foreground">{plan.loaderCode ?? "Chargeuse"} → {plan.destZoneCode ?? "destination actuelle"}</p>
+      {compactImpact ? (
+        <CompactPlanImpact plan={plan} />
+      ) : (
+        <p className="min-w-0 text-[11px] text-muted">
+          {plan.roadIds.length ? plan.roadIds.join(" → ") : "Itinéraire évalué"}
+        </p>
+      )}
+      {plan.constraintNotes.length > 0 && <p className="text-[10px] text-muted-2">{plan.constraintNotes.join(" · ")}</p>}
+    </button>
   )
 }

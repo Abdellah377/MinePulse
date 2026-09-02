@@ -21,6 +21,7 @@ from app.optimization.solver import (
     explain_run,
     generate_candidates,
     snapshot_digest,
+    candidate_loader_ids,
 )
 from app.services.external_context.weather import get_weather_context
 from app.services.operational.alerts import get_site_alert_or_404
@@ -74,13 +75,15 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
             )
             if dest is None and assignment is not None and assignment.destination_zone_id is not None:
                 dest = zone_codes.get(assignment.destination_zone_id)
+            loaders = [row for row in equipment if row.type in {EquipmentType.EXCAVATOR, EquipmentType.LOADER}]
+            candidate_ids = candidate_loader_ids(assignment=assignment, loaders=loaders)
             loading = loading_service_context(
                 session,
                 ctx,
                 equipment_id=truck.equipment_id if truck else None,
                 zone_id=None,
+                loader_ids=candidate_ids,
             )
-            loaders = [row for row in equipment if row.type in {EquipmentType.EXCAVATOR, EquipmentType.LOADER}]
             loader_zones = _loader_zone_codes(session, ctx, equipment, zone_codes)
             snapshot.update(
                 {
@@ -91,6 +94,8 @@ def create_optimization_run(session: Session, ctx: OperationalContext, alert_id:
                     "destZoneCode": dest,
                     "loaderCount": len(loaders),
                     "loadingLoaderCount": len(loading.get("loaders") or []),
+                    "candidateLoaderIds": candidate_ids,
+                    "loadingLoaderIds": [row.get("loaderId") for row in (loading.get("loaders") or [])],
                     "loaderZones": loader_zones,
                 }
             )

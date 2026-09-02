@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from app.db.enums import EquipmentState, EquipmentType
+from app.services.operational.loading import MAX_LOADERS
 from app.services.operational.road_network import MAX_CANDIDATE_PATHS, can_reach, candidate_paths
 
 OPTIMIZER_VERSION = "1.0.0"
@@ -94,6 +95,21 @@ def _rank_key(candidate: dict) -> tuple:
     return (0 if score is not None else 1, score if score is not None else 0.0, loader_id, roads)
 
 
+def candidate_loader_ids(*, assignment: Any, loaders: list[Any]) -> list[int]:
+    """Available loaders the solver will consider. Current assignment first."""
+    ids: list[int] = []
+    current = assignment.loader_id if assignment is not None else None
+    if current is not None:
+        ids.append(current)
+    for row in loaders:
+        if not _is_available(row):
+            continue
+        loader_id = row.equipment_id
+        if loader_id not in ids:
+            ids.append(loader_id)
+    return ids[:MAX_LOADERS]
+
+
 def generate_candidates(
     *,
     truck: Any,
@@ -116,7 +132,8 @@ def generate_candidates(
         return []
 
     current_loader_id = assignment.loader_id if assignment is not None else None
-    available_loaders = [row for row in loaders if _is_available(row)]
+    allowed_ids = set(candidate_loader_ids(assignment=assignment, loaders=loaders))
+    available_loaders = [row for row in loaders if _is_available(row) and row.equipment_id in allowed_ids]
     pairs: list[tuple[Any, str]] = []
     loader_zones = loader_zones or {}
     for loader in available_loaders:
@@ -271,8 +288,11 @@ def _why_text(
         return "Des candidats existent mais aucun n’a pu être noté (travel et attente doivent être tous deux connus)."
     travel = recommended.get("travelMinutes")
     wait = recommended.get("waitMinutes")
-    return (
+    score_line = (
         f"Score = {weights.get('w_travel', 1)} × travel ({travel} min) + "
         f"{weights.get('w_wait', 1)} × attente ({wait} min). "
         "Météo affichée, non notée. Acceptation ≠ application FMS."
     )
+    if recommended.get("isCurrent"):
+        return "Plan actuel déjà optimal parmi les options évaluables. " + score_line
+    return score_line

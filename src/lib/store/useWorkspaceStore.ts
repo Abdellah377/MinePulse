@@ -1,7 +1,14 @@
 import { create } from "zustand"
-import { persist, createJSONStorage } from "zustand/middleware"
+import { persist, createJSONStorage, type StateStorage } from "zustand/middleware"
 
-import { buildWorkspaceTitle, contextDedupeKey } from "@/lib/workspace/titles"
+import {
+  buildWorkspaceTitle,
+  contextDedupeKey,
+  isModuleHomeContext,
+  isModuleHomeTab,
+  moduleHomeDedupeKey,
+  prepareWorkspaceContext,
+} from "@/lib/workspace/titles"
 import {
   MODULE_HOME,
   WORKSPACE_TYPE_MODULE,
@@ -10,7 +17,9 @@ import {
   type WorkspaceTab,
 } from "@/lib/workspace/types"
 
-const PERSIST_VERSION = 4
+export const WORKSPACE_PERSIST_VERSION = 5
+const PERSIST_NAME = `minepulse.workspaces.v${WORKSPACE_PERSIST_VERSION}`
+const LEGACY_PERSIST_NAMES = ["minepulse.workspaces.v4"]
 
 type TabStateMap = Record<string, Record<string, unknown>>
 
@@ -44,6 +53,20 @@ function uid() {
   return `ws-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
+const initialHome = MODULE_HOME.alertes
+const initialId = "ws-home-alertes"
+const initialTab: WorkspaceTab = {
+  id: initialId,
+  type: initialHome.type,
+  title: initialHome.title,
+  module: "alertes",
+  context: initialHome.context ?? { _home: true },
+  isPinned: false,
+  isDirty: false,
+  createdAt: Date.now(),
+  lastActivatedAt: Date.now(),
+}
+
 function sortTabs(tabs: WorkspaceTab[]): WorkspaceTab[] {
   const pinned = tabs.filter((t) => t.isPinned)
   const rest = tabs.filter((t) => !t.isPinned)
@@ -58,24 +81,151 @@ function rebuildIndex(tabs: WorkspaceTab[]): Record<string, string> {
   return idx
 }
 
+function pickHomeWinner(homes: WorkspaceTab[], activeTabId: string | null): WorkspaceTab {
+  const active = homes.find((h) => h.id === activeTabId)
+  if (active) return active
+  const pinned = homes
+    .filter((h) => h.isPinned)
+    .sort((a, b) => b.lastActivatedAt - a.lastActivatedAt)
+  if (pinned[0]) return pinned[0]
+  return [...homes].sort((a, b) => b.lastActivatedAt - a.lastActivatedAt)[0]
+}
+
+/** Collapse duplicate module-home tabs. Contextual and intentional copies are kept. */
+export function normalizeDuplicateHomeTabs(
+  tabs: WorkspaceTab[],
+  activeTabId: string | null,
+): { tabs: WorkspaceTab[]; activeTabId: string | null; droppedIds: string[] } {
+  if (tabs.length === 0) {
+    return { tabs: [initialTab], activeTabId: initialTab.id, droppedIds: [] }
+  }
+  const groups = new Map<string, WorkspaceTab[]>()
+  for (const tab of tabs) {
+    if (!isModuleHomeTab(tab)) continue
+    const key = moduleHomeDedupeKey(tab.type)
+    const list = groups.get(key) ?? []
+    list.push(tab)
+    groups.set(key, list)
+  }
+  const droppedIds: string[] = []
+  const winnerById = new Map<string, WorkspaceTab>()
+  for (const homes of groups.values()) {
+    const stamped = homes.map((h) => ({ ...h, context: { ...h.context, _home: true } }))
+    const winner = pickHomeWinner(stamped, activeTabId)
+    winnerById.set(winner.id, winner)
+    for (const h of stamped) {
+      if (h.id !== winner.id) droppedIds.push(h.id)
+    }
+  }
+  const dropped = new Set(droppedIds)
+  const nextTabs = tabs.flatMap((t) => {
+    if (dropped.has(t.id)) return []
+    return [winnerById.get(t.id) ?? t]
+  })
+  if (nextTabs.length === 0) {
+    return { tabs: [initialTab], activeTabId: initialTab.id, droppedIds }
+  }
+  const nextActive =
+    activeTabId && nextTabs.some((t) => t.id === activeTabId) ? activeTabId : nextTabs[0]?.id ?? null
+  return { tabs: sortTabs(nextTabs), activeTabId: nextActive, droppedIds }
+}
+
+function pruneTabState(tabState: TabStateMap, tabs: WorkspaceTab[]): TabStateMap {
+  const keep = new Set(tabs.map((t) => t.id))
+  const next: TabStateMap = {}
+  for (const [id, value] of Object.entries(tabState)) {
+    if (keep.has(id)) next[id] = value
+  }
+  return next
+}
+
+function findExistingTabId(
+  tabs: WorkspaceTab[],
+  dedupeIndex: Record<string, string>,
+  activeTabId: string | null,
+  type: WorkspaceTab["type"],
+  context: WorkspaceTab["context"],
+  key: string,
+): string | null {
+  const byKey = dedupeIndex[key]
+  if (byKey && tabs.some((t) => t.id === byKey)) return byKey
+  if (!isModuleHomeContext(type, context)) return null
+  const homes = tabs.filter((t) => t.type === type && isModuleHomeTab(t))
+  if (homes.length === 0) return null
+  return pickHomeWinner(homes, activeTabId).id
+}
+
+type PersistedWorkspace = {
+  tabs?: WorkspaceTab[]
+  activeTabId?: string | null
+  tabState?: TabStateMap
+  dedupeIndex?: Record<string, string>
+}
+
+function applyPersistedWorkspace(persisted: PersistedWorkspace, fallback: WorkspaceState): Pick<
+  WorkspaceState,
+  "tabs" | "activeTabId" | "tabState" | "dedupeIndex"
+> {
+  const tabs = Array.isArray(persisted.tabs) ? persisted.tabs : []
+  if (tabs.length === 0) {
+    return {
+      tabs: fallback.tabs,
+      activeTabId: fallback.activeTabId,
+      tabState: fallback.tabState,
+      dedupeIndex: fallback.dedupeIndex,
+    }
+  }
+  const normalized = normalizeDuplicateHomeTabs(tabs, persisted.activeTabId ?? null)
+  return {
+    tabs: normalized.tabs,
+    activeTabId: ensureActive(normalized.tabs, normalized.activeTabId),
+    tabState: pruneTabState(persisted.tabState ?? {}, normalized.tabs),
+    dedupeIndex: rebuildIndex(normalized.tabs),
+  }
+}
+
+function liveSessionStorage(): Storage | null {
+  try {
+    if (typeof sessionStorage === "undefined") return null
+    return sessionStorage
+  } catch {
+    return null
+  }
+}
+
+function workspaceStorage(): StateStorage {
+  const memory = new Map<string, string>()
+  return {
+    getItem: (name) => {
+      const ss = liveSessionStorage()
+      if (ss) {
+        const current = ss.getItem(name)
+        if (current != null) return current
+        for (const legacy of LEGACY_PERSIST_NAMES) {
+          const value = ss.getItem(legacy)
+          if (value != null) return value
+        }
+        return null
+      }
+      return memory.get(name) ?? null
+    },
+    setItem: (name, value) => {
+      const ss = liveSessionStorage()
+      if (ss) ss.setItem(name, value)
+      else memory.set(name, value)
+    },
+    removeItem: (name) => {
+      const ss = liveSessionStorage()
+      if (ss) ss.removeItem(name)
+      else memory.delete(name)
+    },
+  }
+}
+
 function ensureActive(tabs: WorkspaceTab[], activeTabId: string | null): string | null {
   if (tabs.length === 0) return null
   if (activeTabId && tabs.some((t) => t.id === activeTabId)) return activeTabId
   return tabs[0]?.id ?? null
-}
-
-const initialHome = MODULE_HOME.alertes
-const initialId = "ws-home-alertes"
-const initialTab: WorkspaceTab = {
-  id: initialId,
-  type: initialHome.type,
-  title: initialHome.title,
-  module: "alertes",
-  context: initialHome.context ?? {},
-  isPinned: false,
-  isDirty: false,
-  createdAt: Date.now(),
-  lastActivatedAt: Date.now(),
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -87,10 +237,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       dedupeIndex: rebuildIndex([initialTab]),
 
       openWorkspace: (input) => {
-        const context = input.context ?? {}
+        const context = prepareWorkspaceContext(input.type, input.context ?? {})
         const key = contextDedupeKey(input.type, context)
-        const existingId = get().dedupeIndex[key]
-        if (existingId && get().tabs.some((t) => t.id === existingId)) {
+        const existingId = findExistingTabId(
+          get().tabs,
+          get().dedupeIndex,
+          get().activeTabId,
+          input.type,
+          context,
+          key,
+        )
+        if (existingId) {
+          const existing = get().tabs.find((t) => t.id === existingId)
+          if (existing && isModuleHomeContext(input.type, context) && existing.context._home !== true) {
+            get().patchTabContext(existingId, { _home: true })
+          }
           get().activateTab(existingId)
           return existingId
         }
@@ -278,9 +439,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       patchTabContext: (id, patch) => {
         set((s) => {
-          const tabs = s.tabs.map((t) =>
-            t.id === id ? { ...t, context: { ...t.context, ...patch } } : t
-          )
+          const tabs = s.tabs.map((t) => {
+            if (t.id !== id) return t
+            const nextContext = { ...t.context, ...patch }
+            if (isModuleHomeTab(t) || t.context._home === true) nextContext._home = true
+            return { ...t, context: nextContext }
+          })
           return { tabs, dedupeIndex: rebuildIndex(tabs) }
         })
       },
@@ -318,14 +482,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
     }),
     {
-      name: `minepulse.workspaces.v${PERSIST_VERSION}`,
-      storage: createJSONStorage(() => sessionStorage),
+      name: PERSIST_NAME,
+      version: WORKSPACE_PERSIST_VERSION,
+      storage: createJSONStorage(workspaceStorage),
       partialize: (s) => ({
         tabs: s.tabs,
         activeTabId: s.activeTabId,
         tabState: s.tabState,
         dedupeIndex: s.dedupeIndex,
       }),
+      merge: (persisted, current) => {
+        const snapshot = (persisted ?? {}) as PersistedWorkspace
+        const hydrated = applyPersistedWorkspace(snapshot, current)
+        return { ...current, ...hydrated }
+      },
+      migrate: (persisted) => persisted as PersistedWorkspace,
     }
   )
 )
@@ -334,4 +505,18 @@ export function useActiveWorkspace() {
   const tabs = useWorkspaceStore((s) => s.tabs)
   const activeTabId = useWorkspaceStore((s) => s.activeTabId)
   return tabs.find((t) => t.id === activeTabId) ?? null
+}
+
+export function resetWorkspaceStore() {
+  const tab: WorkspaceTab = {
+    ...initialTab,
+    createdAt: Date.now(),
+    lastActivatedAt: Date.now(),
+  }
+  useWorkspaceStore.setState({
+    tabs: [tab],
+    activeTabId: tab.id,
+    tabState: {},
+    dedupeIndex: rebuildIndex([tab]),
+  })
 }

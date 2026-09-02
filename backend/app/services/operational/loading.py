@@ -19,6 +19,51 @@ MAX_LOADING_STAGE_SAMPLES = 8
 _LOADER_TYPES = {EquipmentType.EXCAVATOR, EquipmentType.LOADER}
 
 
+def resolve_relevant_loader_ids(
+    *,
+    loader_ids: list[int] | None,
+    equipment_by_id: dict[int, Equipment],
+    assignments: dict,
+    equipment_id: int | None,
+    zone_id: int | None,
+) -> list[int]:
+    """Choose which loaders get an authoritative queue row.
+
+    Explicit optimizer ``loader_ids`` skip assignment-based discovery.
+    Unknown, inactive, or non-loader IDs are omitted — never invented as zero.
+    """
+    if loader_ids is not None:
+        relevant: list[int] = []
+        for loader_id in loader_ids:
+            row = equipment_by_id.get(loader_id)
+            if row is None or not row.active or row.type not in _LOADER_TYPES:
+                continue
+            if loader_id not in relevant:
+                relevant.append(loader_id)
+            if len(relevant) >= MAX_LOADERS:
+                break
+        return relevant
+
+    relevant_loader_ids: list[int] = []
+    target = equipment_by_id.get(equipment_id) if equipment_id is not None else None
+    target_assignment = assignments.get(equipment_id) if equipment_id is not None else None
+    if target and target.type in _LOADER_TYPES:
+        relevant_loader_ids.append(target.equipment_id)
+    if target_assignment and target_assignment.loader_id is not None:
+        relevant_loader_ids.append(target_assignment.loader_id)
+    for assignment in assignments.values():
+        if assignment.loader_id is None:
+            continue
+        if zone_id is not None and assignment.origin_zone_id != zone_id:
+            continue
+        relevant_loader_ids.append(assignment.loader_id)
+    if not relevant_loader_ids:
+        for assignment in assignments.values():
+            if assignment.loader_id is not None:
+                relevant_loader_ids.append(assignment.loader_id)
+    return list(dict.fromkeys(relevant_loader_ids))[:MAX_LOADERS]
+
+
 def _minutes(start: datetime, end: datetime) -> float:
     def utc(value: datetime) -> datetime:
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
@@ -52,6 +97,7 @@ def loading_service_context(
     *,
     equipment_id: int | None = None,
     zone_id: int | None = None,
+    loader_ids: list[int] | None = None,
 ) -> dict:
     """Relate waiting trucks to shared loaders and observed loading-stage durations.
 
@@ -70,24 +116,13 @@ def loading_service_context(
     truck_ids = [row.equipment_id for row in equipment if row.type == EquipmentType.HAUL_TRUCK]
     assignments = bulk_current_assignments(session, truck_ids, ctx)
 
-    relevant_loader_ids: list[int] = []
-    target = by_id.get(equipment_id) if equipment_id is not None else None
-    target_assignment = assignments.get(equipment_id) if equipment_id is not None else None
-    if target and target.type in _LOADER_TYPES:
-        relevant_loader_ids.append(target.equipment_id)
-    if target_assignment and target_assignment.loader_id is not None:
-        relevant_loader_ids.append(target_assignment.loader_id)
-    for assignment in assignments.values():
-        if assignment.loader_id is None:
-            continue
-        if zone_id is not None and assignment.origin_zone_id != zone_id:
-            continue
-        relevant_loader_ids.append(assignment.loader_id)
-    if not relevant_loader_ids:
-        for assignment in assignments.values():
-            if assignment.loader_id is not None:
-                relevant_loader_ids.append(assignment.loader_id)
-    relevant_loader_ids = list(dict.fromkeys(relevant_loader_ids))[:MAX_LOADERS]
+    relevant_loader_ids = resolve_relevant_loader_ids(
+        loader_ids=loader_ids,
+        equipment_by_id=by_id,
+        assignments=assignments,
+        equipment_id=equipment_id,
+        zone_id=zone_id,
+    )
 
     current_state_rows = list(
         session.scalars(
@@ -156,7 +191,7 @@ def loading_service_context(
         record_ids.extend([f"cycle:{cycle.cycle_id}", f"cycle-stage:{stage.cycle_stage_id}"])
 
     loader_rows = []
-    for loader_id in sorted(relevant_loader_ids):
+    for loader_id in relevant_loader_ids:
         loader = by_id.get(loader_id)
         if loader is None:
             continue

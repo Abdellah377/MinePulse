@@ -54,5 +54,19 @@ def test_live_congestion_alert_produces_feasible_scored_candidate():
         assert best.get("waitMinutes") is not None
         assert best.get("score") is not None
         assert best.get("destZoneCode")
+        from app.optimization.persistence import latest_run_for_alert
+
+        run = latest_run_for_alert(session, alert.alert_id)
+        snap = run.snapshot if run is not None else {}
+        loading_ids = set(snap.get("loadingLoaderIds") or [])
+        candidate_ids = {row.get("loaderId") for row in (payload.get("candidates") or []) if row.get("loaderId")}
+        assert candidate_ids <= loading_ids
+        for row in payload.get("candidates") or []:
+            assert row.get("waitMinutes") is not None
+            assert row.get("travelMinutes") is not None
+            assert row.get("score") is not None
+        lowest = min(scored, key=lambda row: row["score"])
+        rec = payload.get("recommendedCandidateId") or (payload.get("explanation") or {}).get("recommendedCandidateId")
+        assert rec == lowest["candidateId"]
     finally:
         session.close()

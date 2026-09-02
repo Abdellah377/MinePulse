@@ -1,4 +1,4 @@
-import { buildWorkspaceTitle } from "@/lib/workspace/titles"
+import { buildWorkspaceTitle, contextDedupeKey, isModuleHomeTab, prepareWorkspaceContext } from "@/lib/workspace/titles"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
 import type { WorkspaceContext } from "@/lib/workspace/types"
 
@@ -7,7 +7,7 @@ export type MapFocusTarget = Pick<
   "equipmentId" | "equipmentCode" | "zoneId" | "zoneName"
 >
 
-/** Reuse the keep-alive map tab and retarget it instead of opening a second Carte. */
+/** Reuse the same equipment/zone map workspace. Never convert the Carte home tab. */
 export function openMapForTarget(target: MapFocusTarget): string {
   const context: WorkspaceContext = {
     equipmentId: target.equipmentId,
@@ -17,9 +17,10 @@ export function openMapForTarget(target: MapFocusTarget): string {
     mapFocusAt: Date.now(),
   }
   const store = useWorkspaceStore.getState()
-  const maps = store.tabs.filter((tab) => tab.type === "map")
-  const existing = maps.find((tab) => tab.id === store.activeTabId) ?? maps[0]
-  if (existing) {
+  const key = contextDedupeKey("map", prepareWorkspaceContext("map", context))
+  const existingId = store.dedupeIndex[key]
+  const existing = existingId ? store.tabs.find((tab) => tab.id === existingId) : undefined
+  if (existing && !isModuleHomeTab(existing)) {
     store.patchTabContext(existing.id, context)
     store.setTabTitle(existing.id, buildWorkspaceTitle({ type: "map", context: { ...existing.context, ...context } }))
     store.activateTab(existing.id)

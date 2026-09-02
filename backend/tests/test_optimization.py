@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from app.optimization.eligibility import NOT_APPLICABLE, OPTIMIZABLE, eligibility_for_alert
 from app.optimization.solver import (
     DEFAULT_WEIGHTS,
+    candidate_loader_ids,
     generate_candidates,
     score_candidate,
 )
@@ -387,4 +388,101 @@ def test_null_metrics_are_never_coerced_to_zero():
     assert current["score"] is not None
     assert other["waitMinutes"] is None
     assert other["score"] is None
+
+
+def test_candidate_loader_ids_puts_current_assignment_first():
+    ids = candidate_loader_ids(
+        assignment=SimpleNamespace(loader_id=23),
+        loaders=[
+            _available_loader(21, "EXC-001", 1),
+            _available_loader(23, "EXC-003", 3),
+            _available_loader(22, "EXC-002", 2),
+        ],
+    )
+    assert ids[0] == 23
+    assert ids == [23, 21, 22]
+
+
+def test_idle_alternative_loader_zero_wait_is_scoreable():
+    from app.optimization.solver import explain_run
+
+    candidates = generate_candidates(
+        truck=SimpleNamespace(equipment_id=1, code="TRK-1"),
+        assignment=SimpleNamespace(loader_id=10, origin_zone_id=1, destination_zone_id=3),
+        loaders=[
+            _available_loader(10, "LD-1", 1),
+            _available_loader(11, "LD-2", 2),
+            _available_loader(12, "LD-3", 2),
+        ],
+        roads=_complete_roads()
+        + [
+            {
+                "id": "R-3",
+                "fromZoneId": "L2",
+                "toZoneId": "D1",
+                "status": "OPEN",
+                "distanceKm": 2.2,
+                "speedLimitKmh": 30.0,
+            }
+        ],
+        zone_codes={1: "L1", 2: "L2", 3: "D1"},
+        loading={
+            "loaders": [
+                {"loaderId": 10, "waitingTruckCount": 2, "waitingTrucks": [{"waitingMinutes": 10.0}]},
+                {"loaderId": 11, "waitingTruckCount": 0, "waitingTrucks": []},
+                {"loaderId": 12, "waitingTruckCount": 1, "waitingTrucks": [{"waitingMinutes": 2.0}]},
+            ]
+        },
+        origin_code="L1",
+        dest_code="D1",
+        loader_zones={10: "L1", 11: "L2", 12: "L2"},
+    )
+    scored = [row for row in candidates if row["score"] is not None]
+    assert len(scored) >= 3
+    idle = next(row for row in candidates if row["loaderId"] == 11)
+    assert idle["waitMinutes"] == 0.0
+    assert idle["score"] is not None
+    current = next(row for row in candidates if row["isCurrent"])
+    best = min(scored, key=lambda row: row["score"])
+    explanation = explain_run(
+        outcome="FEASIBLE",
+        eligibility="OPTIMIZABLE",
+        candidates=candidates,
+        weights=DEFAULT_WEIGHTS,
+        weather_status="UNAVAILABLE",
+    )
+    assert explanation["recommendedCandidateId"] == best["candidateId"]
+    assert explanation["recommendedCandidateId"] != current["candidateId"]
+    assert idle["score"] < current["score"]
+
+
+def test_current_plan_can_remain_recommended_when_it_has_the_lowest_score():
+    from app.optimization.solver import explain_run
+
+    candidates = generate_candidates(
+        truck=SimpleNamespace(equipment_id=1, code="TRK-1"),
+        assignment=SimpleNamespace(loader_id=10, origin_zone_id=1, destination_zone_id=3),
+        loaders=[_available_loader(10, "LD-1", 1), _available_loader(11, "LD-2", 2)],
+        roads=_complete_roads(),
+        zone_codes={1: "L1", 2: "L2", 3: "D1"},
+        loading={
+            "loaders": [
+                {"loaderId": 10, "waitingTruckCount": 0, "waitingTrucks": []},
+                {"loaderId": 11, "waitingTruckCount": 1, "waitingTrucks": [{"waitingMinutes": 12.0}]},
+            ]
+        },
+        origin_code="L1",
+        dest_code="D1",
+        loader_zones={10: "L1", 11: "L2"},
+    )
+    current = next(row for row in candidates if row["isCurrent"])
+    explanation = explain_run(
+        outcome="FEASIBLE",
+        eligibility="OPTIMIZABLE",
+        candidates=candidates,
+        weights=DEFAULT_WEIGHTS,
+        weather_status="UNAVAILABLE",
+    )
+    assert explanation["recommendedCandidateId"] == current["candidateId"]
+    assert "Plan actuel déjà optimal parmi les options évaluables" in explanation["why"]
 
