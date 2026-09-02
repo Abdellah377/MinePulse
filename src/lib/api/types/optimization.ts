@@ -37,6 +37,7 @@ export type OptimizationExplanation = {
   weatherScored: boolean
   recommendedCandidateId: string | null
   why: string
+  missingReason?: string | null
 }
 
 export type OptimizationRun = {

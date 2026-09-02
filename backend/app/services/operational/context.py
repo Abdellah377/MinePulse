@@ -168,29 +168,35 @@ def resolve_site(session: Session, site_code: str | None) -> Site:
     return site
 
 
+def _shift_covers(shift: Shift, sim_now: datetime) -> bool:
+    start, end = shift_window(shift, sim_now)
+    return start <= sim_now < end
+
+
 def resolve_shift(
     session: Session,
     site_id: int,
     shift_id: int | None,
     sim_now: datetime,
 ) -> Shift | None:
+    shifts = list(
+        session.scalars(
+            select(Shift).where(Shift.site_id == site_id).order_by(Shift.shift_date.desc(), Shift.start_time)
+        ).all()
+    )
+    covering = next((row for row in shifts if _shift_covers(row, sim_now)), None)
     if shift_id is not None:
-        shift = session.scalar(
-            select(Shift).where(Shift.shift_id == shift_id, Shift.site_id == site_id)
-        )
-        if shift:
-            return shift
-        raise HTTPException(status_code=404, detail=f"Shift not found: {shift_id}")
-
-    # Active shift: sim_now falls within shift window
-    shifts = session.scalars(
-        select(Shift).where(Shift.site_id == site_id).order_by(Shift.shift_date.desc(), Shift.start_time)
-    ).all()
-    for shift in shifts:
-        start, end = shift_window(shift, sim_now)
-        if start <= sim_now < end:
-            return shift
-    # Fallback: latest shift for site
+        requested = next((row for row in shifts if row.shift_id == shift_id), None)
+        if requested is None:
+            raise HTTPException(status_code=404, detail=f"Shift not found: {shift_id}")
+        # After a simulator reset the UI may still send a future/past poste.
+        # Live operational reads (assignments, optimizer) must use the shift
+        # that actually contains sim_now — otherwise destination is dropped.
+        if covering is not None and requested.shift_id != covering.shift_id:
+            return covering
+        return requested
+    if covering is not None:
+        return covering
     return session.scalar(
         select(Shift).where(Shift.site_id == site_id).order_by(Shift.shift_id.desc())
     )

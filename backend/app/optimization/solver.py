@@ -204,7 +204,7 @@ def dispatch_outcome(
     if dest is None:
         return INSUFFICIENT_DATA, "Destination actuelle inconnue"
     if not candidates:
-        return NO_FEASIBLE_PLAN, None
+        return NO_FEASIBLE_PLAN, "Aucun itinéraire faisable"
     if all(item.get("score") is None for item in candidates):
         return INSUFFICIENT_DATA, missing_metric_reason(candidates)
     return FEASIBLE, None
@@ -260,7 +260,11 @@ def _why_text(
         detail = missing_reason or "métrique absente ≠ 0"
         return f"Données insuffisantes pour évaluer un plan de dispatch ({detail})."
     if outcome == NO_FEASIBLE_PLAN:
-        return "Aucun plan faisable sous les contraintes dures (équipement, routes CLOSED/UNKNOWN, destination actuelle)."
+        detail = missing_reason or "Aucun itinéraire faisable"
+        return (
+            f"{detail} sous les contraintes dures "
+            "(équipement, routes CLOSED/UNKNOWN, destination actuelle)."
+        )
     if outcome == ERROR:
         return "L’optimiseur n’a pas pu terminer ce calcul."
     if recommended is None:

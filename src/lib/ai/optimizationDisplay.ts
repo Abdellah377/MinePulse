@@ -37,6 +37,26 @@ export function optimizationImpactPreview(
   return { current, selected, rows }
 }
 
+export function optimizerOperatorStatus(run: {
+  outcome?: string | null
+  explanation?: { why?: string | null; missingReason?: string | null } | null
+}): string {
+  const missing = run.explanation?.missingReason?.trim()
+  const why = run.explanation?.why?.trim()
+  const generic = !why || why.includes("métrique absente")
+  if (missing && generic) {
+    if (run.outcome === "NO_FEASIBLE_PLAN") return missing
+    return `Données insuffisantes pour évaluer un plan de dispatch (${missing}).`
+  }
+  if (why) return why
+  if (run.outcome === "FEASIBLE") return "Plan évalué"
+  if (run.outcome === "NO_FEASIBLE_PLAN") return "Aucun itinéraire faisable"
+  if (run.outcome === "INSUFFICIENT_DATA") return "Données insuffisantes pour évaluer un plan de dispatch"
+  if (run.outcome === "NOT_APPLICABLE") return "Optimisation de dispatch non applicable"
+  if (run.outcome === "ERROR") return "Optimiseur en échec"
+  return run.outcome ? String(run.outcome) : "Optimisation indisponible"
+}
+
 export function visibleOptimizationPlans<T extends Pick<OptimizationCandidate, "candidateId">>(
   candidates: T[] | null | undefined,
 ): { visible: T[]; hiddenCount: number } {

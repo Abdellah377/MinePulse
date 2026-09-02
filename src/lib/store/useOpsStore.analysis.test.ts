@@ -86,4 +86,26 @@ describe("analysis filters vs live shift context", () => {
     expect(useOpsStore.getState().periodTo).toBe("2026-01-30")
     expect(useOpsStore.getState().analysisPeriodTouched).toBe(false)
   })
+
+  it("snaps a stale selected shift to the poste that contains simNow", async () => {
+    const { useOpsStore } = await import("./useOpsStore")
+    useOpsStore.setState({
+      apiBootstrapped: true,
+      selectedShiftId: "shift-8",
+      simNowIso: "2026-01-29T10:02:00.000Z",
+      shifts: [
+        { id: "shift-1", name: "Matin", startHour: 6, endHour: 14, windowStart: "2026-01-29T06:00:00.000Z", windowEnd: "2026-01-29T14:00:00.000Z" },
+        { id: "shift-8", name: "Après-midi", startHour: 14, endHour: 22, windowStart: "2026-01-31T14:00:00.000Z", windowEnd: "2026-01-31T22:00:00.000Z" },
+      ],
+    })
+    useOpsStore.getState().hydrateWorld({
+      simNow: "2026-01-29T10:02:00.000Z",
+      activeShiftId: "shift-1",
+      shifts: [
+        { id: "shift-1", name: "Matin", startHour: 6, endHour: 14, windowStart: "2026-01-29T06:00:00.000Z", windowEnd: "2026-01-29T14:00:00.000Z" },
+        { id: "shift-8", name: "Après-midi", startHour: 14, endHour: 22, windowStart: "2026-01-31T14:00:00.000Z", windowEnd: "2026-01-31T22:00:00.000Z" },
+      ],
+    })
+    expect(useOpsStore.getState().selectedShiftId).toBe("shift-1")
+  })
 })

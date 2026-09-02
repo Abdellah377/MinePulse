@@ -12,6 +12,7 @@ import {
   IMPACT_METRIC_LABEL,
   IMPACT_METRIC_UNIT,
   optimizationImpactPreview,
+  optimizerOperatorStatus,
   visibleOptimizationPlans,
 } from "@/lib/ai/optimizationDisplay"
 import { Button } from "@/components/ui/button"
@@ -149,29 +150,35 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
       if (cancelled) return
       setActionError(null)
       let nextRun: OptimizationRun | null = null
-      if (detail.latestRun) {
-        nextRun = {
-          runId: detail.latestRun.runId,
-          alertId,
-          siteId: 0,
-          optimizerVersion: detail.latestRun.optimizerVersion,
-          weights: (detail.latestRun.weights ?? {}) as Record<string, number>,
-          eligibility: detail.latestRun.eligibility,
-          outcome: detail.latestRun.outcome,
-          snapshotDigest: null,
-          candidates: detail.latestRun.candidates,
-          recommendedCandidateId: detail.latestRun.recommendedCandidateId,
-          weatherStatus: detail.latestRun.weatherStatus,
-          createdAt: detail.latestRun.createdAt,
-          explanation: detail.latestRun.explanation,
-        }
+      const latest = detail.latestRun
+      const stale = !latest || latest.outcome === "INSUFFICIENT_DATA" || latest.outcome === "ERROR"
+      const fromLatest = (): OptimizationRun => ({
+        runId: latest!.runId,
+        alertId,
+        siteId: 0,
+        optimizerVersion: latest!.optimizerVersion,
+        weights: (latest!.weights ?? {}) as Record<string, number>,
+        eligibility: latest!.eligibility,
+        outcome: latest!.outcome,
+        snapshotDigest: null,
+        candidates: latest!.candidates,
+        recommendedCandidateId: latest!.recommendedCandidateId,
+        weatherStatus: latest!.weatherStatus,
+        createdAt: latest!.createdAt,
+        explanation: latest!.explanation,
+      })
+      if (latest && !stale) {
+        nextRun = fromLatest()
       } else if (detail.alert.optimizationEligible && autoOptFor.current !== alertId) {
         autoOptFor.current = alertId
         try {
           nextRun = await aiApi.createOptimizationRun(alertId, opsCtx())
         } catch {
           if (!cancelled) setActionError("Optimisation de dispatch indisponible.")
+          if (latest) nextRun = fromLatest()
         }
+      } else if (latest) {
+        nextRun = fromLatest()
       }
       if (cancelled) return
       setRun(nextRun)
@@ -630,16 +637,9 @@ function OptimizationPlans({
   onSelectPlan: (id: string) => void
 }) {
   const { visible: plans, hiddenCount } = visibleOptimizationPlans(run.candidates)
-  const outcomeLabel =
-    run.outcome === "FEASIBLE" ? "Plan évalué"
-      : run.outcome === "NO_FEASIBLE_PLAN" ? "Aucun plan faisable"
-        : run.outcome === "INSUFFICIENT_DATA" ? "Données insuffisantes"
-          : run.outcome === "NOT_APPLICABLE" ? "Optimisation de dispatch non applicable"
-            : run.outcome === "ERROR" ? "Optimiseur en échec"
-              : String(run.outcome)
   return (
     <div className="mt-2 space-y-2">
-      <p className="text-[11px] text-muted">{run.explanation?.why ?? (run.outcome === "NOT_APPLICABLE" ? "Optimisation de dispatch non applicable." : outcomeLabel)}</p>
+      <p className="text-[11px] text-muted">{optimizerOperatorStatus(run)}</p>
       {run.weatherStatus && <p className="text-[10px] text-muted-2">Météo : {run.weatherStatus} (affichage uniquement, non notée)</p>}
       {!plans.length && run.outcome !== "FEASIBLE" && (
         <p className="text-[11px] text-muted">Aucun candidat de dispatch à afficher. Aucun impact n’est inventé.</p>

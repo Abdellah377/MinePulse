@@ -249,6 +249,32 @@ function apiCtx(state: Pick<OpsState, "selectedSiteId" | "selectedShiftId">): Op
   return { siteCode: state.selectedSiteId, shiftId: state.selectedShiftId }
 }
 
+function shiftCoversSimNow(shift: Shift | undefined, simNowIso: string | null | undefined): boolean {
+  if (!shift?.windowStart || !shift.windowEnd || !simNowIso) return false
+  const t = Date.parse(simNowIso)
+  const start = Date.parse(shift.windowStart)
+  const end = Date.parse(shift.windowEnd)
+  if (Number.isNaN(t) || Number.isNaN(start) || Number.isNaN(end)) return false
+  return t >= start && t < end
+}
+
+function liveShiftId(args: {
+  current: string
+  apiBootstrapped: boolean
+  shifts: Shift[]
+  simNowIso: string | null
+  payload: { activeShiftId?: string | null; shifts?: Shift[]; simNow?: string | null }
+}): string {
+  const simNow = args.payload.simNow === undefined ? args.simNowIso : args.payload.simNow ?? null
+  const shifts = args.payload.shifts ?? args.shifts
+  const preferred = args.apiBootstrapped
+    ? args.current || args.payload.activeShiftId || ""
+    : args.payload.activeShiftId || shifts[0]?.id || args.current
+  const row = shifts.find((shift) => shift.id === preferred)
+  if (shiftCoversSimNow(row, simNow)) return preferred
+  return args.payload.activeShiftId || preferred
+}
+
 const emptyProduction = { hourly: [], daily: [], shiftly: [] } as ProductionByShift
 
 function emptyScope(): Partial<OpsState> {
@@ -430,9 +456,13 @@ export const useOpsStore = create<OpsState>((set, get) => ({
         selectedSiteId: s.apiBootstrapped
           ? s.selectedSiteId || payload.activeSiteCode || payload.sites?.[0]?.id || ""
           : payload.activeSiteCode || payload.sites?.[0]?.id || s.selectedSiteId,
-        selectedShiftId: s.apiBootstrapped
-          ? s.selectedShiftId || payload.activeShiftId || ""
-          : payload.activeShiftId || payload.shifts?.[0]?.id || s.selectedShiftId,
+        selectedShiftId: liveShiftId({
+          current: s.selectedShiftId,
+          apiBootstrapped: s.apiBootstrapped,
+          shifts: s.shifts,
+          simNowIso: s.simNowIso,
+          payload,
+        }),
         simNowIso,
         ...periodPatch,
         apiBootstrapped: true,

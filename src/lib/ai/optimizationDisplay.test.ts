@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { OptimizationCandidate } from "@/lib/api/types/optimization"
-import { visibleOptimizationPlans, optimizationImpactPreview } from "./optimizationDisplay"
+import { visibleOptimizationPlans, optimizationImpactPreview, optimizerOperatorStatus } from "./optimizationDisplay"
 
 const candidate = (id: string): OptimizationCandidate => ({
   candidateId: id,
@@ -82,5 +82,32 @@ describe("optimizationImpactPreview", () => {
     expect(optimizationImpactPreview([], "x")).toBeNull()
     const blank = { ...candidate("now"), isCurrent: true, waitMinutes: null, travelMinutes: null, distanceKm: null }
     expect(optimizationImpactPreview([blank], "now")).toBeNull()
+  })
+})
+
+describe("optimizerOperatorStatus", () => {
+  it("uses the precise missingReason instead of the generic fallback", () => {
+    expect(
+      optimizerOperatorStatus({
+        outcome: "INSUFFICIENT_DATA",
+        explanation: {
+          why: "Données insuffisantes pour évaluer un plan de dispatch (métrique absente ≠ 0).",
+          missingReason: "Destination actuelle inconnue",
+        },
+      }),
+    ).toBe("Données insuffisantes pour évaluer un plan de dispatch (Destination actuelle inconnue).")
+  })
+
+  it("keeps a precise backend why unchanged", () => {
+    expect(
+      optimizerOperatorStatus({
+        outcome: "INSUFFICIENT_DATA",
+        explanation: { why: "Données insuffisantes pour évaluer un plan de dispatch (Temps de trajet indisponible).", missingReason: "Temps de trajet indisponible" },
+      }),
+    ).toContain("Temps de trajet indisponible")
+  })
+
+  it("names an unroutable plan", () => {
+    expect(optimizerOperatorStatus({ outcome: "NO_FEASIBLE_PLAN", explanation: { missingReason: "Aucun itinéraire faisable" } })).toBe("Aucun itinéraire faisable")
   })
 })
