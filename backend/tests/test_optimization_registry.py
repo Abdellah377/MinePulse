@@ -124,7 +124,7 @@ def test_finalize_equivalent_fallback_when_no_improvement():
     result = finalize_recommendations([baseline, tied])
     assert result["displayedCandidateIds"] == ["eq"]
     assert result["candidates"][1]["candidateRelation"] == "EQUIVALENT"
-    assert result["candidates"][1]["equivalentGroupId"] == "eq-4.7"
+    assert result["candidates"][1]["equivalentGroupId"] == "eq-score-4.7"
 
 
 def test_dual_engines_execute_generate_candidates_once(monkeypatch):

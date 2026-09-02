@@ -51,25 +51,42 @@ def execute_selected_engines(
     return candidates[:MAX_COMPOSED_CANDIDATES]
 
 
+def primary_objective(objectives: list[ObjectiveProfile] | None) -> ObjectiveProfile | None:
+    """Filters such as AVOID_RESTRICTED_ROADS are not ranking metrics."""
+    return next((item for item in (objectives or []) if item != ObjectiveProfile.AVOID_RESTRICTED_ROADS), None)
+
+
+def objective_metric_key(objectives: list[ObjectiveProfile] | None) -> str:
+    primary = primary_objective(objectives)
+    if primary == ObjectiveProfile.MINIMIZE_DISTANCE:
+        return "distanceKm"
+    if primary == ObjectiveProfile.MINIMIZE_TRAVEL_TIME:
+        return "travelMinutes"
+    if primary in {ObjectiveProfile.REDUCE_WAITING_TIME, ObjectiveProfile.BALANCE_LOADING_POINTS}:
+        return "waitMinutes"
+    return "score"
+
+
+def objective_value(row: dict, objectives: list[ObjectiveProfile] | None) -> float | None:
+    """Active-policy metric. Missing stays None — never coerced to zero."""
+    value = row.get(objective_metric_key(objectives))
+    if value is None:
+        return None
+    return float(value)
+
+
 def apply_objective_policy(candidates: list[dict], objectives: list[ObjectiveProfile]) -> list[dict]:
     """Ranking/filter policies are explicit in code. Scores keep DEFAULT_WEIGHTS math."""
     rows = list(candidates)
     if ObjectiveProfile.AVOID_RESTRICTED_ROADS in objectives:
         rows = apply_path_constraints(rows, [ConstraintCode.AVOID_RESTRICTED_ROADS_WHEN_ALTERNATIVE_EXISTS])
+    key = objective_metric_key(objectives)
 
-    def metric(row: dict, key: str) -> tuple:
+    def sort_key(row: dict) -> tuple:
         value = row.get(key)
         return (0 if value is not None else 1, value if value is not None else 0.0, _rank_key(row))
 
-    primary = next((item for item in objectives if item != ObjectiveProfile.AVOID_RESTRICTED_ROADS), None)
-    if primary == ObjectiveProfile.MINIMIZE_DISTANCE:
-        rows.sort(key=lambda row: metric(row, "distanceKm"))
-    elif primary == ObjectiveProfile.MINIMIZE_TRAVEL_TIME:
-        rows.sort(key=lambda row: metric(row, "travelMinutes"))
-    elif primary in {ObjectiveProfile.REDUCE_WAITING_TIME, ObjectiveProfile.BALANCE_LOADING_POINTS}:
-        rows.sort(key=lambda row: metric(row, "waitMinutes"))
-    else:
-        rows.sort(key=_rank_key)
+    rows.sort(key=sort_key)
     for rank, row in enumerate(rows, start=1):
         row["rank"] = rank
     return rows
@@ -87,22 +104,48 @@ def _fingerprint(row: dict) -> tuple:
     return (row.get("loaderId"), tuple(row.get("roadIds") or []), row.get("destZoneCode"))
 
 
-def classify_relation(candidate: dict, baseline: dict | None) -> CandidateRelation:
+def classify_relation(
+    candidate: dict,
+    baseline: dict | None,
+    objectives: list[ObjectiveProfile] | None = None,
+) -> CandidateRelation:
     if baseline is not None and _fingerprint(candidate) == _fingerprint(baseline):
         return CandidateRelation.BASELINE
-    if baseline is None or candidate.get("score") is None or baseline.get("score") is None:
+    if baseline is None:
         return CandidateRelation.TRADEOFF
-    if candidate["score"] < baseline["score"]:
+    cand_value = objective_value(candidate, objectives)
+    base_value = objective_value(baseline, objectives)
+    if cand_value is None or base_value is None:
+        return CandidateRelation.TRADEOFF
+    if cand_value < base_value:
         return CandidateRelation.IMPROVEMENT
-    if candidate["score"] == baseline["score"] and is_operationally_distinct(candidate, baseline):
+    if cand_value == base_value and is_operationally_distinct(candidate, baseline):
         return CandidateRelation.EQUIVALENT
     return CandidateRelation.TRADEOFF
 
 
-def equivalent_group_id(score: float | None) -> str | None:
-    if score is None:
+def equivalent_group_id(value: float | None, *, metric: str = "score") -> str | None:
+    if value is None:
         return None
-    return f"eq-{score}"
+    return f"eq-{metric}-{value}"
+
+
+def _prefer_tied(
+    rows: list[dict],
+    preferred_ids: list[str],
+    objectives: list[ObjectiveProfile] | None,
+) -> list[dict]:
+    """Order a tied group by reviewer preference. A worse metric never jumps ahead."""
+    if not rows:
+        return rows
+
+    def sort_key(index_and_row: tuple[int, dict]) -> tuple:
+        index, row = index_and_row
+        value = objective_value(row, objectives)
+        preferred_rank = preferred_ids.index(row["candidateId"]) if row.get("candidateId") in preferred_ids else 10_000
+        return (0 if value is not None else 1, value if value is not None else 0.0, preferred_rank, index)
+
+    return [row for _, row in sorted(enumerate(rows), key=sort_key)]
 
 
 def finalize_recommendations(
@@ -110,22 +153,35 @@ def finalize_recommendations(
     *,
     preferred_ids: list[str] | None = None,
     review_status: ReviewStatus | None = None,
+    objectives: list[ObjectiveProfile] | None = None,
 ) -> dict:
     """Visible recs: 0→NO_CHANGE, 1–3 real options. Never pad. Baseline is internal only."""
-    preferred = [item for item in (preferred_ids or []) if any(row.get("candidateId") == item for row in candidates)]
+    known_ids = {row.get("candidateId") for row in candidates}
+    preferred = [item for item in (preferred_ids or []) if item in known_ids]
     baseline = next((row for row in candidates if row.get("isCurrent")), None)
+    metric = objective_metric_key(objectives)
     stamped = []
     for row in candidates:
-        relation = classify_relation(row, baseline)
+        relation = classify_relation(row, baseline, objectives)
         item = dict(row)
         item["candidateRelation"] = relation.value
         item["equivalentGroupId"] = (
-            equivalent_group_id(row.get("score")) if relation == CandidateRelation.EQUIVALENT else None
+            equivalent_group_id(objective_value(row, objectives), metric=metric)
+            if relation == CandidateRelation.EQUIVALENT
+            else None
         )
         stamped.append(item)
 
-    improvements = [row for row in stamped if row["candidateRelation"] == CandidateRelation.IMPROVEMENT]
-    equivalents = [row for row in stamped if row["candidateRelation"] == CandidateRelation.EQUIVALENT]
+    improvements = _prefer_tied(
+        [row for row in stamped if row["candidateRelation"] == CandidateRelation.IMPROVEMENT],
+        preferred,
+        objectives,
+    )
+    equivalents = _prefer_tied(
+        [row for row in stamped if row["candidateRelation"] == CandidateRelation.EQUIVALENT],
+        preferred,
+        objectives,
+    )
     displayed: list[dict] = []
     seen: set[tuple] = set()
 
@@ -155,7 +211,7 @@ def finalize_recommendations(
             match = next((row for row in stamped if row.get("candidateId") == candidate_id), None)
             if match is None:
                 continue
-            if match["candidateRelation"] == CandidateRelation.BASELINE:
+            if match["candidateRelation"] in {CandidateRelation.BASELINE, CandidateRelation.IMPROVEMENT, CandidateRelation.EQUIVALENT}:
                 continue
             take(match)
 

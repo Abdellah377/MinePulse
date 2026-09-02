@@ -251,7 +251,12 @@ def _run_orchestrated(
         truck=trusted.truck, dest=trusted.dest_code, candidates=candidates
     )
     if review_status == ReviewStatus.INSUFFICIENT_EVIDENCE:
-        finalized = finalize_recommendations(candidates, preferred_ids=[], review_status=review_status)
+        finalized = finalize_recommendations(
+            candidates,
+            preferred_ids=[],
+            review_status=review_status,
+            objectives=objectives,
+        )
         workflow_status = WorkflowStatus.INSUFFICIENT_EVIDENCE
         operator_summary = (review.operator_summary if review and review.operator_summary else None) or (
             "Preuves insuffisantes pour recommander un changement de plan."
@@ -266,6 +271,7 @@ def _run_orchestrated(
             candidates,
             preferred_ids=preferred,
             review_status=review_status,
+            objectives=objectives,
         )
         stamped = finalized["candidates"]
         displayed_ids = list(finalized["displayedCandidateIds"])
