@@ -1,4 +1,9 @@
-"""In-memory simulation world (truck fleet) + control path re-exports."""
+"""In-memory simulation world (truck fleet) + control path re-exports.
+
+Topology (zones, roads, loading equipment) is discovered from PostgreSQL at
+simulator start. Adding a bench, road, or shovel requires a restart — there is
+no live catalog hot-reload.
+"""
 
 from __future__ import annotations
 
@@ -30,20 +35,17 @@ class SimWorld:
 
     def load_trucks(
         self,
-        equip_rows: list[tuple[int, str]],
+        assigned: list,
         seed: int,
         zone_centroids: dict[str, tuple[float, float]] | None = None,
     ) -> None:
         centroids = zone_centroids or {}
-        for eid, code in equip_rows:
+        for row in assigned:
+            eid = row.equipment_id
+            code = row.truck_code
             rng = random.Random(stable_seed(seed, eid, code))
-            n = int(code.split("-")[1])
-            loader = ("EXC-001", "EXC-002", "EXC-003")[(n - 1) % 3]
-            bench = "BANC_B" if loader == "EXC-002" else "BANC_A"
-            dest = "DUMP_N" if bench == "BANC_A" else "DUMP_S"
-            if n % 3 == 0:
-                dest = "CRUSHER"
-            # A fresh cycle begins with the empty return leg at the dump point.
+            bench = row.bench_code
+            dest = row.dest_code
             lng, lat = centroids.get(dest, centroids.get(bench, (-6.682, 32.668)))
             self.trucks[code] = TruckRuntime(
                 code=code,
@@ -51,7 +53,7 @@ class SimWorld:
                 origin_zone_code=bench,
                 dest_zone_code=dest,
                 haul_dest_zone_code=dest,
-                loader_code=loader,
+                loader_code=row.loader_code,
                 phase=TruckPhase.MOVING_EMPTY,
                 fuel_pct=rng.uniform(40, 95),
                 odometer_km=rng.uniform(18000, 92000),

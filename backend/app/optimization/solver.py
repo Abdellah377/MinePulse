@@ -123,27 +123,26 @@ def generate_candidates(
     weights: dict | None = None,
     loader_zones: dict[int, str] | None = None,
 ) -> list[dict]:
-    """Bounded generation around the subject truck. Never invents a dump destination."""
+    """Bounded generation around the subject truck. Never invents a dump destination.
+
+    Loader origin comes only from ``loader_zones`` (fresh position or home zone).
+    ``origin_code`` is the subject truck haul origin and is never used as a shovel bench.
+    """
     weights = weights or dict(DEFAULT_WEIGHTS)
     dest = dest_code
     if dest is None and assignment is not None and assignment.destination_zone_id is not None:
         dest = zone_codes.get(assignment.destination_zone_id)
     if dest is None:
         return []
+    _ = origin_code  # subject-truck haul origin; never a loader bench
 
     current_loader_id = assignment.loader_id if assignment is not None else None
     allowed_ids = set(candidate_loader_ids(assignment=assignment, loaders=loaders))
     available_loaders = [row for row in loaders if _is_available(row) and row.equipment_id in allowed_ids]
     pairs: list[tuple[Any, str]] = []
-    loader_zones = loader_zones or {}
+    known_zones = loader_zones or {}
     for loader in available_loaders:
-        loader_zone = loader_zones.get(loader.equipment_id)
-        if loader_zone is None and assignment is not None and loader.equipment_id == current_loader_id and assignment.origin_zone_id:
-            loader_zone = zone_codes.get(assignment.origin_zone_id)
-        attr_zone_id = getattr(loader, "current_zone_id", None)
-        if loader_zone is None and attr_zone_id:
-            loader_zone = zone_codes.get(attr_zone_id)
-        origin = loader_zone or origin_code
+        origin = known_zones.get(loader.equipment_id)
         if origin is None:
             continue
         if not can_reach(origin, dest, roads) and origin != dest:

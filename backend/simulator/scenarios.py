@@ -83,9 +83,27 @@ def apply_scenarios(world: SimWorld, sim_now: datetime, scenario: str) -> list[s
     return newly_started
 
 
+def _set_loader_service(world: SimWorld, code: str, *, down: bool) -> None:
+    loaders = getattr(world, "loaders", None) or {}
+    ldr = loaders.get(code)
+    if down:
+        world.excavators_down.add(code)
+        if ldr is not None:
+            ldr.mechanical_breakdown = True
+            ldr.available = False
+            ldr.capacity_factor = 0.0
+        return
+    world.excavators_down.discard(code)
+    if ldr is not None:
+        ldr.mechanical_breakdown = False
+        ldr.available = True
+        ldr.capacity_factor = 1.0
+        ldr.in_maintenance = False
+
+
 def _inject_start(world: SimWorld, sid: str) -> None:
     if sid == "exc_breakdown":
-        world.excavators_down.add("EXC-002")
+        _set_loader_service(world, "EXC-002", down=True)
     elif sid == "comm_loss":
         trk = world.trucks.get("TRK-004")
         if trk:
@@ -103,7 +121,7 @@ def _inject_start(world: SimWorld, sid: str) -> None:
 
 def _inject_recover(world: SimWorld, sid: str) -> None:
     if sid == "exc_breakdown":
-        world.excavators_down.discard("EXC-002")
+        _set_loader_service(world, "EXC-002", down=False)
     elif sid == "comm_loss":
         trk = world.trucks.get("TRK-004")
         if trk:

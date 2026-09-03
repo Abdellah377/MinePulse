@@ -68,6 +68,7 @@ export type OptimizationRun = {
   baselineCandidateId?: string | null
   reviewerCaution?: string | null
   operatorSummary?: string | null
+  operatorRecommendedAction?: { text: string | null; source: string | null } | null
   deterministicOnly?: boolean
   reviewUnavailable?: boolean
   reoptimizationOccurred?: boolean

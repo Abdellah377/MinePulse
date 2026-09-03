@@ -7,10 +7,12 @@ import logging
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.optimization.compose import compose_operator_recommended_action
 from app.optimization.eligibility import NOT_APPLICABLE as ELIG_NOT_APPLICABLE
 from app.optimization.eligibility import eligibility_for_alert
 from app.optimization.inputs import build_trusted_optimization_input
 from app.optimization.persistence import latest_run_for_alert, list_runs_for_alert, persist_run, run_to_dict
+from app.optimization.pending import attach_pending_projection
 from app.optimization.solver import (
     DEFAULT_WEIGHTS,
     ERROR,
@@ -81,6 +83,12 @@ def create_optimization_run(
                     weights=weights,
                     loader_zones=trusted.loader_zones,
                 )
+                candidates = attach_pending_projection(
+                    candidates,
+                    trusted.pending_commitments,
+                    waiting_by_loader=trusted.waiting_by_loader,
+                    service_minutes=trusted.loader_service_minutes,
+                )
                 outcome, missing_reason = dispatch_outcome(
                     truck=trusted.truck, dest=trusted.dest_code, candidates=candidates
                 )
@@ -94,6 +102,19 @@ def create_optimization_run(
             weather_status=weather_status,
             missing_reason=missing_reason,
         )
+        recommended = next(
+            (row for row in candidates if row.get("candidateId") == explanation.get("recommendedCandidateId")),
+            None,
+        )
+        snapshot.setdefault("workflow", {})
+        if isinstance(snapshot["workflow"], dict):
+            snapshot["workflow"]["operatorRecommendedAction"] = compose_operator_recommended_action(
+                eligibility=eligibility,
+                outcome=outcome,
+                operator_summary=explanation.get("why"),
+                recommended=recommended,
+                investigation_description=None,
+            )
         digest = snapshot_digest(snapshot)
         row = persist_run(
             session,

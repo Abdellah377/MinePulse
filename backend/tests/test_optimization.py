@@ -80,6 +80,7 @@ def test_incomplete_metrics_rank_after_scored_candidates():
         loading=loading,
         origin_code=None,
         dest_code="D1",
+        loader_zones={10: "L1", 11: "L2"},
     )
     assert candidates
     scored = [row for row in candidates if row["score"] is not None]
@@ -112,6 +113,7 @@ def test_closed_roads_are_not_candidates():
         loading={"loaders": [{"loaderId": 10, "waitingTruckCount": 0, "waitingTrucks": []}]},
         origin_code="L1",
         dest_code="D1",
+        loader_zones={10: "L1"},
     )
     assert candidates == []
 
@@ -167,6 +169,7 @@ def test_path_constraint_notes_do_not_leak_and_duplicate_paths_are_dropped(monke
         loading={"loaders": [{"loaderId": 10, "waitingTruckCount": 0, "waitingTrucks": []}]},
         origin_code="L1",
         dest_code="D1",
+        loader_zones={10: "L1"},
     )
     assert [row["roadIds"] for row in candidates] == [["R-1"], ["R-2"]] or {tuple(row["roadIds"]) for row in candidates} == {("R-1",), ("R-2",)}
     by_road = {tuple(row["roadIds"]): row for row in candidates}
@@ -190,6 +193,7 @@ def test_generate_candidates_is_deterministic():
         loading={"loaders": [{"loaderId": 10, "waitingTruckCount": 0, "waitingTrucks": []}]},
         origin_code="L1",
         dest_code="D1",
+        loader_zones={10: "L1"},
     )
     first = generate_candidates(**kwargs)
     second = generate_candidates(**kwargs)
@@ -285,6 +289,7 @@ def test_missing_travel_time_is_insufficient_data_with_explicit_reason():
         loading={"loaders": [{"loaderId": 10, "waitingTruckCount": 0, "waitingTrucks": []}]},
         origin_code="L1",
         dest_code="D1",
+        loader_zones={10: "L1"},
     )
     assert candidates
     assert all(row["travelMinutes"] is None for row in candidates)

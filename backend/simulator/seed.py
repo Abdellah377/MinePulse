@@ -1,4 +1,9 @@
-"""Static world seed — site, fleet, zones, roads, operators, materials, shifts."""
+"""Static world seed — site, fleet, zones, roads, operators, materials, shifts.
+
+Seed data may name BANC_A / EXC-001 as rows. Dispatch does not encode those
+codes: after seed, the running simulator discovers LOADING_BENCH + home_zone +
+roads from PostgreSQL at restart.
+"""
 
 from __future__ import annotations
 
@@ -47,6 +52,13 @@ ZONE_SPECS = [
     ("BLAST_PAD", "Aire de tir", ZoneType.RESTRICTED_AREA, (-6.685, 32.660), 0, "#C0392B",
      "Aire de préparation de tir. Accès interdit pendant les opérations de minage."),
 ]
+
+# Seed-only home pads for existing excavators. Dispatch must not encode these codes.
+EXCAVATOR_HOME_ZONES = {
+    "EXC-001": "BANC_A",
+    "EXC-002": "BANC_B",
+    "EXC-003": "BANC_A",
+}
 
 # Catalog distance represents the driven haul road (not straight-line geometry).
 # road_quality is a documented simulator score from 0 (poor) to 100 (excellent).
@@ -199,9 +211,12 @@ def seed_static_world(session: Session) -> dict[str, int]:
 
     equip_ids: dict[str, int] = {}
     for code, etype, model, cap in fleet_specs:
+        home_zone_id = zone_ids.get(EXCAVATOR_HOME_ZONES[code]) if code in EXCAVATOR_HOME_ZONES else None
         existing = session.scalar(select(Equipment).where(Equipment.code == code))
         if existing:
             equip_ids[code] = existing.equipment_id
+            if existing.home_zone_id is None and home_zone_id is not None:
+                existing.home_zone_id = home_zone_id
             continue
         eq = Equipment(
             site_id=site.site_id,
@@ -213,6 +228,7 @@ def seed_static_world(session: Session) -> dict[str, int]:
             fuel_capacity_l=Decimal("4000") if etype == EquipmentType.HAUL_TRUCK else Decimal("800"),
             current_state=EquipmentState.PARKED if etype == EquipmentType.HAUL_TRUCK else EquipmentState.STOPPED_OPERATIONAL,
             active=True,
+            home_zone_id=home_zone_id,
             metadata_={"simulated": True},
         )
         session.add(eq)

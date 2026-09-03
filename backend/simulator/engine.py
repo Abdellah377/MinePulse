@@ -27,6 +27,7 @@ from app.db.models import (
     Trip,
     TyreTelemetry,
 )
+from app.optimization.location import zone_runtime_capacity
 from app.oem.schema import ensure_oem_schema
 from simulator.apply_commands import CommandContext, process_equipment_commands, process_pending_commands
 from simulator.causal_scenarios import CausalScenarioManager, ObservableTransition, SCENARIO_SPECS
@@ -34,6 +35,7 @@ from simulator.clock import SimClock, get_sim_logger
 from simulator.commands import clear_commands, clear_event_log, load_all_commands
 from simulator.config import SimConfig
 from simulator.control import COMMANDS_PATH, read_control, write_control, write_heartbeat
+from simulator.dispatch import assign_fleet, discover_feasible_slots
 from simulator.generators.events import emit_fms_alert, emit_system_event
 from simulator.generators.production import record_dump_production
 from simulator.generators.telemetry import build_telemetry
@@ -115,6 +117,7 @@ class SimulationEngine:
         self._pending_positions: list[dict] = []
         self._pending_telemetry: list[dict] = []
         self._pending_tyres: list[dict] = []
+        self._loader_position_ts: datetime | None = None
         self._equipment_by_id: dict[int, Equipment] = {}
         self._loader_persisted_state: dict[str, EquipmentState] = {}
         self._commands_mtime: float | None = None
@@ -171,11 +174,14 @@ class SimulationEngine:
             for e in all_equip
             if e.type in (EquipmentType.EXCAVATOR, EquipmentType.LOADER)
         }
-        trucks = [(e.equipment_id, e.code) for e in all_equip if e.type == EquipmentType.HAUL_TRUCK]
         centroids = {c: z.centroid for c, z in self.zones_geom.items()}
-        self.world.load_trucks(trucks, self.cfg.random_seed, centroids)
-        self._hydrate_truck_telemetry()
         self._boot_world_runtime(all_equip)
+        trucks = [(e.equipment_id, e.code) for e in all_equip if e.type == EquipmentType.HAUL_TRUCK]
+        assigned = assign_fleet(trucks, self._dispatch_slots(), seed=self.cfg.random_seed)
+        self.world.load_trucks(assigned, self.cfg.random_seed, centroids)
+        self._hydrate_truck_telemetry()
+        self._write_loader_positions()
+        self._flush_telemetry_batch()
         for truck in self.world.trucks.values():
             self._bind_road(truck)
         self._ensure_assignments()
@@ -207,6 +213,8 @@ class SimulationEngine:
                     setattr(truck, runtime_name, float(value))
 
     def _boot_world_runtime(self, all_equip) -> None:
+        """Copy DB catalog into runtime. New zones/roads/equipment need a restart."""
+        self._zone_status: dict[str, str] = {}
         # Zones
         for code, zg in self.zones_geom.items():
             cap = 3
@@ -214,8 +222,10 @@ class SimulationEngine:
             from app.db.models import Zone as ZoneModel
 
             zrow = self.session.get(ZoneModel, zg.zone_id)
-            if zrow and zrow.capacity:
-                cap = int(zrow.capacity)
+            if zrow is not None:
+                cap = zone_runtime_capacity(zrow.capacity)
+            status = getattr(zrow, "status", None) if zrow is not None else None
+            self._zone_status[code] = str(status or "ACTIVE")
             self.world.zones[code] = ZoneRuntime(
                 code=code,
                 zone_id=zg.zone_id,
@@ -223,6 +233,7 @@ class SimulationEngine:
                 zone_type=zrow.type.value if zrow and hasattr(zrow.type, "value") else "OTHER",
                 base_capacity=cap,
                 capacity=cap,
+                closed=self._zone_status[code].upper() != "ACTIVE",
             )
         # Roads
         for key, rg in self.roads_geom.items():
@@ -239,11 +250,11 @@ class SimulationEngine:
                 grade_pct=rg.grade_pct,
                 quality_score=rg.quality_score,
             )
-        # Loaders / excavators
+        # Loaders / excavators — pad from home_zone_id only (no code-suffix topology).
         for e in all_equip:
             if e.type not in (EquipmentType.EXCAVATOR, EquipmentType.LOADER):
                 continue
-            zone = "BANC_B" if e.code.endswith("002") else "BANC_A"
+            zone = self.zone_code_by_id.get(getattr(e, "home_zone_id", None) or 0) or ""
             loader_rng_seed = stable_seed(self.cfg.random_seed, e.equipment_id, e.code)
             loader_rng = random.Random(loader_rng_seed)
             self.world.loaders[e.code] = LoaderRuntime(
@@ -256,6 +267,22 @@ class SimulationEngine:
                 ),
                 rng=loader_rng,
             )
+
+    def _dispatch_slots(self):
+        zone_types = {code: zone.zone_type for code, zone in self.world.zones.items()}
+        zone_capacity = {code: zone.capacity for code, zone in self.world.zones.items()}
+        loaders = [
+            (ldr.code, ldr.equipment_id, ldr.zone_code or None)
+            for ldr in self.world.loaders.values()
+        ]
+        roads = [(road.from_zone, road.to_zone) for road in self.world.roads.values()]
+        return discover_feasible_slots(
+            zone_types=zone_types,
+            zone_capacity=zone_capacity,
+            zone_status=getattr(self, "_zone_status", {}),
+            loaders=loaders,
+            roads=roads,
+        )
 
     def _sync_control_from_disk(self) -> None:
         """Re-read status/speed/mode/scenario so API changes apply live."""
@@ -396,7 +423,19 @@ class SimulationEngine:
 
     def _flush_telemetry_batch(self) -> None:
         if self._pending_positions:
-            self.session.execute(insert(EquipmentPosition), self._pending_positions)
+            stmt = pg_insert(EquipmentPosition).values(self._pending_positions)
+            self.session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=["equipment_id", "ts"],
+                    set_={
+                        "position": stmt.excluded.position,
+                        "speed_kmh": stmt.excluded.speed_kmh,
+                        "heading_deg": stmt.excluded.heading_deg,
+                        "zone_id": stmt.excluded.zone_id,
+                        "metadata": stmt.excluded["metadata"],
+                    },
+                )
+            )
             self._pending_positions.clear()
         if self._pending_telemetry:
             self.session.execute(insert(EquipmentTelemetry), self._pending_telemetry)
@@ -728,6 +767,10 @@ class SimulationEngine:
             )
             self._loader_persisted_state[code] = new_state
 
+        sample_due = self._tick_count % max(1, self.cfg.persistence_sample_every_ticks) == 0
+        if sample_due:
+            self._write_loader_positions()
+
         self.clock.advance()
         self._end_tick_persist()
 
@@ -780,6 +823,30 @@ class SimulationEngine:
                 "metadata_": {},
             }
         )
+
+    def _write_loader_positions(self) -> None:
+        """Persist shovel/loader pads at home/centroid so the optimizer has geography."""
+        if self._loader_position_ts == self.clock.sim_now:
+            return
+        for ldr in self.world.loaders.values():
+            if not ldr.zone_code:
+                continue
+            zg = self.zones_geom.get(ldr.zone_code)
+            if zg is None:
+                continue
+            lng, lat = zg.centroid
+            self._pending_positions.append(
+                {
+                    "equipment_id": ldr.equipment_id,
+                    "ts": self.clock.sim_now,
+                    "position": point_wkt(lng, lat),
+                    "speed_kmh": Decimal("0"),
+                    "heading_deg": Decimal("0"),
+                    "zone_id": zg.zone_id,
+                    "metadata_": {"source": "loader_home"},
+                }
+            )
+        self._loader_position_ts = self.clock.sim_now
 
     def _write_telemetry(self, truck: TruckRuntime, tel: dict) -> None:
         self._pending_telemetry.append(
@@ -1219,6 +1286,7 @@ class SimulationEngine:
             self._pending_positions.clear()
             self._pending_telemetry.clear()
             self._pending_tyres.clear()
+            self._loader_position_ts = None
             self._commands_mtime = None
             self._commands_cache = []
             self._shift_spec_key = None

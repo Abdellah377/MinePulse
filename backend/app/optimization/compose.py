@@ -15,6 +15,7 @@ from app.optimization.contracts import (
 )
 from app.optimization.engines.dispatch_loader import execute as execute_dispatch
 from app.optimization.engines.route import execute as execute_route
+from app.optimization.pending import attach_pending_projection
 from app.optimization.solver import DEFAULT_WEIGHTS, _rank_key
 
 MAX_COMPOSED_CANDIDATES = 12
@@ -46,6 +47,14 @@ def execute_selected_engines(
         candidates = execute_route(trusted=trusted, loaders=loaders)
     else:
         candidates = execute_dispatch(trusted=trusted, loaders=loaders)
+    pending = trusted.get("pending_commitments") or {}
+    waiting = trusted.get("waiting_by_loader") or {}
+    candidates = attach_pending_projection(
+        candidates,
+        {int(key): int(value) for key, value in dict(pending).items()},
+        waiting_by_loader={int(key): int(value) for key, value in dict(waiting).items()},
+        service_minutes=trusted.get("loader_service_minutes"),
+    )
     candidates = apply_path_constraints(candidates, constraints)
     candidates = apply_objective_policy(candidates, objectives)
     return candidates[:MAX_COMPOSED_CANDIDATES]
@@ -234,3 +243,29 @@ def finalize_recommendations(
         "workflowStatus": WorkflowStatus.ORCHESTRATED.value,
         "weights": dict(DEFAULT_WEIGHTS),
     }
+
+
+def compose_operator_recommended_action(
+    *,
+    eligibility: str | None,
+    outcome: str | None,
+    operator_summary: str | None,
+    recommended: dict | None,
+    investigation_description: str | None,
+) -> dict[str, str | None]:
+    """One operator-facing action. A valid dispatch plan never competes with investigation copy."""
+    plan_line = None
+    if recommended and recommended.get("loaderCode"):
+        dest = recommended.get("destZoneCode") or "destination actuelle"
+        plan_line = f"Réaffecter vers {recommended['loaderCode']} → {dest}."
+    summary = (operator_summary or "").strip() or None
+    if eligibility != "NOT_APPLICABLE" and outcome == "FEASIBLE":
+        text = summary or plan_line
+        if text:
+            return {"text": text, "source": "optimizer"}
+    description = (investigation_description or "").strip() or None
+    if description:
+        return {"text": description, "source": "investigation"}
+    if outcome == "FEASIBLE" and plan_line:
+        return {"text": plan_line, "source": "optimizer"}
+    return {"text": None, "source": None}

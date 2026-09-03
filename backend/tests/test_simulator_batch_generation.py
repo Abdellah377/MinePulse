@@ -74,6 +74,15 @@ def test_high_volume_writes_are_batched_not_orm_add():
     assert "insert(EquipmentTelemetry)" in inspect.getsource(SimulationEngine._flush_telemetry_batch)
 
 
+def test_loader_positions_upsert_same_timestamp():
+    write_src = inspect.getsource(SimulationEngine._write_loader_positions)
+    flush_src = inspect.getsource(SimulationEngine._flush_telemetry_batch)
+    assert "_loader_position_ts" in write_src
+    pos_window = flush_src[flush_src.index("EquipmentPosition") : flush_src.index("EquipmentPosition") + 500]
+    assert "on_conflict_do_update" in pos_window
+    assert "equipment_id" in pos_window
+
+
 def test_pause_commits_deferred_batch_before_control_persist():
     source = inspect.getsource(SimulationEngine.pause)
     assert "_commit_pending" in source

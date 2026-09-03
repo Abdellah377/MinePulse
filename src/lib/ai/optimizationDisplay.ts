@@ -5,7 +5,8 @@ export const VISIBLE_OPTIMIZATION_PLAN_COUNT = 3
 export const NO_CHANGE_OPERATOR_COPY =
   "Aucune modification recommandée — le plan actuel reste le meilleur parmi les options évaluées."
 
-export const REVIEW_UNAVAILABLE_COPY = "Résultats calculés — revue IA indisponible."
+export const INVESTIGATION_UNAVAILABLE_COPY =
+  "Recommandation non évaluée ou indisponible. L’investigation n’est pas requise pour optimiser le dispatch."
 
 export const IMPACT_METRIC_LABEL = {
   waitMinutes: "Attente",
@@ -258,4 +259,42 @@ export function planCandidateLabel(
   else if (plan.candidateRelation === "EQUIVALENT") parts.push("Équivalent")
   if (parts.length) return parts.join(" · ")
   return `Alternative ${alternativeIndex}`
+}
+
+export function composeOperatorRecommendedAction(input: {
+  run?: {
+    eligibility?: string | null
+    outcome?: string | null
+    operatorSummary?: string | null
+    operatorRecommendedAction?: { text: string | null; source: string | null } | null
+    recommendedCandidateId?: string | null
+    displayedCandidateIds?: string[] | null
+    candidates?: OptimizationCandidate[] | null
+    explanation?: { why?: string | null } | null
+  } | null
+  investigationDescription?: string | null
+}): { text: string; source: "optimizer" | "investigation" } | null {
+  const backend = input.run?.operatorRecommendedAction
+  if (backend?.text) {
+    const source = backend.source === "investigation" ? "investigation" : "optimizer"
+    return { text: backend.text, source }
+  }
+  const run = input.run
+  const recId = run?.displayedCandidateIds?.[0] ?? run?.recommendedCandidateId
+  const recommended = run?.candidates?.find((row) => row.candidateId === recId) ?? null
+  const eligibility = run?.eligibility
+  const outcome = run?.outcome
+  if (eligibility !== "NOT_APPLICABLE" && outcome === "FEASIBLE") {
+    const summary = run?.operatorSummary?.trim() || run?.explanation?.why?.trim()
+    if (summary) return { text: summary, source: "optimizer" }
+    if (recommended?.loaderCode) {
+      return {
+        text: `Réaffecter vers ${recommended.loaderCode} → ${recommended.destZoneCode ?? "destination actuelle"}.`,
+        source: "optimizer",
+      }
+    }
+  }
+  const investigation = input.investigationDescription?.trim()
+  if (investigation) return { text: investigation, source: "investigation" }
+  return null
 }

@@ -78,6 +78,7 @@ def workflow_fields_from_snapshot(snapshot: dict | None) -> dict:
         "baselineCandidateId": wf.get("baselineCandidateId"),
         "reviewerCaution": wf.get("cautionSummary") or wf.get("reviewerCaution"),
         "operatorSummary": wf.get("operatorSummary"),
+        "operatorRecommendedAction": wf.get("operatorRecommendedAction"),
         "deterministicOnly": status == "DETERMINISTIC_ONLY",
         "reviewUnavailable": status == "REVIEW_UNAVAILABLE",
         "reoptimizationOccurred": bool(wf.get("reoptimizationOccurred")),

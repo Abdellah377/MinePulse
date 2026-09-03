@@ -18,6 +18,7 @@ from app.optimization.compose import (
     NO_CHANGE_OPERATOR_COPY,
     ORCHESTRATOR_VERSION,
     REVIEW_UNAVAILABLE_COPY,
+    compose_operator_recommended_action,
     execute_selected_engines,
     finalize_recommendations,
 )
@@ -31,6 +32,7 @@ from app.optimization.contracts import (
 from app.optimization.eligibility import NOT_APPLICABLE as ELIG_NOT_APPLICABLE
 from app.optimization.eligibility import eligibility_for_alert
 from app.optimization.inputs import build_trusted_optimization_input
+from app.optimization.rca_gate import apply_rca_excludes, rca_constraints
 from app.optimization.registry import get_spec
 from app.optimization.service import create_optimization_run, persist_evaluated_run
 from app.optimization.solver import DEFAULT_WEIGHTS, FEASIBLE, NOT_APPLICABLE, dispatch_outcome, explain_run
@@ -87,6 +89,77 @@ def _candidate_review_payload(candidates: list[dict]) -> list[dict]:
         "candidateRelation",
     )
     return [{key: row.get(key) for key in keys} for row in candidates]
+
+
+def _equipment_type_for(trusted: Any, equipment_id: int | None) -> Any:
+    if equipment_id is None:
+        return None
+    for row in list(getattr(trusted, "loaders", None) or []):
+        if getattr(row, "equipment_id", None) == equipment_id:
+            return getattr(row, "type", None)
+    truck = getattr(trusted, "truck", None)
+    if truck is not None and getattr(truck, "equipment_id", None) == equipment_id:
+        return getattr(truck, "type", None)
+    return None
+
+
+def _rca_from_investigation(session: Session, ctx: OperationalContext, alert: Any, trusted: Any):
+    empty = rca_constraints(
+        diagnosis_status=None,
+        reliable_root_cause=False,
+        equipment_id=None,
+        equipment_type=None,
+    )
+    try:
+        from app.optimization.compose import compose_operator_recommended_action
+
+        rows = find_investigations(
+            session,
+            site_id=ctx.site_id,
+            source_record_id=f"alert-{alert.alert_id}",
+            shift_id=ctx.shift_id,
+        )
+    except Exception:
+        logger.exception("rca investigation lookup failed")
+        return empty
+    if not isinstance(rows, (list, tuple)) or not rows:
+        return empty
+    row = rows[0]
+    conclusion = row.conclusion if isinstance(getattr(row, "conclusion", None), dict) else {}
+    recommendation = row.recommendation if isinstance(getattr(row, "recommendation", None), dict) else {}
+    raw_equipment_id = recommendation.get("target_equipment_id") or getattr(row, "equipment_id", None)
+    try:
+        equipment_id = int(raw_equipment_id) if raw_equipment_id is not None else None
+    except (TypeError, ValueError):
+        equipment_id = None
+    return rca_constraints(
+        diagnosis_status=conclusion.get("diagnosis_status"),
+        reliable_root_cause=bool(conclusion.get("reliable_root_cause")),
+        equipment_id=equipment_id,
+        equipment_type=_equipment_type_for(trusted, equipment_id),
+        supported_hypothesis_ids=conclusion.get("supported_hypothesis_ids") or [],
+    )
+
+
+def _investigation_recommendation_text(session: Session, ctx: OperationalContext, alert: Any) -> str | None:
+    try:
+        from app.ai.persistence import find_investigations
+
+        rows = find_investigations(
+            session,
+            site_id=ctx.site_id,
+            source_record_id=f"alert-{alert.alert_id}",
+            shift_id=ctx.shift_id,
+        )
+    except Exception:
+        return None
+    if not isinstance(rows, (list, tuple)) or not rows:
+        return None
+    recommendation = getattr(rows[0], "recommendation", None)
+    if not isinstance(recommendation, dict):
+        return None
+    text = recommendation.get("description")
+    return str(text).strip() if text else None
 
 
 def create_optimization_workflow(
@@ -149,6 +222,13 @@ def _run_orchestrated(
 
     trusted = build_trusted_optimization_input(session, ctx, alert)
     snapshot.update(trusted.snapshot_fields)
+    rca = _rca_from_investigation(session, ctx, alert, trusted)
+    if rca.hard_exclude_loader_ids:
+        trusted.mechanical_risk_loader_ids = set(trusted.mechanical_risk_loader_ids) | set(rca.hard_exclude_loader_ids)
+    if rca.evidence_ids:
+        facts_ids = list(trusted.planner_facts.get("evidenceIds") or [])
+        facts_ids.extend(item for item in rca.evidence_ids if item not in facts_ids)
+        trusted.planner_facts["evidenceIds"] = facts_ids[:40]
     facts = trusted.planner_facts
     llm = provider
     planner_failed = False
@@ -189,6 +269,8 @@ def _run_orchestrated(
     optimizer_ids = list(planner_decision.selected_optimizers)
     objectives = list(planner_decision.objectives)
     constraints = list(planner_decision.requested_constraint_checks)
+    if rca.hard_exclude_loader_ids and ConstraintCode.EXCLUDE_CRITICAL_MECHANICAL_RISK not in constraints:
+        constraints.append(ConstraintCode.EXCLUDE_CRITICAL_MECHANICAL_RISK)
     rejected_codes = list(planner_rejected)
     engine_dict = trusted.as_engine_dict()
     candidates: list[dict] = []
@@ -210,6 +292,7 @@ def _run_orchestrated(
             objectives=objectives,
             constraints=constraints,
         )
+        candidates = apply_rca_excludes(candidates, rca.hard_exclude_loader_ids)
         try:
             if llm is None:
                 raise LLMProviderError("reviewer provider missing")
@@ -311,6 +394,10 @@ def _run_orchestrated(
     if outcome == NOT_APPLICABLE:
         workflow_status = WorkflowStatus.DETERMINISTIC_ONLY
 
+    rca_caution = "; ".join(rca.caution_notes) if rca.caution_notes else None
+    if rca_caution:
+        caution = f"{caution} {rca_caution}".strip() if caution else rca_caution
+
     explanation = explain_run(
         outcome=outcome,
         eligibility=eligibility,
@@ -355,6 +442,18 @@ def _run_orchestrated(
         "reviewer": {**review_meta, "failed": review_failed} if review_meta or review_failed else None,
         "operatorSummary": operator_summary,
         "cautionSummary": caution,
+        "rcaGate": {
+            "hardExcludeLoaderIds": sorted(rca.hard_exclude_loader_ids),
+            "cautionNotes": list(rca.caution_notes),
+            "evidenceIds": list(rca.evidence_ids),
+        },
+        "operatorRecommendedAction": compose_operator_recommended_action(
+            eligibility=eligibility,
+            outcome=outcome,
+            operator_summary=operator_summary,
+            recommended=next((row for row in stamped if row.get("candidateId") == recommended), None),
+            investigation_description=_investigation_recommendation_text(session, ctx, alert),
+        ),
         "weights": dict(DEFAULT_WEIGHTS),
     }
     return persist_evaluated_run(

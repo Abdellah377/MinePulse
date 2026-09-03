@@ -47,6 +47,9 @@ class Equipment(Base):
     commission_date: Mapped[date | None] = mapped_column(Date)
     current_state: Mapped[EquipmentState] = mapped_column(nullable=False, default=EquipmentState.UNKNOWN)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    home_zone_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("zones.zone_id", ondelete="SET NULL")
+    )
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
 
     site: Mapped["Site"] = relationship(back_populates="equipment")

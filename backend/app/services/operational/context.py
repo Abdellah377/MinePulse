@@ -189,7 +189,7 @@ def resolve_shift(
         requested = next((row for row in shifts if row.shift_id == shift_id), None)
         if requested is None:
             raise HTTPException(status_code=404, detail=f"Shift not found: {shift_id}")
-        # After a simulator reset the UI may still send a future/past poste.
+        # After a clock reset the UI may still send a future/past poste.
         # Live operational reads (assignments, optimizer) must use the shift
         # that actually contains sim_now — otherwise destination is dropped.
         if covering is not None and requested.shift_id != covering.shift_id:

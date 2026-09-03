@@ -10,6 +10,8 @@ import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
 import { mergeInboxItems, nextInboxSelection, removeInboxItem } from "@/lib/ai/actionsInbox"
 import {
   classifyOptimizationImpact,
+  composeOperatorRecommendedAction,
+  INVESTIGATION_UNAVAILABLE_COPY,
   optimizationWorkflowBanner,
   optimizerOperatorStatus,
   planCandidateLabel,
@@ -236,6 +238,13 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     [run?.candidates, selectedPlanId],
   )
   const showOptimization = eligible || Boolean(run && run.outcome !== "NOT_APPLICABLE")
+  const action = useMemo(
+    () => composeOperatorRecommendedAction({
+      run,
+      investigationDescription: rec?.description,
+    }),
+    [run, rec],
+  )
   const whyPoints = useMemo(() => {
     const points: string[] = []
     if (result?.conclusion?.root_cause) points.push(operatorText(result.conclusion.root_cause))
@@ -472,16 +481,20 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
 
           <section className={cn("rounded-md border px-3.5 py-3", status === "ACCEPTED" ? "border-accent/40 bg-accent-soft/40" : "border-border bg-surface")}>
             <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Action recommandée</h2>
-            {rec ? (
+            {action ? (
               <>
-                <p className="mt-2 text-[15px] font-semibold leading-snug text-foreground">{operatorText(rec.description)}</p>
-                {rec.rationale && <p className="mt-1.5 text-[12px] text-muted">{operatorText(rec.rationale)}</p>}
-                {confidence && <p className="mt-2 text-[11px] text-muted-2">Confiance {confidence}</p>}
+                <p className="mt-2 text-[15px] font-semibold leading-snug text-foreground">{operatorText(action.text)}</p>
+                {action.source === "investigation" && rec?.rationale && (
+                  <p className="mt-1.5 text-[12px] text-muted">{operatorText(rec.rationale)}</p>
+                )}
+                {action.source === "investigation" && confidence && (
+                  <p className="mt-2 text-[11px] text-muted-2">Confiance {confidence}</p>
+                )}
                 {decisionControls}
               </>
             ) : (
               <>
-                <p className="mt-2 text-[12px] text-muted">Recommandation non évaluée ou indisponible. L’investigation n’est pas requise pour optimiser le dispatch.</p>
+                <p className="mt-2 text-[12px] text-muted">{INVESTIGATION_UNAVAILABLE_COPY}</p>
                 {showOptimization && status === "PENDING" && decisionControls}
               </>
             )}
@@ -490,7 +503,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
           {showOptimization && (
             <section className="rounded-md border border-accent/30 bg-surface px-3.5 py-3">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Plan optimisé</h2>
+                <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Options de dispatch</h2>
                 <Button size="sm" variant="outline" disabled={!alertId || busy} onClick={() => void runOptimize()}>{run ? "Recalculer" : "Optimiser"}</Button>
               </div>
               {run ? (

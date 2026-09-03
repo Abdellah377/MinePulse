@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { OptimizationCandidate } from "@/lib/api/types/optimization"
-import { visibleOptimizationPlans, optimizationImpactPreview, optimizerOperatorStatus, impactMetricTone, impactDelta, formatImpactValue, compactPlanImpact, splitImpactRows, classifyOptimizationImpact, planCandidateLabel } from "./optimizationDisplay"
+import { visibleOptimizationPlans, optimizationImpactPreview, optimizerOperatorStatus, impactMetricTone, impactDelta, formatImpactValue, compactPlanImpact, splitImpactRows, classifyOptimizationImpact, planCandidateLabel, composeOperatorRecommendedAction } from "./optimizationDisplay"
 
 const candidate = (id: string): OptimizationCandidate => ({
   candidateId: id,
@@ -217,5 +217,29 @@ describe("optimizerOperatorStatus", () => {
 
   it("states no change when the current plan remains best", () => {
     expect(optimizerOperatorStatus({ outcome: "FEASIBLE", workflowStatus: "NO_CHANGE_RECOMMENDED" })).toContain("Aucune modification recommandée")
+  })
+})
+
+describe("composeOperatorRecommendedAction", () => {
+  it("uses the optimizer plan and never the unavailable investigation copy when a plan exists", () => {
+    const action = composeOperatorRecommendedAction({
+      run: {
+        eligibility: "OPTIMIZABLE",
+        outcome: "FEASIBLE",
+        operatorRecommendedAction: { text: "Réaffecter vers LD-2 → DUMP_N.", source: "optimizer" },
+      },
+      investigationDescription: "Vérifier la file.",
+    })
+    expect(action?.source).toBe("optimizer")
+    expect(action?.text).toContain("LD-2")
+    expect(action?.text).not.toContain("non évaluée")
+  })
+
+  it("uses investigation text only when dispatch is not applicable", () => {
+    const action = composeOperatorRecommendedAction({
+      run: { eligibility: "NOT_APPLICABLE", outcome: "NOT_APPLICABLE" },
+      investigationDescription: "Isoler EXC-002.",
+    })
+    expect(action).toEqual({ text: "Isoler EXC-002.", source: "investigation" })
   })
 })

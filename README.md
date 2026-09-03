@@ -73,6 +73,11 @@ Then open:
 Use **Start / Pause / Reset / Inject** in Simulation Centre — no separate
 `python -m simulator run` terminal is needed.
 
+New loading benches, haul roads, or shovels are discovered from PostgreSQL when
+the simulator **restarts**. A running process does not pick up catalog topology
+edits live. Zone occupancy capacity may still be used as a queue-pressure
+signal; it is not a hard cap on assigned trucks.
+
 ```bash
 npm run dev        # UI only (local mock if VITE_USE_API is not true)
 npm run build      # production build (includes type-checking)

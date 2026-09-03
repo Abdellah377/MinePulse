@@ -8,16 +8,21 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.enums import AlertStatus, EquipmentType
-from app.db.models import Alert
+from app.db.models import Alert, AiRecommendationDecision, Equipment
+from app.optimization.pending import loader_id_from_payload, pending_commitment_counts
 from app.optimization.contracts import OptimizerId, payload_contains_forbidden_numeric_facts
+from app.optimization.location import collect_loader_locations
 from app.optimization.registry import catalog_for_planner
 from app.optimization.solver import candidate_loader_ids
-from app.services.operational.assignments import bulk_current_assignments, current_assignment
+from app.services.operational.assignments import current_assignment
 from app.services.operational.context import OperationalContext
 from app.services.operational.equipment import latest_positions, list_site_equipment
 from app.services.operational.loading import loading_service_context
 from app.services.operational.road_catalog import list_road_catalog, resolve_haul_endpoints
+
+_LOADER_TYPES = {EquipmentType.EXCAVATOR, EquipmentType.LOADER}
 
 MECHANICAL_RISK_TYPES = frozenset({"PREDICTED_MECHANICAL_FAILURE_RISK"})
 
@@ -38,6 +43,10 @@ class TrustedOptimizationInput:
     planner_facts: dict[str, Any]
     snapshot_fields: dict[str, Any]
     evidence_ids: list[str] = field(default_factory=list)
+    loader_location_sources: dict[int, str] = field(default_factory=dict)
+    pending_commitments: dict[int, int] = field(default_factory=dict)
+    waiting_by_loader: dict[int, int] = field(default_factory=dict)
+    loader_service_minutes: float | None = None
 
     def as_engine_dict(self) -> dict[str, Any]:
         return {
@@ -50,7 +59,11 @@ class TrustedOptimizationInput:
             "origin_code": self.origin_code,
             "dest_code": self.dest_code,
             "loader_zones": self.loader_zones,
+            "loader_location_sources": self.loader_location_sources,
             "mechanical_risk_loader_ids": self.mechanical_risk_loader_ids,
+            "pending_commitments": self.pending_commitments,
+            "waiting_by_loader": self.waiting_by_loader,
+            "loader_service_minutes": self.loader_service_minutes,
         }
 
 
@@ -72,15 +85,28 @@ def _type_value(equipment: Any) -> str | None:
     return str(eq_type) if eq_type is not None else None
 
 
-def mechanical_risk_loader_ids(session: Session, ctx: OperationalContext) -> set[int]:
+def filter_mechanical_risk_loader_ids(ids: set[int], equipment: list) -> set[int]:
+    loader_ids = {
+        row.equipment_id
+        for row in equipment
+        if getattr(row, "type", None) in _LOADER_TYPES and getattr(row, "equipment_id", None) is not None
+    }
+    return {eid for eid in ids if eid in loader_ids}
+
+
+def mechanical_risk_loader_ids(session: Session, ctx: OperationalContext, equipment: list | None = None) -> set[int]:
     rows = session.scalars(
-        select(Alert).where(
+        select(Alert).join(Equipment, Equipment.equipment_id == Alert.equipment_id).where(
             Alert.site_id == ctx.site_id,
             Alert.status != AlertStatus.RESOLVED,
             Alert.alert_type.in_(MECHANICAL_RISK_TYPES),
+            Equipment.type.in_(_LOADER_TYPES),
         )
     ).all()
-    return {row.equipment_id for row in rows if row.equipment_id is not None}
+    ids = {row.equipment_id for row in rows if row.equipment_id is not None}
+    if equipment is None:
+        return ids
+    return filter_mechanical_risk_loader_ids(ids, equipment)
 
 
 def loader_zone_codes(
@@ -89,28 +115,47 @@ def loader_zone_codes(
     equipment: list,
     zone_codes: dict[int, str],
 ) -> dict[int, str]:
-    truck_ids = [row.equipment_id for row in equipment if row.type == EquipmentType.HAUL_TRUCK]
-    loader_ids = {
-        row.equipment_id
-        for row in equipment
-        if row.type in {EquipmentType.EXCAVATOR, EquipmentType.LOADER}
-    }
-    zones: dict[int, str] = {}
-    for assignment in bulk_current_assignments(session, truck_ids, ctx).values():
-        if assignment.loader_id not in loader_ids or assignment.origin_zone_id is None:
-            continue
-        code = zone_codes.get(assignment.origin_zone_id)
-        if code and assignment.loader_id not in zones:
-            zones[assignment.loader_id] = code
-    positions = latest_positions(session, ctx.site_id)
-    for loader_id in loader_ids:
-        position = positions.get(loader_id)
-        if position is None or position.zone_id is None:
-            continue
-        code = zone_codes.get(position.zone_id)
-        if code:
-            zones[loader_id] = code
+    zones, _sources = loader_locations(session, ctx, equipment, zone_codes)
     return zones
+
+
+def loader_locations(
+    session: Session,
+    ctx: OperationalContext,
+    equipment: list,
+    zone_codes: dict[int, str],
+) -> tuple[dict[int, str], dict[int, str]]:
+    loaders = [row for row in equipment if getattr(row, "type", None) in _LOADER_TYPES]
+    positions = latest_positions(session, ctx.site_id)
+    stale_seconds = float(get_settings().monitoring_telemetry_stale_seconds)
+    return collect_loader_locations(
+        loaders=loaders,
+        positions=positions,
+        zone_codes=zone_codes,
+        now=ctx.sim_now,
+        stale_seconds=stale_seconds,
+    )
+
+
+def _pending_commitments(session: Session, ctx: OperationalContext) -> dict[int, int]:
+    rows = session.scalars(
+        select(AiRecommendationDecision).where(
+            AiRecommendationDecision.site_id == ctx.site_id,
+            AiRecommendationDecision.follow_up_status == "OPEN",
+            AiRecommendationDecision.decision_type.in_(("ACCEPTED", "MODIFIED")),
+        )
+    ).all()
+    payloads = [
+        {
+            "decisionType": row.decision_type,
+            "followUpStatus": row.follow_up_status,
+            "originalRecommendation": row.original_recommendation,
+            "loaderId": loader_id_from_payload(row.operator_action)
+            or loader_id_from_payload(row.original_recommendation),
+        }
+        for row in rows
+    ]
+    return pending_commitment_counts(payloads)
 
 
 def build_trusted_optimization_input(session: Session, ctx: OperationalContext, alert: Any) -> TrustedOptimizationInput:
@@ -129,7 +174,7 @@ def build_trusted_optimization_input(session: Session, ctx: OperationalContext, 
     )
     if dest is None and assignment is not None and assignment.destination_zone_id is not None:
         dest = zone_codes.get(assignment.destination_zone_id)
-    loaders = [row for row in equipment if row.type in {EquipmentType.EXCAVATOR, EquipmentType.LOADER}]
+    loaders = [row for row in equipment if row.type in _LOADER_TYPES]
     candidate_ids = candidate_loader_ids(assignment=assignment, loaders=loaders)
     loading = loading_service_context(
         session,
@@ -138,8 +183,14 @@ def build_trusted_optimization_input(session: Session, ctx: OperationalContext, 
         zone_id=None,
         loader_ids=candidate_ids,
     )
-    zones = loader_zone_codes(session, ctx, equipment, zone_codes)
-    risk_ids = mechanical_risk_loader_ids(session, ctx)
+    zones, location_sources = loader_locations(session, ctx, equipment, zone_codes)
+    risk_ids = mechanical_risk_loader_ids(session, ctx, equipment)
+    pending = _pending_commitments(session, ctx)
+    waiting_by_loader = {
+        int(row["loaderId"]): int(row.get("waitingTruckCount") or 0)
+        for row in (loading.get("loaders") or [])
+        if row.get("loaderId") is not None
+    }
     evidence_ids = [f"alert-{alert.alert_id}"]
     evidence_ids.extend(str(item) for item in (loading.get("sourceRecordIds") or []) if item)
     has_queue = any(int(row.get("waitingTruckCount") or 0) > 0 for row in (loading.get("loaders") or []))
@@ -182,7 +233,9 @@ def build_trusted_optimization_input(session: Session, ctx: OperationalContext, 
         "candidateLoaderIds": candidate_ids,
         "loadingLoaderIds": [row.get("loaderId") for row in (loading.get("loaders") or [])],
         "loaderZones": zones,
+        "loaderLocationSources": {str(loader_id): source for loader_id, source in location_sources.items()},
         "mechanicalRiskLoaderIds": sorted(risk_ids),
+        "pendingCommitments": {str(loader_id): count for loader_id, count in pending.items()},
         "plannerFacts": planner_facts,
     }
     return TrustedOptimizationInput(
@@ -200,4 +253,8 @@ def build_trusted_optimization_input(session: Session, ctx: OperationalContext, 
         planner_facts=planner_facts,
         snapshot_fields=snapshot_fields,
         evidence_ids=evidence_ids,
+        loader_location_sources=location_sources,
+        pending_commitments=pending,
+        waiting_by_loader=waiting_by_loader,
+        loader_service_minutes=None,
     )
