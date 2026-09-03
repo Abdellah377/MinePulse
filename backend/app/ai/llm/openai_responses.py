@@ -24,9 +24,11 @@ from app.ai.llm.provider import (
     _DISCUSSION_PROMPT,
     _RECOMMENDATION_PROMPT,
     _TRANSIENT_PROVIDER_ERRORS,
+    attempt_timeout_seconds,
+    budget_allows_attempt,
     classify_provider_exception,
     commit_structured_attempt,
-    budget_allows_attempt,
+    stage_for_schema,
     LLMProviderError,
     ProviderConfigurationError,
     ProviderRateLimitError,
@@ -76,7 +78,9 @@ class OpenAILLMProvider:
         attempt_log: list[dict] = []
         for attempt in range(1, attempts + 1):
             self.last_attempt_count = attempt
-            if not budget_allows_attempt(self._remaining_seconds, self._timeout_seconds):
+            remaining_before = float(self._remaining_seconds)
+            actual_timeout = attempt_timeout_seconds(remaining_before, self._timeout_seconds)
+            if not budget_allows_attempt(remaining_before, self._timeout_seconds):
                 raise ProviderTimeoutError("Investigation provider budget exceeded")
             started = monotonic()
             response = None
@@ -92,7 +96,7 @@ class OpenAILLMProvider:
                     ],
                     text_format=schema,
                     store=False,
-                    timeout=self._timeout_seconds,
+                    timeout=actual_timeout,
                 )
                 parsed = response.output_parsed
             except Exception as exc:
@@ -137,6 +141,10 @@ class OpenAILLMProvider:
                     attempt=attempt,
                     started=started,
                     remaining_seconds=self._remaining_seconds,
+                    remaining_before_seconds=remaining_before,
+                    configured_timeout_seconds=self._timeout_seconds,
+                    actual_timeout_seconds=actual_timeout,
+                    stage=stage_for_schema(schema.__name__),
                     payload=payload,
                     exc=mapped_error,
                     ok=succeeded or parsed is not None,

@@ -10,15 +10,23 @@ import {
   merahDowntimeFacts,
   merahDowntimeKpis,
   merahDowntimeSpotlightRows,
-  merahProductionFacts,
   merahWaitingBancBKpi,
   merahWaitingFacts,
 } from "@/lib/mock/performanceFacts"
 import { getFleetWaitAvg, getShiftProduction } from "@/lib/mock/scenarioMetrics"
+import { MERAH_SHIFT_SCENARIO } from "@/lib/mock/scenario"
 import { shiftProductionRollup } from "@/lib/production/mergeProduction"
 import type { PerformanceMetric } from "@/lib/workspace/types"
 import { performanceMetricLabel } from "@/lib/workspace/titles"
 import { buildApiPerformance } from "@/lib/performance/apiMetrics"
+import {
+  buildCumulativeProductionSeries,
+  formatPaceGap,
+  paceGapMinutes,
+  parseShiftEndHour,
+  PACE_STATUS_LABEL,
+  productionPaceStatus,
+} from "@/lib/performance/cumulativeProduction"
 
 export interface PerfKpi {
   id: string
@@ -125,28 +133,71 @@ function buildProduction(
     : getShiftProduction(hourly)
   const trucks = equipment.filter((e) => e.type === "haul_truck")
   const trips = trucks.reduce((s, e) => s + e.tripsThisShift, 0)
-  const delay = trucks.reduce((s, e) => s + e.waitingMinutesThisShift, 0)
+  const shiftEndHour = useApiMode
+    ? parseShiftEndHour(productionShiftly?.[0]?.label)
+    : MERAH_SHIFT_SCENARIO.shiftEndHour
+  const series = buildCumulativeProductionSeries(shift.hourly, { shiftEndHour })
+  const pace = productionPaceStatus(series.lastActualCum, series.lastTargetCum)
+  const lastElapsedHours = shift.hourly.length
+  const lastGapMin = paceGapMinutes(series.lastActualCum, series.lastTargetCum, lastElapsedHours)
 
-  const chartData = shift.hourly.map((r) => ({
-    hour: r.label,
-    actual: r.tonnage,
-    target: useApiMode ? (r.target ?? null) : (r.target ?? 0),
-    ecart: r.target != null ? r.tonnage - r.target : useApiMode ? null : r.tonnage,
+  const chartSeries = [
+    { key: "actual", name: "Réel cumulé", color: COLORS[0] },
+    { key: "target", name: "Objectif cumulé", color: COLORS[1] },
+  ]
+  if (series.projectionKind === "pace") {
+    chartSeries.push({ key: "projected", name: "Rythme observé", color: COLORS[3] })
+  }
+
+  const chartData = series.points.map((row) => ({
+    hour: row.hour,
+    actual: row.actual,
+    target: row.target,
+    projected: row.projected,
   }))
 
-  const rows = shift.hourly.map((r) => ({
-    hour: r.label,
-    actual: r.tonnage,
-    target: useApiMode ? (r.target ?? "—") : (r.target ?? 0),
-    ecart: r.target != null ? r.tonnage - r.target : useApiMode ? "—" : r.tonnage,
-    trips: useApiMode ? (r.trips != null ? r.trips : "—") : Math.round(trips / Math.max(1, shift.hourly.length)),
-    trucks: useApiMode ? null : trucks.length,
-    delayMin: useApiMode
-      ? r.delayMin != null
-        ? r.delayMin
-        : "—"
-      : Math.round(delay / Math.max(1, shift.hourly.length)),
-  }))
+  const rows = shift.hourly.map((r, index) => {
+    const point = series.points[index]
+    const elapsed = index + 1
+    const gapMin = paceGapMinutes(point?.actual ?? null, point?.target ?? null, elapsed)
+    return {
+      hour: r.label,
+      actual: point?.actual ?? r.tonnage,
+      target: point?.target ?? "—",
+      ecart: point?.target != null && point.actual != null ? point.actual - point.target : "—",
+      trips: useApiMode ? (r.trips != null ? r.trips : "—") : Math.round(trips / Math.max(1, shift.hourly.length)),
+      trucks: useApiMode ? null : trucks.length,
+      delayMin: formatPaceGap(gapMin),
+    }
+  })
+
+  const gapTons =
+    series.lastActualCum != null && series.lastTargetCum != null
+      ? series.lastActualCum - series.lastTargetCum
+      : null
+  const facts = [
+    series.lastActualCum != null
+      ? `Réel cumulé : ${series.lastActualCum.toLocaleString("fr-FR")} t`
+      : "Réel cumulé : non défini",
+    series.lastTargetCum != null
+      ? `Objectif cumulé à cette heure : ${series.lastTargetCum.toLocaleString("fr-FR")} t`
+      : shift.target != null
+        ? `Objectif de poste : ${shift.target.toLocaleString("fr-FR")} t (cumul horaire incomplet)`
+        : "Objectif cumulé : non défini",
+    gapTons != null
+      ? gapTons === 0
+        ? "Écart : 0 t"
+        : `Écart : ${gapTons > 0 ? "+" : "−"}${Math.abs(gapTons).toLocaleString("fr-FR")} t`
+      : "Écart : non défini",
+    series.projectionKind === "pace" && series.projectedEos != null
+      ? `Projection fin de poste au rythme observé : ${series.projectedEos.toLocaleString("fr-FR")} t`
+      : series.projectionKind === "measured" && series.projectedEos != null
+        ? `Fin de poste mesurée : ${series.projectedEos.toLocaleString("fr-FR")} t`
+        : "Projection fin de poste : indisponible (fenêtre de poste inconnue)",
+  ]
+  if (!useApiMode) {
+    facts.push(`Décrochage de rythme après 10:30 — congestion ${MERAH_SHIFT_SCENARIO.congestion.zoneName}`)
+  }
 
   return {
     metric: "production",
@@ -154,9 +205,9 @@ function buildProduction(
     kpis: [
       {
         id: "actual",
-        label: "Réel",
+        label: "Réel cumulé",
         value: shift.actual != null ? `${shift.actual.toLocaleString("fr-FR")} t` : "—",
-        tone: useApiMode ? "neutral" : "warn",
+        tone: useApiMode ? "neutral" : pace === "behind" ? "warn" : pace === "ahead" ? "good" : "neutral",
       },
       {
         id: "target",
@@ -164,57 +215,42 @@ function buildProduction(
         value: shift.target != null ? `${shift.target.toLocaleString("fr-FR")} t` : "—",
       },
       {
-        id: "attain",
-        label: "Atteinte",
-        value: shift.attainmentPct != null ? `${shift.attainmentPct.toFixed(1)} %` : "—",
-        tone:
-          useApiMode ? "neutral" : shift.attainmentPct != null && shift.attainmentPct >= 95
-            ? "good"
-            : shift.attainmentPct != null
-              ? "warn"
-              : "neutral",
-      },
-      {
-        id: "gap",
-        label: "Écart",
-        value: shift.gapTons != null ? `−${shift.gapTons.toLocaleString("fr-FR")} t` : "—",
-        tone: "bad",
+        id: "pace",
+        label: "Situation",
+        value: PACE_STATUS_LABEL[pace],
+        tone: pace === "ahead" ? "good" : pace === "on_track" ? "warn" : pace === "behind" ? "bad" : "neutral",
+        hint: lastGapMin != null ? formatPaceGap(lastGapMin) : undefined,
       },
     ],
     chartKind: "line",
     chartData,
-    chartSeries: [
-      { key: "actual", name: "Réel", color: COLORS[0] },
-      { key: "target", name: "Objectif", color: COLORS[1] },
-    ],
+    chartSeries,
     columns: [
       { id: "hour", header: "Heure", accessorKey: "hour" },
-      { id: "actual", header: "Réel (t)", accessorKey: "actual" },
-      { id: "target", header: "Objectif (t)", accessorKey: "target" },
+      { id: "actual", header: "Réel cumulé (t)", accessorKey: "actual" },
+      { id: "target", header: "Objectif cumulé (t)", accessorKey: "target" },
       { id: "ecart", header: "Écart", accessorKey: "ecart" },
       { id: "trips", header: "Voyages", accessorKey: "trips" },
       { id: "trucks", header: "Camions", accessorKey: "trucks" },
-      { id: "delayMin", header: "Retard (min)", accessorKey: "delayMin" },
+      { id: "delayMin", header: "Retard / avance estimé", accessorKey: "delayMin" },
     ],
     rows,
     interpretation: {
-      facts: useApiMode
-        ? [
-            shift.actual != null
-              ? `${shift.actual.toLocaleString("fr-FR")} t réalisé`
-              : "Réel non défini",
-            shift.target != null
-              ? `${shift.target.toLocaleString("fr-FR")} t objectif (${shift.attainmentPct ?? "—"} %)`
-              : "Objectif non défini",
-            `${trucks.length} camions · ${trips} voyages`,
-          ]
-        : merahProductionFacts(shift.actual ?? 0, shift.target, shift.attainmentPct),
+      facts,
       inference: useApiMode
-        ? "Interprétation non évaluée — chiffres issus des services opérationnels."
-        : "La file Banc B et EXC-027 en maintenance expliquent la majorité de l'écart de poste.",
+        ? pace === "unknown"
+          ? "Situation non évaluée — objectif cumulé incomplet."
+          : `Le cumul réel est ${PACE_STATUS_LABEL[pace].toLowerCase()} par rapport à l’objectif cumulé à cette heure. La projection, si affichée, prolonge le rythme horaire moyen observé — ce n’est pas une prévision de rattrapage.`
+        : `${PACE_STATUS_LABEL[pace]}. La file ${MERAH_SHIFT_SCENARIO.congestion.zoneName} et EXC-027 en maintenance expliquent le rythme plus faible après 10:30 ; le cumul continue d’augmenter, mais sous l’objectif.`,
       missing: useApiMode
-        ? ["Moteur d'analyse Performance non activé"]
-        : ["Répartition tonnage par banc (A vs B)", "Retard imputable uniquement à l'attente"],
+        ? [
+            series.projectionKind === "unavailable"
+              ? "Projection indisponible — fin de poste non lue dans les données"
+              : "Moteur d'analyse Performance non activé",
+          ]
+        : series.projectionKind === "unavailable"
+          ? ["Projection indisponible"]
+          : ["Répartition tonnage par banc (A vs B)", "Retard imputable uniquement à l'attente"],
       confidence: useApiMode ? null : 88,
     },
   }

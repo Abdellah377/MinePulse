@@ -297,9 +297,9 @@ def test_workflow_records_stage_timings(monkeypatch):
     assert "sk-" not in str(captured["snapshot"])
 
 
-def test_reviewer_skipped_when_remaining_budget_below_timeout(monkeypatch):
+def test_reviewer_skipped_when_remaining_budget_below_min_useful(monkeypatch):
     _patch_common(monkeypatch)
-    provider = FakeOptProvider(remaining_seconds=30, timeout_seconds=15, plan_cost=20)
+    provider = FakeOptProvider(remaining_seconds=30, timeout_seconds=15, plan_cost=27)
     payload = create_optimization_workflow(MagicMock(), _ctx(), "alert-42", provider=provider)
     assert payload["workflowStatus"] == WorkflowStatus.REVIEW_UNAVAILABLE.value
     assert provider.review_calls == []

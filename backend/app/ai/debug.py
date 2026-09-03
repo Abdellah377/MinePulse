@@ -518,6 +518,10 @@ def routing_debug_fields(metrics: dict[str, Any] | None) -> dict[str, Any]:
         ("configured_providers", "configuredProviders"),
         ("final_provider", "finalProvider"),
         ("remaining_budget_ms", "remainingBudgetMs"),
+        ("configured_timeout_ms", "configuredTimeoutMs"),
+        ("actual_timeout_ms", "actualTimeoutMs"),
+        ("remaining_budget_before_ms", "remainingBudgetBeforeMs"),
+        ("remaining_budget_after_ms", "remainingBudgetAfterMs"),
         ("cooldown_skipped", "cooldownSkipped"),
     )
     fields: dict[str, Any] = {}

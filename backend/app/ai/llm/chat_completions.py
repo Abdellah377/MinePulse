@@ -24,9 +24,11 @@ from app.ai.llm.provider import (
     _DISCUSSION_PROMPT,
     _RECOMMENDATION_PROMPT,
     _TRANSIENT_PROVIDER_ERRORS,
+    attempt_timeout_seconds,
+    budget_allows_attempt,
     classify_provider_exception,
     commit_structured_attempt,
-    budget_allows_attempt,
+    stage_for_schema,
     LLMProviderError,
     ProviderConfigurationError,
     ProviderRateLimitError,
@@ -82,7 +84,9 @@ class ChatCompletionsLLMProvider:
         attempt_log: list[dict] = []
         for attempt in range(1, attempts + 1):
             self.last_attempt_count = attempt
-            if not budget_allows_attempt(self._remaining_seconds, self._timeout_seconds):
+            remaining_before = float(self._remaining_seconds)
+            actual_timeout = attempt_timeout_seconds(remaining_before, self._timeout_seconds)
+            if not budget_allows_attempt(remaining_before, self._timeout_seconds):
                 raise ProviderTimeoutError("Investigation provider budget exceeded")
             started = monotonic()
             response = None
@@ -90,7 +94,7 @@ class ChatCompletionsLLMProvider:
             succeeded = False
             mapped_error: LLMProviderError | None = None
             try:
-                parsed, response = self._parse_chat(schema, system_prompt, payload)
+                parsed, response = self._parse_chat(schema, system_prompt, payload, timeout=actual_timeout)
                 succeeded = True
             except LLMProviderError as exc:
                 mapped = exc
@@ -162,6 +166,10 @@ class ChatCompletionsLLMProvider:
                     attempt=attempt,
                     started=started,
                     remaining_seconds=self._remaining_seconds,
+                    remaining_before_seconds=remaining_before,
+                    configured_timeout_seconds=self._timeout_seconds,
+                    actual_timeout_seconds=actual_timeout,
+                    stage=stage_for_schema(schema.__name__),
                     payload=payload,
                     exc=mapped_error,
                     ok=succeeded,
@@ -178,12 +186,11 @@ class ChatCompletionsLLMProvider:
                 return parsed
         raise last_error or LLMProviderError("AI provider structured response failed")
 
-    def _parse_chat(self, schema: type[_T], system_prompt: str, payload: dict) -> tuple[_T, Any]:
+    def _parse_chat(self, schema: type[_T], system_prompt: str, payload: dict, *, timeout: float) -> tuple[_T, Any]:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
-        timeout = self._timeout_seconds
         parse = getattr(getattr(self._client.chat, "completions", None), "parse", None)
         if callable(parse):
             response = parse(

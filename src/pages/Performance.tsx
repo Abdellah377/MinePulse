@@ -270,8 +270,11 @@ function PerformanceAnalyse({ tab }: { tab?: WorkspacePanelProps["tab"] }) {
       <div className="mb-3 grid grid-cols-1 gap-3 xl:grid-cols-12">
         <section className="overflow-hidden rounded-md border border-border bg-surface p-3 shadow-soft xl:col-span-7">
           <h3 className="mb-2 text-[12px] font-semibold text-foreground">
-            {analysis.title} — graphique
+            {analysis.metric === "production" ? "Production cumulée" : analysis.title} — graphique
           </h3>
+          {analysis.metric === "production" && (
+            <p className="mb-2 text-[10px] text-muted">Tonnes cumulées depuis le début du poste · objectif cumulé en pointillés</p>
+          )}
           <PerformanceChart analysis={analysis} />
         </section>
         <section className="rounded-md border border-border bg-surface p-3 shadow-soft xl:col-span-5">

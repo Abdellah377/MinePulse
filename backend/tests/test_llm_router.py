@@ -348,10 +348,10 @@ def test_provider_order_uses_one_attempt_then_failover(monkeypatch):
     assert router._max_leaf_attempts == 1
 
 
-def test_remaining_budget_below_timeout_skips_attempt():
+def test_remaining_budget_below_min_useful_skips_attempt():
     groq = FakeLeaf("groq", diagnose=_diagnosis())
     gemini = FakeLeaf("gemini", diagnose=_diagnosis())
-    router = ProviderRouter([groq, gemini], budget_seconds=5, timeout_seconds=12, max_leaf_attempts=1)
+    router = ProviderRouter([groq, gemini], budget_seconds=2, timeout_seconds=12, max_leaf_attempts=1)
     with pytest.raises(ProviderTimeoutError, match="budget exceeded"):
         router.diagnose({})
     assert groq.invocations == 0

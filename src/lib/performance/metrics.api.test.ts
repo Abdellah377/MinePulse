@@ -179,4 +179,25 @@ describe("buildProduction API mode", () => {
     expect(analysis.rows[0]?.trips).toBe("—")
     expect(analysis.rows[0]?.delayMin).toBe("—")
   })
+
+  it("plots cumulative tonnes, not the hourly rate", () => {
+    const analysis = buildPerformanceAnalysis({
+      metric: "production",
+      equipment: [truck()],
+      zones: [],
+      productionHourly: [
+        { label: "06:00", tonnage: 100, target: 120 },
+        { label: "07:00", tonnage: 80, target: 120 },
+      ],
+      productionShiftly: [{ label: "Poste 06:00–14:00", tonnage: 180, target: 960 }],
+      downtimeReasons: [],
+    })
+    expect(analysis.chartData[0]?.actual).toBe(100)
+    expect(analysis.chartData[1]?.actual).toBe(180)
+    expect(analysis.chartData[1]?.target).toBe(240)
+    expect(analysis.chartSeries.map((s) => s.key)).toContain("actual")
+    expect(analysis.chartSeries.map((s) => s.key)).toContain("target")
+    expect(analysis.kpis.find((k) => k.id === "pace")?.value).toBe("En retard")
+    expect(analysis.interpretation.facts.some((f) => f.includes("Réel cumulé"))).toBe(true)
+  })
 })

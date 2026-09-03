@@ -3,6 +3,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -39,21 +40,35 @@ export function PerformanceChart({ analysis }: { analysis: PerfAnalysis }) {
     >
       <ResponsiveContainer width="100%" height={CHART_H} debounce={50}>
         {chartKind === "line" ? (
-          <LineChart data={chartData} margin={{ left: 4, right: 12, top: 8, bottom: 8 }}>
+          <LineChart data={chartData} margin={{ left: 8, right: 12, top: 8, bottom: 8 }}>
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="hour" tick={TICK} axisLine={false} tickLine={false} />
-            <YAxis tick={TICK} axisLine={false} tickLine={false} width={40} />
-            <Tooltip {...TIP} />
+            <YAxis
+              tick={TICK}
+              axisLine={false}
+              tickLine={false}
+              width={52}
+              tickFormatter={(value: number) => Number(value).toLocaleString("fr-FR")}
+            />
+            <Tooltip
+              {...TIP}
+              formatter={(value, name) => {
+                if (typeof value !== "number") return [value ?? "—", String(name)]
+                return [`${value.toLocaleString("fr-FR")} t`, String(name)]
+              }}
+            />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
             {chartSeries.map((s) => (
               <Line
                 key={s.key}
-                type="monotone"
+                type="linear"
                 dataKey={s.key}
                 name={s.name}
                 stroke={s.color}
-                strokeWidth={s.key === "target" ? 1.5 : 2}
-                strokeDasharray={s.key === "target" ? "4 4" : undefined}
+                strokeWidth={s.key === "actual" ? 2.25 : 1.75}
+                strokeDasharray={s.key === "target" || s.key === "projected" ? "5 4" : undefined}
                 dot={false}
+                connectNulls={s.key === "projected"}
               />
             ))}
           </LineChart>

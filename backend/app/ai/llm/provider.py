@@ -105,8 +105,47 @@ def http_status_class_for(exc: Exception | None, *, ok: bool = False) -> str:
     return "error"
 
 
+# Minimum remaining shared budget worth starting another structured call.
+# Diagnose historically needs ~12s, but conclusion/recommendation often finish in 2–4s.
+# Admission uses this floor, not the configured 15s cap, so a 14s remainder is still usable.
+MIN_USEFUL_ATTEMPT_SECONDS = 4.0
+
+_SCHEMA_STAGE_NAMES = {
+    "DiagnosisResult": "diagnose",
+    "InvestigationConclusion": "build_conclusion",
+    "InvestigationRecommendation": "build_recommendation",
+    "RecommendationDiscussionReply": "discuss_recommendation",
+    "OptimizationPlannerDecision": "plan_optimization",
+    "OptimizationReview": "review_optimization",
+}
+
+
+def stage_for_schema(schema_name: str) -> str:
+    return _SCHEMA_STAGE_NAMES.get(schema_name, schema_name)
+
+
+def min_useful_attempt_seconds(timeout_seconds: float) -> float:
+    configured = max(0.0, float(timeout_seconds))
+    return min(MIN_USEFUL_ATTEMPT_SECONDS, configured)
+
+
+def attempt_timeout_seconds(remaining_seconds: float, timeout_seconds: float) -> float:
+    """Cap this attempt at the remaining shared budget, never a fresh configured window."""
+    remaining = max(0.0, float(remaining_seconds))
+    configured = max(0.0, float(timeout_seconds))
+    return min(configured, remaining)
+
+
 def budget_allows_attempt(remaining_seconds: float, timeout_seconds: float) -> bool:
-    return float(remaining_seconds) > 0 and float(remaining_seconds) + 1e-9 >= float(timeout_seconds)
+    """Admit a call when remaining budget meets the minimum useful window.
+
+    The configured provider timeout is a maximum, not an admission floor.
+    remaining=14s with timeout=15s is allowed; the attempt timeout is min(15, 14).
+    """
+    remaining = float(remaining_seconds)
+    if remaining <= 0:
+        return False
+    return remaining + 1e-9 >= min_useful_attempt_seconds(timeout_seconds)
 
 
 def commit_structured_attempt(
@@ -121,30 +160,50 @@ def commit_structured_attempt(
     payload: dict,
     exc: BaseException | None,
     ok: bool,
+    remaining_before_seconds: float | None = None,
+    configured_timeout_seconds: float | None = None,
+    actual_timeout_seconds: float | None = None,
+    stage: str | None = None,
+    fallback: bool = False,
+    cooldown_skipped: bool = False,
 ) -> dict[str, Any]:
     duration_ms = max(0, int((monotonic() - started) * 1000))
     failure = None if ok else type(exc).__name__
+    remaining_after_ms = max(0, int(remaining_seconds * 1000))
+    remaining_before = remaining_seconds if remaining_before_seconds is None else remaining_before_seconds
     record = {
         "provider": provider_name,
         "model": model_name,
         "attempt": attempt,
+        "stage": stage or stage_for_schema(schema_name),
         "duration_ms": duration_ms,
         "http_status_class": http_status_class_for(exc if isinstance(exc, Exception) else None, ok=ok),
         "failure_category": failure,
         "parse_retry": False,
         "prompt_chars": payload_prompt_chars(payload),
         "evidence_count": payload_evidence_count(payload),
-        "remaining_budget_ms": max(0, int(remaining_seconds * 1000)),
+        "configured_timeout_ms": max(0, int((configured_timeout_seconds or 0.0) * 1000)),
+        "actual_timeout_ms": max(0, int((actual_timeout_seconds or 0.0) * 1000)),
+        "remaining_budget_before_ms": max(0, int(float(remaining_before) * 1000)),
+        "remaining_budget_after_ms": remaining_after_ms,
+        "remaining_budget_ms": remaining_after_ms,
+        "fallback": bool(fallback),
+        "cooldown_skipped": bool(cooldown_skipped),
     }
     attempt_log.append(record)
     return {
         "provider": provider_name,
         "model": model_name,
         "schema": schema_name,
+        "stage": record["stage"],
         "duration_ms": duration_ms,
         "attempt": attempt,
         "attempts": list(attempt_log),
-        "remaining_budget_ms": record["remaining_budget_ms"],
+        "remaining_budget_ms": remaining_after_ms,
+        "configured_timeout_ms": record["configured_timeout_ms"],
+        "actual_timeout_ms": record["actual_timeout_ms"],
+        "remaining_budget_before_ms": record["remaining_budget_before_ms"],
+        "remaining_budget_after_ms": remaining_after_ms,
     }
 
 

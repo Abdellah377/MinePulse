@@ -175,6 +175,48 @@ class ProviderRouter:
         for other in self._providers:
             other._remaining_seconds = remaining
 
+    def _admission_record(
+        self,
+        leaf: Any,
+        *,
+        method: str,
+        failure_category: str,
+        http_status_class: str,
+        cooldown_skipped: bool = False,
+        fallback: bool = False,
+    ) -> dict[str, Any]:
+        remaining_ms = int(max(0.0, self._remaining_seconds) * 1000)
+        return {
+            "provider": leaf.provider_name,
+            "model": getattr(leaf, "model_name", None),
+            "attempt": 0,
+            "stage": method,
+            "duration_ms": 0,
+            "http_status_class": http_status_class,
+            "failure_category": failure_category,
+            "parse_retry": False,
+            "prompt_chars": 0,
+            "evidence_count": 0,
+            "configured_timeout_ms": int(max(0.0, self._timeout_seconds) * 1000),
+            "actual_timeout_ms": 0,
+            "remaining_budget_before_ms": remaining_ms,
+            "remaining_budget_after_ms": remaining_ms,
+            "remaining_budget_ms": remaining_ms,
+            "fallback": fallback,
+            "cooldown_skipped": cooldown_skipped,
+        }
+
+    def _stamp_attempts(self, attempts: list[dict[str, Any]], *, method: str, fallback: bool) -> list[dict[str, Any]]:
+        for item in attempts:
+            item.setdefault("stage", method)
+            item.setdefault("configured_timeout_ms", int(max(0.0, self._timeout_seconds) * 1000))
+            item.setdefault("actual_timeout_ms", 0)
+            item.setdefault("remaining_budget_before_ms", item.get("remaining_budget_ms") or 0)
+            item.setdefault("remaining_budget_after_ms", item.get("remaining_budget_ms") or 0)
+            item["fallback"] = fallback
+            item.setdefault("cooldown_skipped", False)
+        return attempts
+
     def _leaf_attempts(self, leaf: Any, exc: Exception | None = None) -> list[dict[str, Any]]:
         metrics = dict(getattr(leaf, "last_call_metrics", None) or {})
         raw = metrics.get("attempts")
@@ -251,19 +293,14 @@ class ProviderRouter:
             if _in_cooldown(leaf.provider_name):
                 logger.info("Skipping AI provider in cooldown provider=%s", leaf.provider_name)
                 logical_attempts.append(
-                    {
-                        "provider": leaf.provider_name,
-                        "model": getattr(leaf, "model_name", None),
-                        "attempt": 0,
-                        "duration_ms": 0,
-                        "http_status_class": "cooldown",
-                        "failure_category": "cooldown_skipped",
-                        "parse_retry": False,
-                        "prompt_chars": 0,
-                        "evidence_count": 0,
-                        "remaining_budget_ms": int(max(0.0, self._remaining_seconds) * 1000),
-                        "cooldown_skipped": True,
-                    }
+                    self._admission_record(
+                        leaf,
+                        method=method,
+                        failure_category="cooldown_skipped",
+                        http_status_class="cooldown",
+                        cooldown_skipped=True,
+                        fallback=index > 0,
+                    )
                 )
                 continue
             if self._remaining_seconds <= 0:
@@ -276,18 +313,13 @@ class ProviderRouter:
                 raise last_error or ProviderTimeoutError("Investigation provider budget exceeded")
             if not budget_allows_attempt(self._remaining_seconds, self._timeout_seconds):
                 logical_attempts.append(
-                    {
-                        "provider": leaf.provider_name,
-                        "model": getattr(leaf, "model_name", None),
-                        "attempt": 0,
-                        "duration_ms": 0,
-                        "http_status_class": "skip",
-                        "failure_category": "budget_too_small",
-                        "parse_retry": False,
-                        "prompt_chars": 0,
-                        "evidence_count": 0,
-                        "remaining_budget_ms": int(max(0.0, self._remaining_seconds) * 1000),
-                    }
+                    self._admission_record(
+                        leaf,
+                        method=method,
+                        failure_category="budget_too_small",
+                        http_status_class="skip",
+                        fallback=index > 0,
+                    )
                 )
                 last_error = last_error or ProviderTimeoutError("Investigation provider budget exceeded")
                 self.last_call_metrics = self._metrics_from_attempts(
@@ -311,7 +343,9 @@ class ProviderRouter:
                 http_attempts += used
                 self.last_attempt_count = http_attempts
                 last_error = exc
-                logical_attempts.extend(self._leaf_attempts(leaf, exc))
+                logical_attempts.extend(
+                    self._stamp_attempts(self._leaf_attempts(leaf, exc), method=method, fallback=index > 0)
+                )
                 self.last_call_metrics = self._metrics_from_attempts(
                     logical_attempts,
                     leaf=leaf,
@@ -335,7 +369,9 @@ class ProviderRouter:
                 used = max(1, int(getattr(leaf, "last_attempt_count", 1) or 1))
                 http_attempts += used
                 last_error = mapped
-                logical_attempts.extend(self._leaf_attempts(leaf, mapped))
+                logical_attempts.extend(
+                    self._stamp_attempts(self._leaf_attempts(leaf, mapped), method=method, fallback=index > 0)
+                )
                 self.last_call_metrics = self._metrics_from_attempts(
                     logical_attempts,
                     leaf=leaf,
@@ -345,7 +381,9 @@ class ProviderRouter:
             self._sync_budget(leaf)
             used = max(1, int(getattr(leaf, "last_attempt_count", 1) or 1))
             http_attempts += used
-            logical_attempts.extend(self._leaf_attempts(leaf))
+            logical_attempts.extend(
+                self._stamp_attempts(self._leaf_attempts(leaf), method=method, fallback=index > 0)
+            )
             self._record_success(
                 leaf,
                 fallback_occurred=index > 0 or attempted_index != 0,
