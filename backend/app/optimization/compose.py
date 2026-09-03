@@ -24,6 +24,13 @@ ORCHESTRATOR_VERSION = "1.0.0"
 NO_CHANGE_OPERATOR_COPY = (
     "Aucune modification recommandée — le plan actuel reste le meilleur parmi les options évaluées."
 )
+NO_CHANGE_ACTION_COPY = (
+    "Maintenir le plan actuel. Aucun changement utile n’a été identifié parmi les options évaluées."
+)
+NO_FEASIBLE_ACTION_COPY = "Aucun changement de dispatch faisable n’a été trouvé."
+INSUFFICIENT_DATA_ACTION_COPY = (
+    "Les données opérationnelles disponibles ne permettent pas de produire une optimisation fiable."
+)
 REVIEW_UNAVAILABLE_COPY = "Résultats calculés — revue IA indisponible."
 DETERMINISTIC_ONLY_COPY = "Résultats calculés — orchestration IA indisponible, plan déterministe conservé."
 
@@ -245,6 +252,25 @@ def finalize_recommendations(
     }
 
 
+def _is_score_summary(text: str | None) -> bool:
+    if not text:
+        return False
+    return "Score =" in text or "w_travel" in text or "× travel" in text
+
+
+def operational_reassignment_line(recommended: dict | None) -> str | None:
+    if not recommended:
+        return None
+    loader = recommended.get("loaderCode")
+    if not loader:
+        return None
+    dest = recommended.get("destZoneCode") or "destination actuelle"
+    truck = recommended.get("truckCode")
+    if truck:
+        return f"Réaffecter {truck} vers {loader} → {dest}."
+    return f"Réaffecter vers {loader} → {dest}."
+
+
 def compose_operator_recommended_action(
     *,
     eligibility: str | None,
@@ -252,20 +278,32 @@ def compose_operator_recommended_action(
     operator_summary: str | None,
     recommended: dict | None,
     investigation_description: str | None,
+    workflow_status: str | None = None,
 ) -> dict[str, str | None]:
     """One operator-facing action. A valid dispatch plan never competes with investigation copy."""
-    plan_line = None
-    if recommended and recommended.get("loaderCode"):
-        dest = recommended.get("destZoneCode") or "destination actuelle"
-        plan_line = f"Réaffecter vers {recommended['loaderCode']} → {dest}."
-    summary = (operator_summary or "").strip() or None
-    if eligibility != "NOT_APPLICABLE" and outcome == "FEASIBLE":
-        text = summary or plan_line
-        if text:
-            return {"text": text, "source": "optimizer"}
     description = (investigation_description or "").strip() or None
-    if description:
-        return {"text": description, "source": "investigation"}
+    if eligibility == "NOT_APPLICABLE":
+        if description:
+            return {"text": description, "source": "investigation"}
+        return {"text": None, "source": None}
+
+    if workflow_status == "NO_CHANGE_RECOMMENDED" or (
+        outcome == "FEASIBLE" and recommended is not None and recommended.get("isCurrent")
+    ):
+        return {"text": NO_CHANGE_ACTION_COPY, "source": "optimizer"}
+    if outcome == "NO_FEASIBLE_PLAN":
+        return {"text": NO_FEASIBLE_ACTION_COPY, "source": "optimizer"}
+    if outcome == "INSUFFICIENT_DATA":
+        return {"text": INSUFFICIENT_DATA_ACTION_COPY, "source": "optimizer"}
+
+    plan_line = operational_reassignment_line(recommended)
     if outcome == "FEASIBLE" and plan_line:
         return {"text": plan_line, "source": "optimizer"}
+    summary = (operator_summary or "").strip() or None
+    if summary and _is_score_summary(summary):
+        summary = None
+    if outcome == "FEASIBLE" and summary:
+        return {"text": summary, "source": "optimizer"}
+    if description:
+        return {"text": description, "source": "investigation"}
     return {"text": None, "source": None}

@@ -19,7 +19,8 @@ import { investigationFailure, investigationStatus } from "@/lib/ai/investigatio
 import { SEVERITY_CONFIG } from "@/lib/status"
 import { cn } from "@/lib/utils"
 import { newestAlertsFirst, operationalAlertTime } from "@/lib/alerts/order"
-import { alertsForKind, filterAlertsByUi, isPredictionAlert, userInvestigateTriggerType } from "@/lib/alerts/kind"
+import { alertsForKind, filterAlertsByUi, isPredictionAlert } from "@/lib/alerts/kind"
+import { buildUserInvestigateTrigger } from "@/lib/ai/investigationTrigger"
 import { openMapForTarget } from "@/lib/workspace/openMapFocus"
 import { operatorText } from "@/lib/ai/investigationReport"
 import { ALERT_STATUS_LABEL } from "@/lib/mock/types"
@@ -103,13 +104,14 @@ export function InvestigationAlerts({ tab }: Partial<WorkspacePanelProps>) {
 
   function investigationTrigger(): InvestigationTriggerInput | null {
     if (!scope || !selected) return null
-    return {
-      ...scope, trigger_type: userInvestigateTriggerType(selected), trigger_source: "USER_INVESTIGATE", source: "alertes-ui",
-      equipment_id: equipment?.databaseId, zone_id: selectedZone?.databaseId,
-      occurred_at: new Date(operationalAlertTime(selected)).toISOString(),
-      severity: selected.severity === "critical" ? "CRITICAL" : selected.severity === "warning" ? "WARNING" : "INFO",
-      payload: { category: selected.category, title: selected.title, description: selected.description },
-    }
+    return buildUserInvestigateTrigger({
+      siteId: scope.site_id,
+      shiftId: scope.shift_id,
+      alert: selected,
+      equipmentDatabaseId: equipment?.databaseId,
+      zoneDatabaseId: selectedZone?.databaseId,
+      source: "alertes-ui",
+    })
   }
   function investigate() {
     const trigger = investigationTrigger()

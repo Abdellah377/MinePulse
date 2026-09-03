@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { MessageSquare } from "lucide-react"
-import { useInvestigationStore } from "@/lib/store/useInvestigationStore"
+import { investigationKey, useInvestigationStore } from "@/lib/store/useInvestigationStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
 import { useOpsStore } from "@/lib/store/useOpsStore"
 import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
@@ -8,14 +8,24 @@ import type { WorkspacePanelProps } from "@/components/workspace/WorkspaceHost"
 import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure } from "@/lib/ai/investigationPresentation"
 import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
 import { mergeInboxItems, nextInboxSelection, removeInboxItem } from "@/lib/ai/actionsInbox"
+import { buildUserInvestigateTrigger } from "@/lib/ai/investigationTrigger"
+import {
+  FMS_DECISION_NOTE,
+  INVESTIGATION_REQUIRED_COPY,
+  actionsIaVisibility,
+  resolveActionsIaView,
+  shouldStartOptimizationWorkflow,
+} from "@/lib/ai/actionsIaView"
 import {
   classifyOptimizationImpact,
   composeOperatorRecommendedAction,
-  INVESTIGATION_UNAVAILABLE_COPY,
+  isScoreEquationText,
   optimizationWorkflowBanner,
   optimizerOperatorStatus,
   planCandidateLabel,
+  technicalOptimizationDetails,
   visibleOptimizationPlans,
+  weatherOperatorLabel,
 } from "@/lib/ai/optimizationDisplay"
 import { CompactPlanImpact, OptimizationImpactCard } from "@/components/ai/OptimizationImpact"
 import { Button } from "@/components/ui/button"
@@ -67,13 +77,19 @@ function opsCtx() {
 export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const investigationId = tab?.context.investigationId ?? tab?.investigationId
   const contextAlertId = tab?.context.alertId as string | undefined
-  const entry = useInvestigationStore((s) => investigationId ? s.entries[investigationId] : undefined)
+  const entries = useInvestigationStore((s) => s.entries)
   const retrieve = useInvestigationStore((s) => s.retrieve)
+  const lookup = useInvestigationStore((s) => s.lookup)
+  const start = useInvestigationStore((s) => s.start)
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace)
   const activateTab = useWorkspaceStore((s) => s.activateTab)
   const updateAlertStatus = useOpsStore((s) => s.updateAlertStatus)
   const selectedSiteId = useOpsStore((s) => s.selectedSiteId)
   const selectedShiftId = useOpsStore((s) => s.selectedShiftId)
+  const sites = useOpsStore((s) => s.sites)
+  const shifts = useOpsStore((s) => s.shifts)
+  const equipmentList = useOpsStore((s) => s.equipment)
+  const zones = useOpsStore((s) => s.zones)
   const simNowIso = useOpsStore((s) => s.simNowIso)
   const activeCount = useAlertFeedStore((s) => s.activeCount)
   const [inbox, setInbox] = useState<ActionsInboxItem[]>([])
@@ -84,6 +100,8 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [run, setRun] = useState<OptimizationRun | null>(null)
+  const [detailReady, setDetailReady] = useState(false)
+  const [optimizingWorkflow, setOptimizingWorkflow] = useState(false)
   const [decisionView, setDecisionView] = useState<RecommendationDecisionView | null>(null)
   const [thread, setThread] = useState<DiscussionThread | null>(null)
   const [discussOpen, setDiscussOpen] = useState(false)
@@ -96,7 +114,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
-  const autoOptFor = useRef<string | null>(null)
+  const workflowFor = useRef<string | null>(null)
   const selectedIdRef = useRef<string | null>(selectedId)
   selectedIdRef.current = selectedId
   const overlayRef = useRef<ActionsInboxItem | null>(resolvedOverlay)
@@ -108,6 +126,15 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     ?? (selectedId ? null : inbox[0])
   const alertId = selected?.id ?? contextAlertId ?? null
   const id = selected?.investigationId ?? investigationId
+  const siteId = sites.find((row) => row.id === selectedSiteId)?.databaseId
+  const shiftId = shifts.find((row) => row.id === selectedShiftId)?.databaseId
+  const scope = siteId && alertId ? { site_id: siteId, shift_id: shiftId, source_record_id: alertId } : null
+  const scopeKey = scope ? investigationKey(scope) : ""
+  const entry = (scopeKey ? entries[scopeKey] : undefined)
+    ?? (id ? entries[id] : undefined)
+    ?? (investigationId ? entries[investigationId] : undefined)
+  const equipment = equipmentList.find((row) => row.id === selected?.equipmentId)
+  const selectedZone = zones.find((row) => row.id === selected?.zoneId)
 
   useEffect(() => {
     let cancelled = false
@@ -156,38 +183,29 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     if (contextAlertId) setSelectedId(contextAlertId)
   }, [contextAlertId])
 
+  useEffect(() => {
+    if (siteId && alertId) void lookup({ site_id: siteId, shift_id: shiftId, source_record_id: alertId })
+  }, [siteId, shiftId, alertId, lookup])
   useEffect(() => { if (id) void retrieve(id) }, [id, retrieve])
   useEffect(() => {
-    if (!alertId) return
+    if (!alertId) {
+      setDetailReady(false)
+      setRun(null)
+      return
+    }
     let cancelled = false
-    void aiApi.getInboxDetail(alertId, opsCtx()).then(async (detail) => {
+    setDetailReady(false)
+    setRun(null)
+    workflowFor.current = null
+    void aiApi.getInboxDetail(alertId, opsCtx()).then((detail) => {
       if (cancelled) return
       setActionError(null)
-      let nextRun: OptimizationRun | null = null
       const latest = detail.latestRun
-      const stale = !latest || latest.outcome === "INSUFFICIENT_DATA" || latest.outcome === "ERROR"
-      const fromLatest = (): OptimizationRun => ({
-        ...latest!,
-        alertId,
-        snapshotDigest: latest!.snapshotDigest ?? null,
-      })
-      if (latest && !stale) {
-        nextRun = fromLatest()
-      } else if (detail.alert.optimizationEligible && autoOptFor.current !== alertId) {
-        autoOptFor.current = alertId
-        try {
-          nextRun = await aiApi.createOptimizationRun(alertId, opsCtx())
-        } catch {
-          if (!cancelled) setActionError("Optimisation de dispatch indisponible.")
-          if (latest) nextRun = fromLatest()
-        }
-      } else if (latest) {
-        nextRun = fromLatest()
-      }
-      if (cancelled) return
+      const nextRun = latest ? { ...latest, alertId, snapshotDigest: latest.snapshotDigest ?? null } : null
       setRun(nextRun)
+      setDetailReady(true)
       if (nextRun) {
-        setInbox((rows) => rows.map((row) => row.id === alertId ? { ...row, latestRunOutcome: nextRun!.outcome, optimizationEligible: nextRun!.eligibility === "OPTIMIZABLE" || detail.alert.optimizationEligible } : row))
+        setInbox((rows) => rows.map((row) => row.id === alertId ? { ...row, latestRunOutcome: nextRun.outcome, optimizationEligible: nextRun.eligibility === "OPTIMIZABLE" || detail.alert.optimizationEligible } : row))
         const displayedId = nextRun.displayedCandidateIds?.[0]
         const fallbackRec = nextRun.candidates.find((plan) => !plan.isCurrent)?.candidateId
         const baselineId = nextRun.baselineCandidateId ?? nextRun.candidates.find((plan) => plan.isCurrent)?.candidateId
@@ -206,6 +224,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     }).catch(() => {
       if (!cancelled) {
         setRun(null)
+        setDetailReady(true)
         setActionError("Dossier alerte indisponible.")
       }
     })
@@ -233,11 +252,21 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const followUp = record?.follow_up_status ?? decisionView?.follow_up_status ?? null
   const eligible = selected?.optimizationEligible ?? false
   const handled = selected?.status === "resolved"
+  const viewInput = useMemo(() => ({
+    hasInvestigation: Boolean(selected?.hasInvestigation || result),
+    entryPhase: entry?.phase,
+    resultStatus: result?.status ?? null,
+    optimizationEligible: eligible,
+    runOutcome: run?.outcome ?? null,
+    workflowStatus: run?.workflowStatus ?? null,
+    optimizing: optimizingWorkflow,
+  }), [selected?.hasInvestigation, result, entry?.phase, eligible, run?.outcome, run?.workflowStatus, optimizingWorkflow])
+  const viewState = resolveActionsIaView(viewInput)
+  const vis = actionsIaVisibility(viewState)
   const impact = useMemo(
     () => classifyOptimizationImpact(run?.candidates, selectedPlanId),
     [run?.candidates, selectedPlanId],
   )
-  const showOptimization = eligible || Boolean(run && run.outcome !== "NOT_APPLICABLE")
   const action = useMemo(
     () => composeOperatorRecommendedAction({
       run,
@@ -245,24 +274,73 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     }),
     [run, rec],
   )
+  const technical = useMemo(() => (run ? technicalOptimizationDetails(run) : null), [run])
   const whyPoints = useMemo(() => {
     const points: string[] = []
     if (result?.conclusion?.root_cause) points.push(operatorText(result.conclusion.root_cause))
     else if (result?.conclusion?.summary) points.push(operatorText(result.conclusion.summary))
     for (const constraint of rec?.operational_constraints ?? []) {
       const text = operatorText(constraint)
-      if (text && !points.includes(text)) points.push(text)
+      if (text && !points.includes(text) && !isScoreEquationText(text)) points.push(text)
     }
-    if (run?.explanation?.why) points.push(run.explanation.why)
+    const why = run?.explanation?.why
+    if (why && !isScoreEquationText(why) && !why.includes("Acceptation ≠ application FMS") && !why.includes("Météo affichée")) {
+      points.push(why)
+    }
     const others = (run?.candidates ?? []).filter((plan) => plan.candidateId !== run?.recommendedCandidateId && plan.rankReason)
     for (const plan of others.slice(0, 2)) {
-      points.push(`${plan.loaderCode ?? "Plan"} : ${plan.rankReason}`)
+      if (plan.rankReason && !isScoreEquationText(plan.rankReason)) {
+        points.push(`${plan.loaderCode ?? "Plan"} : ${plan.rankReason}`)
+      }
     }
     if (roads) {
       points.push(`Preuve routière : ${roads.distance != null ? `${roads.distance} km` : "distance inconnue"}${roads.minutes != null ? ` · ${roads.minutes} min` : ""}`)
     }
     return points.slice(0, 4)
   }, [result, rec, run, roads])
+
+  useEffect(() => {
+    if (!alertId || !detailReady) return
+    if (!shouldStartOptimizationWorkflow(viewInput)) return
+    const key = `${alertId}:${result?.investigation_id ?? "inv"}`
+    if (workflowFor.current === key) return
+    workflowFor.current = key
+    let cancelled = false
+    setOptimizingWorkflow(true)
+    void aiApi.createOptimizationWorkflow(alertId, opsCtx()).then((next) => {
+      if (cancelled) return
+      setRun(next)
+      const displayedId = next.displayedCandidateIds?.[0]
+      const fallbackRec = next.candidates.find((plan) => !plan.isCurrent)?.candidateId
+      const baselineId = next.baselineCandidateId ?? next.candidates.find((plan) => plan.isCurrent)?.candidateId
+      setSelectedPlanId(displayedId ?? fallbackRec ?? baselineId ?? next.recommendedCandidateId ?? null)
+      setInbox((rows) => rows.map((row) => row.id === alertId ? { ...row, latestRunOutcome: next.outcome, optimizationEligible: next.eligibility === "OPTIMIZABLE" } : row))
+    }).catch(() => {
+      if (!cancelled) setActionError("Optimisation de dispatch indisponible.")
+    }).finally(() => {
+      if (!cancelled) setOptimizingWorkflow(false)
+    })
+    return () => { cancelled = true }
+  }, [alertId, detailReady, viewInput, result?.investigation_id])
+
+  function investigate() {
+    if (!siteId || !alertId) return
+    const row = selected ?? {
+      id: alertId,
+      category: "OPERATIONAL",
+      title: "",
+      description: "",
+      severity: "warning" as const,
+    }
+    void start(buildUserInvestigateTrigger({
+      siteId,
+      shiftId,
+      alert: row,
+      equipmentDatabaseId: equipment?.databaseId,
+      zoneDatabaseId: selectedZone?.databaseId,
+      source: "actions-ui",
+    }), { retryFailed: viewState === "investigation_failed" })
+  }
 
   function backToAlert() {
     const existing = useWorkspaceStore.getState().tabs.find((t) => t.type === "alerts" && t.context.alertId === alertId)
@@ -479,48 +557,66 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
             </section>
           )}
 
-          <section className={cn("rounded-md border px-3.5 py-3", status === "ACCEPTED" ? "border-accent/40 bg-accent-soft/40" : "border-border bg-surface")}>
-            <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Action recommandée</h2>
-            {action ? (
-              <>
-                <p className="mt-2 text-[15px] font-semibold leading-snug text-foreground">{operatorText(action.text)}</p>
-                {action.source === "investigation" && rec?.rationale && (
-                  <p className="mt-1.5 text-[12px] text-muted">{operatorText(rec.rationale)}</p>
-                )}
-                {action.source === "investigation" && confidence && (
-                  <p className="mt-2 text-[11px] text-muted-2">Confiance {confidence}</p>
-                )}
-                {decisionControls}
-              </>
-            ) : (
-              <>
-                <p className="mt-2 text-[12px] text-muted">{INVESTIGATION_UNAVAILABLE_COPY}</p>
-                {showOptimization && status === "PENDING" && decisionControls}
-              </>
-            )}
-          </section>
+          {vis.showInvestiguer && (selected || contextAlertId) && (
+            <section className="rounded-md border border-border bg-surface px-3.5 py-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Investigation requise</h2>
+              <p className="mt-2 text-[12px] text-muted">{INVESTIGATION_REQUIRED_COPY}</p>
+              <Button className="mt-3" size="sm" disabled={!alertId || busy} onClick={() => void investigate()}>
+                {viewState === "investigation_failed" ? "Relancer l’investigation" : "Investiguer"}
+              </Button>
+            </section>
+          )}
 
-          {showOptimization && (
+          {vis.showInvestigationProgress && (
+            <section className="rounded-md border border-border bg-surface px-3.5 py-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Investigation</h2>
+              <p className="mt-2 text-[12px] text-muted">Analyse IA en cours…</p>
+            </section>
+          )}
+
+          {vis.showAction && (
+            <section className={cn("rounded-md border px-3.5 py-3", status === "ACCEPTED" ? "border-accent/40 bg-accent-soft/40" : "border-border bg-surface")}>
+              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Action recommandée</h2>
+              {action ? (
+                <>
+                  <p className="mt-2 text-[15px] font-semibold leading-snug text-foreground">{operatorText(action.text)}</p>
+                  {action.source === "investigation" && rec?.rationale && (
+                    <p className="mt-1.5 text-[12px] text-muted">{operatorText(rec.rationale)}</p>
+                  )}
+                  {action.source === "investigation" && confidence && (
+                    <p className="mt-2 text-[11px] text-muted-2">Confiance {confidence}</p>
+                  )}
+                  {vis.showDecisionControls && decisionControls}
+                </>
+              ) : (
+                <p className="mt-2 text-[12px] text-muted">Recommandation non évaluée ou indisponible.</p>
+              )}
+            </section>
+          )}
+
+          {vis.showDispatchOptions && (
             <section className="rounded-md border border-accent/30 bg-surface px-3.5 py-3">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Options de dispatch</h2>
-                <Button size="sm" variant="outline" disabled={!alertId || busy} onClick={() => void runOptimize()}>{run ? "Recalculer" : "Optimiser"}</Button>
+                {run && (
+                  <Button size="sm" variant="outline" disabled={!alertId || busy || optimizingWorkflow} onClick={() => void runOptimize()}>Recalculer</Button>
+                )}
               </div>
-              {run ? (
+              {run && viewState !== "optimizing" ? (
                 <OptimizationPlans
                   run={run}
                   selectedPlanId={selectedPlanId}
                   onSelectPlan={setSelectedPlanId}
                 />
               ) : (
-                <p className="mt-2 text-[12px] text-muted">Calcul du plan de dispatch…</p>
+                <p className="mt-2 text-[12px] text-muted">Calcul des options de dispatch…</p>
               )}
             </section>
           )}
 
-          {showOptimization && run && <OptimizationImpactCard view={impact} />}
+          {vis.showImpact && run && <OptimizationImpactCard view={impact} />}
 
-          {whyPoints.length > 0 && (
+          {vis.showAction && whyPoints.length > 0 && (
             <details className="rounded-md border border-border bg-surface px-3.5 py-3">
               <summary className="cursor-pointer text-[12px] font-semibold text-foreground">Pourquoi cette recommandation ?</summary>
               <ul className="mt-2 list-disc space-y-1 pl-4 text-[12px] text-muted">
@@ -532,34 +628,46 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
             </details>
           )}
 
-          <section className="rounded-md border border-border bg-surface px-3.5 py-3">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Décision et clôture</h2>
-            <p className="mt-1 text-[12px] font-medium text-foreground">{DECISION_STATUS_LABEL[status]}{followUp ? ` · ${FOLLOW_UP_STATUS_LABEL[followUp]}` : ""}</p>
-            <p className="mt-1 text-[11px] text-muted">Accepter n’applique pas le plan au FMS. « Marquer comme traité » clôt le dossier alerte.</p>
-            {record && status !== "PENDING" && (
-              <p className="mt-2 text-[12px] text-muted">{formatWhen(record.updated_at)}{record.actor_label ? ` · ${record.actor_label}` : ""}</p>
-            )}
-            <p className="mt-2 text-[10px] text-muted-2">MinePulse n’exécute pas le reroutage, n’ouvre pas les routes et ne crée pas d’ordre de travail.</p>
-          </section>
+          {vis.showTechnicalDetails && technical && (
+            <section className="rounded-md border border-border bg-surface px-3.5 py-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Détails techniques</h2>
+              <p className="mt-2 text-[12px] text-muted">{technical.objectif}</p>
+              <p className="mt-1 text-[12px] text-muted">{technical.calcul}</p>
+              <p className="mt-1 text-[12px] text-muted">Météo : {weatherOperatorLabel(run.weatherStatus)}</p>
+            </section>
+          )}
 
-          <details className="rounded-md border border-border bg-surface px-3.5 py-3" open={discussOpen} onToggle={(event) => setDiscussOpen((event.target as HTMLDetailsElement).open)}>
-            <summary className="cursor-pointer text-[12px] font-semibold text-foreground">
-              <span className="inline-flex items-center gap-1.5"><MessageSquare className="size-3.5" />Discuter cette recommandation</span>
-            </summary>
-            <p className="mt-1 text-[11px] text-muted">Hors investigation. Optimiser/Recalculer orchestre le plan ; l’envoi d’un message discute la recommandation. Consulter un dossier n’appelle pas l’IA.</p>
-            {id && (
-              <div className="mt-3 space-y-2" data-testid="recommendation-discussion">
-                <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border border-border bg-background p-2">
-                  {(thread?.messages ?? []).length === 0 && <p className="text-[11px] text-muted">Aucun échange pour l’instant.</p>}
-                  {(thread?.messages ?? []).map((message) => (
-                    <div key={message.message_id} className="text-[11px]"><p className="font-semibold text-foreground/80">{message.role === "OPERATOR" ? "Opérateur" : "MinePulse"}</p><p className="text-muted">{message.content}</p></div>
-                  ))}
+          {vis.showAction && (
+            <section className="rounded-md border border-border bg-surface px-3.5 py-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Décision et clôture</h2>
+              <p className="mt-1 text-[12px] font-medium text-foreground">{DECISION_STATUS_LABEL[status]}{followUp ? ` · ${FOLLOW_UP_STATUS_LABEL[followUp]}` : ""}</p>
+              <p className="mt-1 text-[11px] text-muted">« Marquer comme traité » clôt le dossier alerte.</p>
+              {record && status !== "PENDING" && (
+                <p className="mt-2 text-[12px] text-muted">{formatWhen(record.updated_at)}{record.actor_label ? ` · ${record.actor_label}` : ""}</p>
+              )}
+            </section>
+          )}
+
+          {vis.showAction && (
+            <details className="rounded-md border border-border bg-surface px-3.5 py-3" open={discussOpen} onToggle={(event) => setDiscussOpen((event.target as HTMLDetailsElement).open)}>
+              <summary className="cursor-pointer text-[12px] font-semibold text-foreground">
+                <span className="inline-flex items-center gap-1.5"><MessageSquare className="size-3.5" />Discuter cette recommandation</span>
+              </summary>
+              <p className="mt-1 text-[11px] text-muted">Hors investigation. Recalculer orchestre le plan ; l’envoi d’un message discute la recommandation. Consulter un dossier n’appelle pas l’IA.</p>
+              {id && (
+                <div className="mt-3 space-y-2" data-testid="recommendation-discussion">
+                  <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border border-border bg-background p-2">
+                    {(thread?.messages ?? []).length === 0 && <p className="text-[11px] text-muted">Aucun échange pour l’instant.</p>}
+                    {(thread?.messages ?? []).map((message) => (
+                      <div key={message.message_id} className="text-[11px]"><p className="font-semibold text-foreground/80">{message.role === "OPERATOR" ? "Opérateur" : "MinePulse"}</p><p className="text-muted">{message.content}</p></div>
+                    ))}
+                  </div>
+                  <Textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={3} placeholder="Question sur cette recommandation…" />
+                  <Button size="sm" disabled={!id || busy || !draft.trim()} onClick={() => void sendDiscussion()}>Envoyer</Button>
                 </div>
-                <Textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={3} placeholder="Question sur cette recommandation…" />
-                <Button size="sm" disabled={!id || busy || !draft.trim()} onClick={() => void sendDiscussion()}>Envoyer</Button>
-              </div>
-            )}
-          </details>
+              )}
+            </details>
+          )}
         </main>
       </div>
     </div>
@@ -591,6 +699,7 @@ function DecisionControls({
       {status === "PENDING" && !formMode && (
         <div className="mt-3 border-t border-border pt-3">
           <p className="text-[11px] font-semibold text-foreground">Votre décision</p>
+          <p className="mt-1 text-[11px] text-muted">{FMS_DECISION_NOTE}</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <Button size="sm" onClick={() => void saveDecision("ACCEPTED")} disabled={busy}>Accepter</Button>
             <Button size="sm" variant="outline" onClick={() => setFormMode("MODIFIED")}>Modifier</Button>
@@ -650,7 +759,6 @@ function OptimizationPlans({
       {banner && banner !== optimizerOperatorStatus(run) && (
         <p className={cn("text-[11px]", run.reviewerCaution === banner ? "text-warning" : "text-muted-2")}>{banner}</p>
       )}
-      {run.weatherStatus && <p className="text-[10px] text-muted-2">Météo : {run.weatherStatus} (affichage uniquement, non notée)</p>}
       {!plans.length && run.workflowStatus !== "NO_CHANGE_RECOMMENDED" && run.outcome !== "FEASIBLE" && (
         <p className="text-[11px] text-muted">Aucun candidat de dispatch à afficher. Aucun impact n’est inventé.</p>
       )}

@@ -81,6 +81,18 @@ it("render and rerender cannot create investigations; pending is not confidence 
   expect(html).not.toMatch(/Confiance.*0\s*%/)
   expect(mocks.start).not.toHaveBeenCalled()
 })
+it("API Actions IA hides recommendations until a successful investigation exists", () => {
+  const tab: WorkspaceTab = { id: "tab-actions", type: "actions", title: "Actions IA", module: "actions", context: { alertId: alert.id }, isPinned: false, isDirty: false, createdAt: 1, lastActivatedAt: 1 }
+  const html = renderToStaticMarkup(createElement<Partial<{ tab: WorkspaceTab }>>(ActionsIA, { tab }))
+  expect(html).toContain("Investiguer")
+  expect(html).toContain("Investigation requise")
+  expect(html).not.toContain("Action recommandée")
+  expect(html).not.toContain("Options de dispatch")
+  expect(html).not.toContain("Accepter")
+  expect(html).not.toContain("n’est pas requise")
+  expect(mocks.start).not.toHaveBeenCalled()
+  expect(mocks.demo).not.toHaveBeenCalled()
+})
 it("API Actions IA uses only the persisted UUID result, without dispatch scenarios", () => {
   mocks.entry = { phase: "ready", result }
   const tab: WorkspaceTab = { id: "tab-actions", type: "actions", title: "Actions IA", module: "actions", context: { investigationId: result.investigation_id, alertId: alert.id }, isPinned: false, isDirty: false, createdAt: 1, lastActivatedAt: 1 }
@@ -98,6 +110,8 @@ it("API Actions IA uses only the persisted UUID result, without dispatch scenari
   expect(html).not.toContain("lg:col-span-7")
   expect(html).not.toContain("Préparer")
   expect(html).not.toContain(">Marquer<")
+  expect(html).not.toContain("Options de dispatch")
+  expect(mocks.start).not.toHaveBeenCalled()
   expect(mocks.demo).not.toHaveBeenCalled()
 })
 it("API Actions IA decision and reject labels cover accept, modify, and reject", () => {
@@ -116,7 +130,7 @@ it("API Actions IA decision and reject labels cover accept, modify, and reject",
   expect(labels).toContain("Autre")
 })
 
-it("Actions IA decisions do not start investigations; only discussion posts generate_reply", () => {
+it("Actions IA investigates only on Investiguer, then workflows after success; decisions still do not POST", () => {
   const source = readFileSync("src/components/ai/InvestigationActions.tsx", "utf8")
   expect(source).not.toMatch(/AiWhyButton/)
   expect(source).toMatch(/putDecision/)
@@ -126,7 +140,15 @@ it("Actions IA decisions do not start investigations; only discussion posts gene
   expect(source).toMatch(/FOLLOW_UP_STATUS_LABEL/)
   expect(source).toMatch(/generate_reply: true/)
   expect(source).toMatch(/Marquer comme traité/)
-  expect(source).toMatch(/Optimiser/)
+  expect(source).toMatch(/Recalculer/)
+  expect(source).not.toMatch(/>Optimiser</)
+  expect(source).toMatch(/Investiguer/)
+  expect(source).toMatch(/buildUserInvestigateTrigger/)
+  expect(readFileSync("src/lib/ai/investigationTrigger.ts", "utf8")).toMatch(/USER_INVESTIGATE/)
+  expect(source).toMatch(/resolveActionsIaView/)
+  expect(source).toMatch(/shouldStartOptimizationWorkflow/)
+  expect(source).toMatch(/createOptimizationWorkflow/)
+  expect(source).not.toMatch(/createOptimizationRun/)
   expect(source).toMatch(/listInbox\(\{ limit: 20, cursor/)
   expect(source).toMatch(/nextInboxSelection/)
   expect(source).toMatch(/setSelectedId\(\(current\) => nextInboxSelection/)
@@ -141,20 +163,24 @@ it("Actions IA decisions do not start investigations; only discussion posts gene
   expect(source).toMatch(/Dossier alerte indisponible/)
   expect(source).toMatch(/composeOperatorRecommendedAction/)
   expect(source).toMatch(/Options de dispatch/)
+  expect(source).toMatch(/weatherOperatorLabel/)
+  expect(source).toMatch(/FMS_DECISION_NOTE/)
   expect(source).not.toMatch(/Plan optimisé/)
+  expect(source).not.toMatch(/n’est pas requise pour optimiser/)
+  expect(source).not.toMatch(/Météo : \{run\.weatherStatus\}/)
   expect(readFileSync("src/lib/ai/optimizationDisplay.ts", "utf8")).toMatch(/Optimisation de dispatch non applicable/)
+  expect(readFileSync("src/lib/ai/optimizationDisplay.ts", "utf8")).not.toMatch(/n’est pas requise pour optimiser/)
   expect(source).toMatch(/OptimizationImpactCard/)
   expect(source.indexOf("<OptimizationPlans")).toBeLessThan(source.indexOf("<OptimizationImpactCard view={impact}"))
   expect(readFileSync("src/components/ai/OptimizationImpact.tsx", "utf8")).toMatch(/Impact estimé/)
-  expect(source).toMatch(/createOptimizationRun/)
-  expect(source).toMatch(/createOptimizationWorkflow/)
   expect(source).not.toMatch(/JSON\.stringify/)
   expect(source).not.toMatch(/Ouvrir Alertes IA/)
   expect(source).not.toMatch(/Retour aux alertes/)
   expect(source).not.toMatch(/saveDecision\("RESOLVED"\)/)
   expect(source).not.toMatch(/aiApi\.create\(/)
-  expect(source).not.toMatch(/\.start\(/)
+  expect(source).toMatch(/void start\(/)
   expect(source).not.toMatch(/generate_reply: true[\s\S]{0,80}listInbox/)
+  expect(source.match(/FMS_DECISION_NOTE/g)?.length).toBe(2)
 })
 
 it("Alertes IA does not keep a fake Pourquoi scroll control", () => {

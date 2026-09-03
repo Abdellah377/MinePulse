@@ -169,6 +169,7 @@ def _patch_common(monkeypatch, *, engines=None, persist=None, fallback=None):
     monkeypatch.setattr("app.ai.optimization.workflow.get_site_alert_or_404", lambda *_a, **_k: _alert())
     monkeypatch.setattr("app.ai.optimization.workflow.eligibility_for_alert", lambda *_a, **_k: "OPTIMIZABLE")
     monkeypatch.setattr("app.ai.optimization.workflow.build_trusted_optimization_input", lambda *_a, **_k: _trusted())
+    monkeypatch.setattr("app.ai.optimization.workflow.find_investigations", lambda *_a, **_k: [])
     monkeypatch.setattr(
         "app.ai.optimization.workflow.get_weather_context",
         lambda *_a, **_k: SimpleNamespace(status=SimpleNamespace(value="UNAVAILABLE"), unavailableReason="test", current=None),
@@ -241,3 +242,25 @@ def test_workflow_planner_payload_has_no_numeric_facts(monkeypatch):
     create_optimization_workflow(MagicMock(), _ctx(), "alert-42", provider=provider)
     assert provider.plan_calls
     assert payload_contains_forbidden_numeric_facts(provider.plan_calls[0]) is False
+
+
+def test_confirmed_loader_rca_from_investigation_still_hard_excludes(monkeypatch):
+    from app.db.enums import EquipmentType
+
+    _engine_calls, captured = _patch_common(monkeypatch)
+    row = SimpleNamespace(
+        conclusion={"diagnosis_status": "CONFIRMED", "reliable_root_cause": True, "supported_hypothesis_ids": ["h-1"]},
+        recommendation={"target_equipment_id": 10},
+        equipment_id=10,
+    )
+    monkeypatch.setattr("app.ai.optimization.workflow.find_investigations", lambda *_a, **_k: [row])
+
+    def trusted(*_a, **_k):
+        payload = _trusted()
+        payload.loaders[0].type = EquipmentType.LOADER
+        return payload
+
+    monkeypatch.setattr("app.ai.optimization.workflow.build_trusted_optimization_input", trusted)
+    payload = create_optimization_workflow(MagicMock(), _ctx(), "alert-42", provider=FakeOptProvider())
+    assert captured["snapshot"]["workflow"]["rcaGate"]["hardExcludeLoaderIds"] == [10]
+    assert all(item["loaderId"] != 10 for item in payload["candidates"])

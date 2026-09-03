@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.ai.lifecycle import investigation_gate
+from app.ai.persistence import find_investigations
 from app.ai.llm.provider import LLMProvider, LLMProviderError, create_llm_provider
 from app.ai.optimization.planner import planner_payload_from_facts, sanitize_planner_decision
 from app.ai.optimization.reviewer import sanitize_review
@@ -111,8 +112,6 @@ def _rca_from_investigation(session: Session, ctx: OperationalContext, alert: An
         equipment_type=None,
     )
     try:
-        from app.optimization.compose import compose_operator_recommended_action
-
         rows = find_investigations(
             session,
             site_id=ctx.site_id,
@@ -143,8 +142,6 @@ def _rca_from_investigation(session: Session, ctx: OperationalContext, alert: An
 
 def _investigation_recommendation_text(session: Session, ctx: OperationalContext, alert: Any) -> str | None:
     try:
-        from app.ai.persistence import find_investigations
-
         rows = find_investigations(
             session,
             site_id=ctx.site_id,
@@ -453,6 +450,7 @@ def _run_orchestrated(
             operator_summary=operator_summary,
             recommended=next((row for row in stamped if row.get("candidateId") == recommended), None),
             investigation_description=_investigation_recommendation_text(session, ctx, alert),
+            workflow_status=workflow_status.value,
         ),
         "weights": dict(DEFAULT_WEIGHTS),
     }

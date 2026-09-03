@@ -5,6 +5,7 @@ from app.optimization.eligibility import NOT_APPLICABLE, OPTIMIZABLE, eligibilit
 from app.optimization.solver import (
     DEFAULT_WEIGHTS,
     candidate_loader_ids,
+    explain_run,
     generate_candidates,
     score_candidate,
 )
@@ -34,6 +35,19 @@ def test_score_does_not_treat_null_as_zero():
     assert score_candidate(None, 4.0, DEFAULT_WEIGHTS) is None
     assert score_candidate(3.0, None, DEFAULT_WEIGHTS) is None
     assert score_candidate(3.0, 4.0, DEFAULT_WEIGHTS) == 7.0
+
+
+def test_weather_error_does_not_fail_or_score_the_optimizer():
+    explanation = explain_run(
+        outcome="FEASIBLE",
+        eligibility="OPTIMIZABLE",
+        candidates=[{"candidateId": "c-1", "travelMinutes": 3.0, "waitMinutes": 2.0, "score": 5.0}],
+        weights=dict(DEFAULT_WEIGHTS),
+        weather_status="ERROR",
+    )
+    assert explanation["weatherScored"] is False
+    assert explanation["outcome"] == "FEASIBLE"
+    assert explanation["weatherStatus"] == "ERROR"
 
 
 def test_incomplete_metrics_rank_after_scored_candidates():

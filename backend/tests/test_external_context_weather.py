@@ -419,3 +419,15 @@ def test_create_provider_none_when_unset():
     assert create_weather_provider(_settings(weather_provider=None)) is None
     assert create_weather_provider(_settings(weather_provider="none")) is None
 
+
+def test_openmeteo_aliases_are_supported_and_unknown_names_are_unsupported():
+    assert create_weather_provider(_settings(weather_provider="openmeteo")) is not None
+    assert create_weather_provider(_settings(weather_provider="open-meteo")) is not None
+    assert create_weather_provider(_settings(weather_provider="open_meteo")) is not None
+    try:
+        create_weather_provider(_settings(weather_provider="not-a-provider"))
+    except WeatherProviderError as exc:
+        assert exc.category == "unsupported_provider"
+    else:
+        raise AssertionError("expected unsupported_provider")
+

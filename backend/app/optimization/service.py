@@ -111,7 +111,7 @@ def create_optimization_run(
             snapshot["workflow"]["operatorRecommendedAction"] = compose_operator_recommended_action(
                 eligibility=eligibility,
                 outcome=outcome,
-                operator_summary=explanation.get("why"),
+                operator_summary=None,
                 recommended=recommended,
                 investigation_description=None,
             )

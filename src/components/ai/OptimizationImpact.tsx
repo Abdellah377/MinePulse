@@ -52,12 +52,12 @@ function MetricTile({ row, compact = false }: { row: ImpactPreviewRow; compact?:
       {hasBeforeAfter ? (
         <>
           <p className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5 text-[12px]">
-            <span className="tabular-nums text-muted">{formatImpactValue(row.before, unit)}</span>
+            <span className="tabular-nums text-muted">Avant {formatImpactValue(row.before, unit)}</span>
             <span className="text-muted-2" aria-hidden="true">
               →
             </span>
             <span className={cn("tabular-nums font-semibold text-foreground", compact ? "text-[13px]" : "text-[15px]")}>
-              {formatImpactValue(row.after, unit)}
+              Après {formatImpactValue(row.after, unit)}
             </span>
           </p>
           {tone !== "neutral" && (

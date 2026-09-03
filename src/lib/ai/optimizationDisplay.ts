@@ -1,12 +1,21 @@
 import type { OptimizationCandidate } from "@/lib/api/types/optimization"
+import {
+  FMS_DECISION_NOTE,
+  INSUFFICIENT_DATA_ACTION_COPY,
+  NO_CHANGE_ACTION_COPY,
+  NO_FEASIBLE_ACTION_COPY,
+} from "./actionsIaView"
+
+export { FMS_DECISION_NOTE, INSUFFICIENT_DATA_ACTION_COPY, NO_CHANGE_ACTION_COPY, NO_FEASIBLE_ACTION_COPY }
 
 export const VISIBLE_OPTIMIZATION_PLAN_COUNT = 3
+
+export const REVIEW_UNAVAILABLE_COPY = "Résultats calculés — revue IA indisponible."
 
 export const NO_CHANGE_OPERATOR_COPY =
   "Aucune modification recommandée — le plan actuel reste le meilleur parmi les options évaluées."
 
-export const INVESTIGATION_UNAVAILABLE_COPY =
-  "Recommandation non évaluée ou indisponible. L’investigation n’est pas requise pour optimiser le dispatch."
+export const DEFAULT_OPTIMIZER_WEIGHTS = { w_travel: 1, w_wait: 1 }
 
 export const IMPACT_METRIC_LABEL = {
   waitMinutes: "Attente",
@@ -261,10 +270,47 @@ export function planCandidateLabel(
   return `Alternative ${alternativeIndex}`
 }
 
+export function isScoreEquationText(text: string | null | undefined): boolean {
+  if (!text) return false
+  return /Score\s*=/.test(text) || text.includes("w_travel") || text.includes("× travel")
+}
+
+export function weatherOperatorLabel(status?: string | null): "Disponible" | "Indisponible" {
+  return status === "AVAILABLE" ? "Disponible" : "Indisponible"
+}
+
+export function operationalReassignmentLine(
+  recommended: Pick<OptimizationCandidate, "truckCode" | "loaderCode" | "destZoneCode"> | null | undefined,
+): string | null {
+  if (!recommended?.loaderCode) return null
+  const dest = recommended.destZoneCode ?? "destination actuelle"
+  if (recommended.truckCode) return `Réaffecter ${recommended.truckCode} vers ${recommended.loaderCode} → ${dest}.`
+  return `Réaffecter vers ${recommended.loaderCode} → ${dest}.`
+}
+
+export function technicalOptimizationDetails(run: {
+  weights?: Record<string, number> | null
+  weatherStatus?: string | null
+  candidates?: OptimizationCandidate[] | null
+  recommendedCandidateId?: string | null
+  displayedCandidateIds?: string[] | null
+}): { objectif: string; calcul: string; weather: string } {
+  const weights = { ...DEFAULT_OPTIMIZER_WEIGHTS, ...(run.weights ?? {}) }
+  const recId = run.displayedCandidateIds?.[0] ?? run.recommendedCandidateId
+  const recommended = run.candidates?.find((row) => row.candidateId === recId)
+  const score = recommended?.score
+  return {
+    objectif: score == null ? "Objectif : Non disponible" : `Objectif : ${score}`,
+    calcul: `Calcul : ${weights.w_travel} × trajet + ${weights.w_wait} × attente`,
+    weather: `Météo : ${weatherOperatorLabel(run.weatherStatus)}`,
+  }
+}
+
 export function composeOperatorRecommendedAction(input: {
   run?: {
     eligibility?: string | null
     outcome?: string | null
+    workflowStatus?: string | null
     operatorSummary?: string | null
     operatorRecommendedAction?: { text: string | null; source: string | null } | null
     recommendedCandidateId?: string | null
@@ -274,27 +320,34 @@ export function composeOperatorRecommendedAction(input: {
   } | null
   investigationDescription?: string | null
 }): { text: string; source: "optimizer" | "investigation" } | null {
-  const backend = input.run?.operatorRecommendedAction
-  if (backend?.text) {
-    const source = backend.source === "investigation" ? "investigation" : "optimizer"
-    return { text: backend.text, source }
-  }
   const run = input.run
   const recId = run?.displayedCandidateIds?.[0] ?? run?.recommendedCandidateId
   const recommended = run?.candidates?.find((row) => row.candidateId === recId) ?? null
   const eligibility = run?.eligibility
   const outcome = run?.outcome
-  if (eligibility !== "NOT_APPLICABLE" && outcome === "FEASIBLE") {
-    const summary = run?.operatorSummary?.trim() || run?.explanation?.why?.trim()
-    if (summary) return { text: summary, source: "optimizer" }
-    if (recommended?.loaderCode) {
-      return {
-        text: `Réaffecter vers ${recommended.loaderCode} → ${recommended.destZoneCode ?? "destination actuelle"}.`,
-        source: "optimizer",
-      }
-    }
-  }
   const investigation = input.investigationDescription?.trim()
+  if (eligibility === "NOT_APPLICABLE") {
+    if (investigation) return { text: investigation, source: "investigation" }
+    const backend = run?.operatorRecommendedAction
+    if (backend?.text && backend.source === "investigation") return { text: backend.text, source: "investigation" }
+    return null
+  }
+  if (run?.workflowStatus === "NO_CHANGE_RECOMMENDED" || (outcome === "FEASIBLE" && recommended?.isCurrent)) {
+    return { text: NO_CHANGE_ACTION_COPY, source: "optimizer" }
+  }
+  if (outcome === "NO_FEASIBLE_PLAN") return { text: NO_FEASIBLE_ACTION_COPY, source: "optimizer" }
+  if (outcome === "INSUFFICIENT_DATA") return { text: INSUFFICIENT_DATA_ACTION_COPY, source: "optimizer" }
+  if (outcome === "FEASIBLE") {
+    const plan = operationalReassignmentLine(recommended)
+    if (plan) return { text: plan, source: "optimizer" }
+    const backendText = run?.operatorRecommendedAction?.text?.trim()
+    if (backendText && !isScoreEquationText(backendText)) {
+      const source = run?.operatorRecommendedAction?.source === "investigation" ? "investigation" : "optimizer"
+      return { text: backendText, source }
+    }
+    const summary = run?.operatorSummary?.trim() || run?.explanation?.why?.trim()
+    if (summary && !isScoreEquationText(summary)) return { text: summary, source: "optimizer" }
+  }
   if (investigation) return { text: investigation, source: "investigation" }
   return null
 }

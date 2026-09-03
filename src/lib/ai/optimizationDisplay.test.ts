@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import type { OptimizationCandidate } from "@/lib/api/types/optimization"
-import { visibleOptimizationPlans, optimizationImpactPreview, optimizerOperatorStatus, impactMetricTone, impactDelta, formatImpactValue, compactPlanImpact, splitImpactRows, classifyOptimizationImpact, planCandidateLabel, composeOperatorRecommendedAction } from "./optimizationDisplay"
+import { visibleOptimizationPlans, optimizationImpactPreview, optimizerOperatorStatus, impactMetricTone, impactDelta, formatImpactValue, compactPlanImpact, splitImpactRows, classifyOptimizationImpact, planCandidateLabel, composeOperatorRecommendedAction, technicalOptimizationDetails, weatherOperatorLabel } from "./optimizationDisplay"
+import { FMS_DECISION_NOTE, INSUFFICIENT_DATA_ACTION_COPY, NO_CHANGE_ACTION_COPY, NO_FEASIBLE_ACTION_COPY } from "./actionsIaView"
 
 const candidate = (id: string): OptimizationCandidate => ({
   candidateId: id,
@@ -241,5 +242,68 @@ describe("composeOperatorRecommendedAction", () => {
       investigationDescription: "Isoler EXC-002.",
     })
     expect(action).toEqual({ text: "Isoler EXC-002.", source: "investigation" })
+  })
+
+  it("builds a feasible action from truck, loader, and destination — never the score equation", () => {
+    const rec = {
+      ...candidate("alt"),
+      truckCode: "TRK-011",
+      loaderCode: "LDR-001",
+      destZoneCode: "DUMP_N",
+    }
+    const action = composeOperatorRecommendedAction({
+      run: {
+        eligibility: "OPTIMIZABLE",
+        outcome: "FEASIBLE",
+        operatorSummary: "Score = 1 × travel (8 min) + 1 × attente (4 min). Météo affichée, non notée. Acceptation ≠ application FMS.",
+        explanation: { why: "Score = 1 × travel (8 min) + 1 × attente (4 min)." },
+        operatorRecommendedAction: { text: "Score = 1 × travel (8 min) + 1 × attente (4 min).", source: "optimizer" },
+        recommendedCandidateId: "alt",
+        candidates: [rec],
+      },
+      investigationDescription: "Vérifier la file.",
+    })
+    expect(action).toEqual({ text: "Réaffecter TRK-011 vers LDR-001 → DUMP_N.", source: "optimizer" })
+    expect(action?.text).not.toContain("Score =")
+    expect(action?.text).not.toContain("FMS")
+  })
+
+  it("uses truthful no-change / no-feasible / insufficient copy without inventing a reassignment", () => {
+    expect(
+      composeOperatorRecommendedAction({
+        run: { eligibility: "OPTIMIZABLE", outcome: "FEASIBLE", workflowStatus: "NO_CHANGE_RECOMMENDED" },
+      })?.text,
+    ).toBe(NO_CHANGE_ACTION_COPY)
+    expect(
+      composeOperatorRecommendedAction({
+        run: { eligibility: "OPTIMIZABLE", outcome: "NO_FEASIBLE_PLAN" },
+        investigationDescription: "Inventer un reroutage.",
+      }),
+    ).toEqual({ text: NO_FEASIBLE_ACTION_COPY, source: "optimizer" })
+    expect(
+      composeOperatorRecommendedAction({
+        run: { eligibility: "OPTIMIZABLE", outcome: "INSUFFICIENT_DATA" },
+      }),
+    ).toEqual({ text: INSUFFICIENT_DATA_ACTION_COPY, source: "optimizer" })
+  })
+})
+
+describe("technicalOptimizationDetails and weather label", () => {
+  it("keeps the score equation in technical details only and never surfaces ERROR", () => {
+    const rec = { ...candidate("alt"), score: 12.4 }
+    const details = technicalOptimizationDetails({
+      weights: { w_travel: 1, w_wait: 1 },
+      weatherStatus: "ERROR",
+      recommendedCandidateId: "alt",
+      candidates: [rec],
+    })
+    expect(details.objectif).toBe("Objectif : 12.4")
+    expect(details.calcul).toBe("Calcul : 1 × trajet + 1 × attente")
+    expect(details.weather).toBe("Météo : Indisponible")
+    expect(details.weather).not.toContain("ERROR")
+    expect(weatherOperatorLabel("AVAILABLE")).toBe("Disponible")
+    expect(weatherOperatorLabel("UNAVAILABLE")).toBe("Indisponible")
+    expect(weatherOperatorLabel("ERROR")).toBe("Indisponible")
+    expect(FMS_DECISION_NOTE).toContain("Aucune commande opérationnelle")
   })
 })

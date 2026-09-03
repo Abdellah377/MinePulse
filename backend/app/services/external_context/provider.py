@@ -230,6 +230,6 @@ def create_weather_provider(settings: Settings | None = None, *, client: httpx.C
     name = (configured.weather_provider or "").strip().lower()
     if not name or name in {"none", "off", "disabled"}:
         return None
-    if name != "openmeteo":
+    if name not in {"openmeteo", "open-meteo", "open_meteo"}:
         raise WeatherProviderError("unsupported_provider", f"Unsupported WEATHER_PROVIDER: {name}")
     return OpenMeteoWeatherProvider(timeout_seconds=configured.weather_timeout_seconds, client=client)
