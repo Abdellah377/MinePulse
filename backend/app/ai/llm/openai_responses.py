@@ -25,6 +25,8 @@ from app.ai.llm.provider import (
     _RECOMMENDATION_PROMPT,
     _TRANSIENT_PROVIDER_ERRORS,
     classify_provider_exception,
+    commit_structured_attempt,
+    budget_allows_attempt,
     LLMProviderError,
     ProviderConfigurationError,
     ProviderRateLimitError,
@@ -48,9 +50,9 @@ class OpenAILLMProvider:
         *,
         api_key: str,
         model: str,
-        timeout_seconds: float = 45,
-        budget_seconds: float = 150,
-        max_attempts: int = 3,
+        timeout_seconds: float = 15,
+        budget_seconds: float = 30,
+        max_attempts: int = 2,
     ):
         if not api_key:
             raise ProviderConfigurationError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
@@ -71,13 +73,16 @@ class OpenAILLMProvider:
     def _structured(self, schema: type[_T], system_prompt: str, payload: dict) -> _T:
         last_error: LLMProviderError | None = None
         attempts = max(1, int(getattr(self, "_max_attempts", 1)))
+        attempt_log: list[dict] = []
         for attempt in range(1, attempts + 1):
             self.last_attempt_count = attempt
-            if self._remaining_seconds <= 0:
+            if not budget_allows_attempt(self._remaining_seconds, self._timeout_seconds):
                 raise ProviderTimeoutError("Investigation provider budget exceeded")
             started = monotonic()
             response = None
             parsed = None
+            succeeded = False
+            mapped_error: LLMProviderError | None = None
             try:
                 response = self._client.responses.parse(
                     model=self.model_name,
@@ -87,7 +92,7 @@ class OpenAILLMProvider:
                     ],
                     text_format=schema,
                     store=False,
-                    timeout=min(self._timeout_seconds, self._remaining_seconds),
+                    timeout=self._timeout_seconds,
                 )
                 parsed = response.output_parsed
             except Exception as exc:
@@ -105,6 +110,7 @@ class OpenAILLMProvider:
                     attempts,
                 )
                 last_error = mapped
+                mapped_error = mapped
                 retryable = isinstance(mapped, _TRANSIENT_PROVIDER_ERRORS) and attempt < attempts
                 if not retryable:
                     raise mapped from exc
@@ -119,23 +125,34 @@ class OpenAILLMProvider:
                     delay,
                 )
                 llm_provider._sleep(delay)
-                continue
             finally:
                 elapsed = monotonic() - started
                 self._remaining_seconds -= elapsed
                 usage = getattr(response, "usage", None) if response is not None else None
-                self.last_call_metrics = {
-                    "provider": self.provider_name,
-                    "model": self.model_name,
-                    "schema": schema.__name__,
-                    "duration_ms": int(elapsed * 1000),
-                    "input_tokens": getattr(usage, "input_tokens", None),
-                    "output_tokens": getattr(usage, "output_tokens", None),
-                    "total_tokens": getattr(usage, "total_tokens", None),
-                    "attempt": attempt,
-                }
-            if parsed is None:
+                metrics = commit_structured_attempt(
+                    attempt_log,
+                    provider_name=self.provider_name,
+                    model_name=self.model_name,
+                    schema_name=schema.__name__,
+                    attempt=attempt,
+                    started=started,
+                    remaining_seconds=self._remaining_seconds,
+                    payload=payload,
+                    exc=mapped_error,
+                    ok=succeeded or parsed is not None,
+                )
+                metrics.update(
+                    {
+                        "input_tokens": getattr(usage, "input_tokens", None),
+                        "output_tokens": getattr(usage, "output_tokens", None),
+                        "total_tokens": getattr(usage, "total_tokens", None),
+                    }
+                )
+                self.last_call_metrics = metrics
+            if parsed is None and mapped_error is None:
                 raise ProviderResponseError("OpenAI returned no structured output")
+            if parsed is None:
+                continue
             try:
                 return schema.model_validate(parsed)
             except Exception as exc:

@@ -71,6 +71,56 @@ describe("investigation lifecycle", () => {
     expect(useInvestigationStore.getState().entries[result.investigation_id].error).toContain("introuvable")
   })
 
+  it("reuses a completed investigation without a second POST", async () => {
+    vi.mocked(aiApi.find).mockResolvedValue([])
+    vi.mocked(aiApi.create).mockResolvedValue(result)
+    await useInvestigationStore.getState().start(trigger)
+    await useInvestigationStore.getState().start(trigger)
+    expect(aiApi.create).toHaveBeenCalledTimes(1)
+  })
+
+  it("lookup does not clobber an in-flight start with absent", async () => {
+    let releaseFind!: (value: typeof result[]) => void
+    let releaseCreate!: (value: typeof result) => void
+    let findCalls = 0
+    vi.mocked(aiApi.find).mockImplementation(() => {
+      findCalls += 1
+      if (findCalls === 1) return new Promise((resolve) => { releaseFind = resolve })
+      return Promise.resolve([])
+    })
+    vi.mocked(aiApi.create).mockImplementation(() => new Promise((resolve) => { releaseCreate = resolve }))
+    const lookupP = useInvestigationStore.getState().lookup(scope)
+    await vi.waitFor(() => expect(useInvestigationStore.getState().entries[key].phase).toBe("loading"))
+    const startP = useInvestigationStore.getState().start(trigger)
+    await vi.waitFor(() => expect(useInvestigationStore.getState().entries[key].phase).toBe("running"))
+    releaseFind([])
+    await lookupP
+    expect(useInvestigationStore.getState().entries[key].phase).toBe("running")
+    expect(aiApi.create).toHaveBeenCalledTimes(1)
+    releaseCreate(result)
+    await startP
+    expect(useInvestigationStore.getState().entries[key].result).toEqual(result)
+    expect(useInvestigationStore.getState().entries[key].phase).toBe("ready")
+  })
+
+  it("lookup network error does not clobber an in-flight start", async () => {
+    let rejectFind!: (error: ApiNetworkError) => void
+    let releaseCreate!: (value: typeof result) => void
+    vi.mocked(aiApi.find).mockImplementationOnce(() => new Promise((_, reject) => { rejectFind = reject }))
+    vi.mocked(aiApi.find).mockResolvedValue([])
+    vi.mocked(aiApi.create).mockImplementation(() => new Promise((resolve) => { releaseCreate = resolve }))
+    const lookupP = useInvestigationStore.getState().lookup(scope)
+    await vi.waitFor(() => expect(useInvestigationStore.getState().entries[key].phase).toBe("loading"))
+    const startP = useInvestigationStore.getState().start(trigger)
+    await vi.waitFor(() => expect(useInvestigationStore.getState().entries[key].phase).toBe("running"))
+    rejectFind(new ApiNetworkError())
+    await lookupP
+    expect(useInvestigationStore.getState().entries[key].phase).toBe("running")
+    releaseCreate(result)
+    await startP
+    expect(useInvestigationStore.getState().entries[key].phase).toBe("ready")
+  })
+
   it("shows running until POST settles and cannot launch a second investigation", async () => {
     vi.mocked(aiApi.find).mockResolvedValue([])
     let finish!: (value: typeof result) => void

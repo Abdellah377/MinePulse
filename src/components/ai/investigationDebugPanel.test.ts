@@ -26,7 +26,7 @@ const trace: InvestigationDebugTrace = {
   validation_checks: [{ check_id: "DIAGNOSIS_CANNOT_CONCLUDE", passed: false, detail: "diagnosis.can_conclude is required for probable_eligible" }],
   coverage: { initial_count: 1, additional_requested: 0, available: 1, unavailable: 0, contradictory: 0, iterations: 1, max_iterations: 3, families: ["✓ shift_production"] },
   usage: { model: "mock-structured", request_count: 2, input_tokens: null, output_tokens: null, total_tokens: null },
-  wall_durations_ms: { total: 40, llm: 20, evidence: 5 },
+  wall_durations_ms: { total: 40, llm: 20, evidence: 5, persist: 0, nodes: {} },
   trigger: { trigger_type: "PRODUCTION_DEVIATION" },
   recommendation: { action_type: "CONTINUE_MONITORING" },
   error: { stage: "analyze", error_type: "ProviderTimeoutError", message: "Investigation failed at analyze. Consult server logs." },

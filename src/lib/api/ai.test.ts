@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { ApiError, ApiNetworkError, ApiTimeoutError } from "./client"
-import { aiApi } from "./ai"
+import { INVESTIGATION_CREATE_TIMEOUT_MS, aiApi } from "./ai"
 import { result, trigger } from "@/test/aiFixtures"
 vi.mock("@/lib/api/client", async (original) => ({ ...await original<typeof import("./client")>(), useApiMode: true }))
 beforeEach(() => vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => result })))
@@ -31,7 +31,8 @@ it("distinguishes unreachable backend from the synchronous investigation timeout
   }))
   const pending = aiApi.create(trigger)
   const assertion = expect(pending).rejects.toBeInstanceOf(ApiTimeoutError)
-  await vi.advanceTimersByTimeAsync(179_999)
+  expect(INVESTIGATION_CREATE_TIMEOUT_MS).toBe(45_000)
+  await vi.advanceTimersByTimeAsync(INVESTIGATION_CREATE_TIMEOUT_MS - 1)
   expect(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(false)
   await vi.advanceTimersByTimeAsync(1)
   await assertion

@@ -25,6 +25,8 @@ from app.ai.llm.provider import (
     _RECOMMENDATION_PROMPT,
     _TRANSIENT_PROVIDER_ERRORS,
     classify_provider_exception,
+    commit_structured_attempt,
+    budget_allows_attempt,
     LLMProviderError,
     ProviderConfigurationError,
     ProviderRateLimitError,
@@ -51,8 +53,8 @@ class ChatCompletionsLLMProvider:
         api_key: str,
         model: str,
         base_url: str,
-        timeout_seconds: float = 45,
-        budget_seconds: float = 150,
+        timeout_seconds: float = 15,
+        budget_seconds: float = 30,
         max_attempts: int = 2,
     ):
         if not api_key:
@@ -77,15 +79,19 @@ class ChatCompletionsLLMProvider:
     def _structured(self, schema: type[_T], system_prompt: str, payload: dict) -> _T:
         last_error: LLMProviderError | None = None
         attempts = max(1, int(getattr(self, "_max_attempts", 1)))
+        attempt_log: list[dict] = []
         for attempt in range(1, attempts + 1):
             self.last_attempt_count = attempt
-            if self._remaining_seconds <= 0:
+            if not budget_allows_attempt(self._remaining_seconds, self._timeout_seconds):
                 raise ProviderTimeoutError("Investigation provider budget exceeded")
             started = monotonic()
             response = None
             parsed: Any = None
+            succeeded = False
+            mapped_error: LLMProviderError | None = None
             try:
                 parsed, response = self._parse_chat(schema, system_prompt, payload)
+                succeeded = True
             except LLMProviderError as exc:
                 mapped = exc
                 logger.error(
@@ -99,6 +105,7 @@ class ChatCompletionsLLMProvider:
                     attempts,
                 )
                 last_error = mapped
+                mapped_error = mapped
                 retryable = isinstance(mapped, _TRANSIENT_PROVIDER_ERRORS) and attempt < attempts
                 if isinstance(mapped, ProviderRateLimitError):
                     retryable = retryable and attempt == 1
@@ -113,7 +120,6 @@ class ChatCompletionsLLMProvider:
                     delay,
                 )
                 llm_provider._sleep(delay)
-                continue
             except Exception as exc:
                 mapped = classify_provider_exception(exc)
                 logger.error(
@@ -129,6 +135,7 @@ class ChatCompletionsLLMProvider:
                     attempts,
                 )
                 last_error = mapped
+                mapped_error = mapped
                 retryable = isinstance(mapped, _TRANSIENT_PROVIDER_ERRORS) and attempt < attempts
                 if isinstance(mapped, ProviderRateLimitError):
                     retryable = retryable and attempt == 1
@@ -143,22 +150,32 @@ class ChatCompletionsLLMProvider:
                     delay,
                 )
                 llm_provider._sleep(delay)
-                continue
             finally:
                 elapsed = monotonic() - started
                 self._remaining_seconds -= elapsed
                 usage = getattr(response, "usage", None) if response is not None else None
-                self.last_call_metrics = {
-                    "provider": self.provider_name,
-                    "model": self.model_name,
-                    "schema": schema.__name__,
-                    "duration_ms": int(elapsed * 1000),
-                    "input_tokens": getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", None),
-                    "output_tokens": getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", None),
-                    "total_tokens": getattr(usage, "total_tokens", None),
-                    "attempt": attempt,
-                }
-            return parsed
+                metrics = commit_structured_attempt(
+                    attempt_log,
+                    provider_name=self.provider_name,
+                    model_name=self.model_name,
+                    schema_name=schema.__name__,
+                    attempt=attempt,
+                    started=started,
+                    remaining_seconds=self._remaining_seconds,
+                    payload=payload,
+                    exc=mapped_error,
+                    ok=succeeded,
+                )
+                metrics.update(
+                    {
+                        "input_tokens": getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", None),
+                        "output_tokens": getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", None),
+                        "total_tokens": getattr(usage, "total_tokens", None),
+                    }
+                )
+                self.last_call_metrics = metrics
+            if succeeded:
+                return parsed
         raise last_error or LLMProviderError("AI provider structured response failed")
 
     def _parse_chat(self, schema: type[_T], system_prompt: str, payload: dict) -> tuple[_T, Any]:
@@ -166,7 +183,7 @@ class ChatCompletionsLLMProvider:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
-        timeout = min(self._timeout_seconds, self._remaining_seconds)
+        timeout = self._timeout_seconds
         parse = getattr(getattr(self._client.chat, "completions", None), "parse", None)
         if callable(parse):
             response = parse(

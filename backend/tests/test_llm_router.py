@@ -115,7 +115,7 @@ class FakeLeaf:
 
 
 def _router(*leaves, budget=150):
-    return ProviderRouter(list(leaves), budget_seconds=budget, timeout_seconds=45, max_leaf_attempts=2)
+    return ProviderRouter(list(leaves), budget_seconds=budget, timeout_seconds=12, max_leaf_attempts=2)
 
 
 def test_groq_success_does_not_call_fallbacks():
@@ -200,7 +200,7 @@ def test_chat_adapter_malformed_json_is_response_error():
     leaf = ChatCompletionsLLMProvider.__new__(ChatCompletionsLLMProvider)
     leaf.provider_name = "groq"
     leaf.model_name = "test-model"
-    leaf._timeout_seconds = 45
+    leaf._timeout_seconds = 12
     leaf._remaining_seconds = 30
     leaf._max_attempts = 1
     response = SimpleNamespace(
@@ -319,3 +319,104 @@ def test_create_llm_provider_returns_router_for_openai_only(monkeypatch):
     assert isinstance(router, ProviderRouter)
     assert router.provider_name == "openai"
     assert isinstance(router._providers[0], OpenAILLMProvider)
+
+
+def test_interactive_deadline_defaults():
+    from app.config import Settings
+
+    fields = Settings.model_fields
+    assert fields["ai_provider_timeout_seconds"].default == 15
+    assert fields["ai_investigation_llm_budget_seconds"].default == 30
+    assert fields["ai_max_investigation_iterations"].default == 2
+    assert fields["ai_provider_max_attempts"].default == 2
+
+
+def test_provider_order_uses_one_attempt_then_failover(monkeypatch):
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", MagicMock())
+    router = create_llm_provider(
+        _settings(
+            ai_provider_order="groq,gemini",
+            groq_api_key="test-only",
+            groq_model="test-model",
+            gemini_api_key="test-only",
+            gemini_model="test-model",
+        )
+    )
+    assert isinstance(router, ProviderRouter)
+    assert router._max_leaf_attempts == 1
+
+
+def test_remaining_budget_below_timeout_skips_attempt():
+    groq = FakeLeaf("groq", diagnose=_diagnosis())
+    gemini = FakeLeaf("gemini", diagnose=_diagnosis())
+    router = ProviderRouter([groq, gemini], budget_seconds=5, timeout_seconds=12, max_leaf_attempts=1)
+    with pytest.raises(ProviderTimeoutError, match="budget exceeded"):
+        router.diagnose({})
+    assert groq.invocations == 0
+    assert gemini.invocations == 0
+    attempts = (router.last_call_metrics or {}).get("attempts") or []
+    assert any(item.get("failure_category") == "budget_too_small" for item in attempts)
+
+
+def test_shared_deadline_stops_runaway_failover():
+    class CostlyTimeout(FakeLeaf):
+        def _run(self, method, payload):
+            self.invocations += 1
+            self.calls.append((method, payload))
+            self._remaining_seconds -= 12
+            self.last_attempt_count = 1
+            self.last_call_metrics = {
+                "provider": self.provider_name,
+                "model": self.model_name,
+                "duration_ms": 12000,
+                "attempts": [
+                    {
+                        "provider": self.provider_name,
+                        "model": self.model_name,
+                        "attempt": 1,
+                        "duration_ms": 12000,
+                        "http_status_class": "timeout",
+                        "failure_category": "ProviderTimeoutError",
+                        "parse_retry": False,
+                        "prompt_chars": 0,
+                        "evidence_count": 0,
+                        "remaining_budget_ms": int(self._remaining_seconds * 1000),
+                    }
+                ],
+            }
+            raise ProviderTimeoutError("timeout")
+
+    groq = CostlyTimeout("groq")
+    gemini = CostlyTimeout("gemini")
+    openai = CostlyTimeout("openai")
+    router = ProviderRouter([groq, gemini, openai], budget_seconds=25, timeout_seconds=12, max_leaf_attempts=1)
+    with pytest.raises(ProviderTimeoutError):
+        router.diagnose({})
+    assert groq.invocations == 1
+    assert gemini.invocations == 1
+    assert openai.invocations == 0
+
+
+def test_timeout_cooldown_skips_provider_on_later_stage():
+    from app.ai.contracts import InvestigationConclusion
+
+    conclusion = InvestigationConclusion(summary="Bounded conclusion.", confidence=ConfidenceLevel.LOW)
+    groq = FakeLeaf("groq", diagnose=ProviderTimeoutError("timeout"), build_conclusion=conclusion)
+    gemini = FakeLeaf("gemini", diagnose=_diagnosis(), build_conclusion=conclusion)
+    router = _router(groq, gemini, budget=30)
+    router.diagnose({})
+    router.build_conclusion({})
+    assert groq.invocations == 1
+    assert gemini.invocations == 2
+
+
+def test_parse_error_failsover_without_leaf_retry():
+    groq = FakeLeaf("groq", diagnose=ProviderResponseError("malformed JSON"), attempts=1)
+    gemini = FakeLeaf("gemini", diagnose=_diagnosis())
+    router = ProviderRouter([groq, gemini], budget_seconds=30, timeout_seconds=12, max_leaf_attempts=1)
+    router.diagnose({})
+    assert groq.invocations == 1
+    assert groq.last_attempt_count == 1
+    assert gemini.invocations == 1

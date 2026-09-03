@@ -25,6 +25,8 @@ from app.ai.llm.provider import (
     ProviderRateLimitError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    budget_allows_attempt,
+    http_status_class_for,
 )
 from app.config import Settings
 from app.optimization.contracts import OptimizationPlannerDecision, OptimizationReview
@@ -173,7 +175,43 @@ class ProviderRouter:
         for other in self._providers:
             other._remaining_seconds = remaining
 
-    def _record_success(self, leaf: Any, *, fallback_occurred: bool, http_attempts: int) -> None:
+    def _leaf_attempts(self, leaf: Any, exc: Exception | None = None) -> list[dict[str, Any]]:
+        metrics = dict(getattr(leaf, "last_call_metrics", None) or {})
+        raw = metrics.get("attempts")
+        if isinstance(raw, list) and raw:
+            attempts = [dict(item) for item in raw if isinstance(item, dict)]
+        else:
+            attempts = [
+                {
+                    "provider": leaf.provider_name,
+                    "model": getattr(leaf, "model_name", metrics.get("model")),
+                    "attempt": metrics.get("attempt") or getattr(leaf, "last_attempt_count", 1) or 1,
+                    "duration_ms": int(metrics.get("duration_ms") or 0),
+                    "http_status_class": "ok" if exc is None else http_status_class_for(exc),
+                    "failure_category": None if exc is None else type(exc).__name__,
+                    "parse_retry": False,
+                    "prompt_chars": metrics.get("prompt_chars") or 0,
+                    "evidence_count": metrics.get("evidence_count") or 0,
+                    "remaining_budget_ms": int(self._remaining_seconds * 1000),
+                }
+            ]
+        if exc is not None:
+            klass = http_status_class_for(exc)
+            category = type(exc).__name__
+            for item in attempts:
+                if item.get("http_status_class") in (None, "ok") and item.get("failure_category") is None:
+                    item["http_status_class"] = klass
+                    item["failure_category"] = category
+        return attempts
+
+    def _metrics_from_attempts(
+        self,
+        attempts: list[dict[str, Any]],
+        *,
+        leaf: Any,
+        fallback_occurred: bool,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         metrics = dict(getattr(leaf, "last_call_metrics", None) or {})
         metrics.update(
             {
@@ -182,9 +220,23 @@ class ProviderRouter:
                 "fallback_occurred": fallback_occurred,
                 "configured_providers": [item.provider_name for item in self._providers],
                 "final_provider": leaf.provider_name,
-                "attempt": http_attempts,
+                "attempt": len(attempts),
+                "attempts": attempts,
+                "duration_ms": sum(int(item.get("duration_ms") or 0) for item in attempts),
+                "remaining_budget_ms": int(max(0.0, self._remaining_seconds) * 1000),
+                "cooldown_skipped": any(
+                    item.get("cooldown_skipped") or item.get("failure_category") == "cooldown_skipped"
+                    for item in attempts
+                ),
             }
         )
+        if extra:
+            metrics.update(extra)
+        return metrics
+
+    def _record_success(self, leaf: Any, *, fallback_occurred: bool, attempts: list[dict[str, Any]], http_attempts: int) -> None:
+        metrics = self._metrics_from_attempts(attempts, leaf=leaf, fallback_occurred=fallback_occurred)
+        metrics["attempt"] = http_attempts
         self.last_call_metrics = metrics
         self.last_attempt_count = http_attempts
         leaf.last_call_metrics = metrics
@@ -194,12 +246,56 @@ class ProviderRouter:
         http_attempts = 0
         cap = len(self._providers) * 2
         attempted_index: int | None = None
+        logical_attempts: list[dict[str, Any]] = []
         for index, leaf in enumerate(self._providers):
             if _in_cooldown(leaf.provider_name):
                 logger.info("Skipping AI provider in cooldown provider=%s", leaf.provider_name)
+                logical_attempts.append(
+                    {
+                        "provider": leaf.provider_name,
+                        "model": getattr(leaf, "model_name", None),
+                        "attempt": 0,
+                        "duration_ms": 0,
+                        "http_status_class": "cooldown",
+                        "failure_category": "cooldown_skipped",
+                        "parse_retry": False,
+                        "prompt_chars": 0,
+                        "evidence_count": 0,
+                        "remaining_budget_ms": int(max(0.0, self._remaining_seconds) * 1000),
+                        "cooldown_skipped": True,
+                    }
+                )
                 continue
             if self._remaining_seconds <= 0:
+                if logical_attempts:
+                    self.last_call_metrics = self._metrics_from_attempts(
+                        logical_attempts,
+                        leaf=leaf,
+                        fallback_occurred=index > 0,
+                    )
                 raise last_error or ProviderTimeoutError("Investigation provider budget exceeded")
+            if not budget_allows_attempt(self._remaining_seconds, self._timeout_seconds):
+                logical_attempts.append(
+                    {
+                        "provider": leaf.provider_name,
+                        "model": getattr(leaf, "model_name", None),
+                        "attempt": 0,
+                        "duration_ms": 0,
+                        "http_status_class": "skip",
+                        "failure_category": "budget_too_small",
+                        "parse_retry": False,
+                        "prompt_chars": 0,
+                        "evidence_count": 0,
+                        "remaining_budget_ms": int(max(0.0, self._remaining_seconds) * 1000),
+                    }
+                )
+                last_error = last_error or ProviderTimeoutError("Investigation provider budget exceeded")
+                self.last_call_metrics = self._metrics_from_attempts(
+                    logical_attempts,
+                    leaf=leaf,
+                    fallback_occurred=index > 0,
+                )
+                continue
             remaining_slots = cap - http_attempts
             if remaining_slots <= 0:
                 break
@@ -215,6 +311,12 @@ class ProviderRouter:
                 http_attempts += used
                 self.last_attempt_count = http_attempts
                 last_error = exc
+                logical_attempts.extend(self._leaf_attempts(leaf, exc))
+                self.last_call_metrics = self._metrics_from_attempts(
+                    logical_attempts,
+                    leaf=leaf,
+                    fallback_occurred=index > 0,
+                )
                 logger.error(
                     "AI provider failover candidate failed provider=%s category=%s attempt_total=%s/%s",
                     leaf.provider_name,
@@ -222,18 +324,9 @@ class ProviderRouter:
                     http_attempts,
                     cap,
                 )
-                if isinstance(exc, ProviderRateLimitError):
+                if isinstance(exc, (ProviderRateLimitError, ProviderTimeoutError)):
                     _mark_cooldown(leaf.provider_name)
                 if isinstance(exc, ProviderTimeoutError) and self._remaining_seconds <= 0:
-                    self.last_call_metrics = dict(getattr(leaf, "last_call_metrics", None) or {})
-                    self.last_call_metrics.update(
-                        {
-                            "provider": leaf.provider_name,
-                            "fallback_occurred": index > 0,
-                            "configured_providers": [item.provider_name for item in self._providers],
-                            "final_provider": leaf.provider_name,
-                        }
-                    )
                     raise
                 continue
             except Exception as exc:
@@ -242,16 +335,31 @@ class ProviderRouter:
                 used = max(1, int(getattr(leaf, "last_attempt_count", 1) or 1))
                 http_attempts += used
                 last_error = mapped
+                logical_attempts.extend(self._leaf_attempts(leaf, mapped))
+                self.last_call_metrics = self._metrics_from_attempts(
+                    logical_attempts,
+                    leaf=leaf,
+                    fallback_occurred=index > 0,
+                )
                 continue
             self._sync_budget(leaf)
             used = max(1, int(getattr(leaf, "last_attempt_count", 1) or 1))
             http_attempts += used
+            logical_attempts.extend(self._leaf_attempts(leaf))
             self._record_success(
                 leaf,
                 fallback_occurred=index > 0 or attempted_index != 0,
+                attempts=logical_attempts,
                 http_attempts=http_attempts,
             )
             return result
+        if logical_attempts:
+            leaf = self._providers[-1]
+            self.last_call_metrics = self._metrics_from_attempts(
+                logical_attempts,
+                leaf=leaf,
+                fallback_occurred=True,
+            )
         raise last_error or ProviderUnavailableError("AI providers unavailable")
 
     def diagnose(self, payload: dict) -> DiagnosisResult:
@@ -281,11 +389,11 @@ def build_provider_router(settings: Settings | Any) -> ProviderRouter:
             "No AI provider configured. Set AI_PROVIDER=openai, AI_MODEL, and OPENAI_API_KEY."
         )
 
-    timeout_seconds = float(getattr(settings, "ai_provider_timeout_seconds", 45) or 45)
-    budget_seconds = float(getattr(settings, "ai_investigation_llm_budget_seconds", 150) or 150)
-    configured_attempts = int(getattr(settings, "ai_provider_max_attempts", 3) or 3)
+    timeout_seconds = float(getattr(settings, "ai_provider_timeout_seconds", 15) or 15)
+    budget_seconds = float(getattr(settings, "ai_investigation_llm_budget_seconds", 30) or 30)
+    configured_attempts = int(getattr(settings, "ai_provider_max_attempts", 2) or 2)
     multi = explicit_order or len(order) > 1
-    max_leaf_attempts = min(configured_attempts, 2) if multi else configured_attempts
+    max_leaf_attempts = 1 if multi else configured_attempts
 
     leaves: list[Any] = []
     for name in order:

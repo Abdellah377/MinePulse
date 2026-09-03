@@ -6,6 +6,8 @@ export type DebugEventType =
   | "INITIAL_EVIDENCE_GATHERED"
   | "TOOL_COMPLETED"
   | "LLM_CALL"
+  | "LLM_ATTEMPT"
+  | "NODE_TIMING"
   | "ADDITIONAL_EVIDENCE_REQUESTED"
   | "ROUTER_DECISION"
   | "HYPOTHESIS_EVALUATED"
@@ -67,6 +69,8 @@ export interface DebugDurations {
   total: number | null
   llm: number
   evidence: number
+  persist?: number
+  nodes?: Record<string, number>
 }
 
 export interface CompactConclusion {

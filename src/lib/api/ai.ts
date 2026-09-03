@@ -17,11 +17,17 @@ function requireApi() {
   if (!useApiMode) throw new Error("Investigations require API mode")
 }
 
+export const INVESTIGATION_CREATE_TIMEOUT_MS = 45_000
+
 export const aiApi = {
   create(trigger: InvestigationTriggerInput): Promise<InvestigationResult> {
     requireApi()
-    // V1 is synchronous, with bounded graph rounds. Never automatically retry POST.
-    return fetchJson("/ai/investigations", { method: "POST", body: JSON.stringify(trigger), timeoutMs: 180_000 })
+    // Must stay above backend AI_INVESTIGATION_LLM_BUDGET_SECONDS plus persist slack.
+    return fetchJson("/ai/investigations", {
+      method: "POST",
+      body: JSON.stringify(trigger),
+      timeoutMs: INVESTIGATION_CREATE_TIMEOUT_MS,
+    })
   },
   get(id: string): Promise<InvestigationResult> {
     requireApi()

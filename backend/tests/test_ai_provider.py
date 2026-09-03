@@ -65,8 +65,8 @@ def test_provider_disables_retries_and_bounds_each_call(monkeypatch):
     client = MagicMock()
     factory = MagicMock(return_value=client)
     monkeypatch.setattr(openai, "OpenAI", factory)
-    provider = OpenAILLMProvider(api_key="test-only", model="test-model", timeout_seconds=30, budget_seconds=10)
-    factory.assert_called_once_with(api_key="test-only", timeout=30, max_retries=0)
+    provider = OpenAILLMProvider(api_key="test-only", model="test-model", timeout_seconds=10, budget_seconds=10)
+    factory.assert_called_once_with(api_key="test-only", timeout=10, max_retries=0)
     client.responses.parse.return_value.output_parsed = DiagnosisResult(
         can_conclude=False, confidence="LOW", confidence_rationale="Unknown", reasoning_summary="Insufficient evidence")
     provider.diagnose({})

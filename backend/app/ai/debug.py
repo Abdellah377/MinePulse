@@ -24,7 +24,7 @@ from app.ai.state import InvestigationState
 
 logger = logging.getLogger(__name__)
 
-MAX_EVENTS = 120
+MAX_EVENTS = 200
 PREVIEW_LIMIT = 400
 _SECRET_KEY = re.compile(r"api[_-]?key|authorization|password|secret|token", re.I)
 _PROVIDER_STAGES = {"analyze", "build_conclusion", "build_recommendation"}
@@ -45,6 +45,8 @@ class DebugEventType(str, Enum):
     INITIAL_EVIDENCE_GATHERED = "INITIAL_EVIDENCE_GATHERED"
     TOOL_COMPLETED = "TOOL_COMPLETED"
     LLM_CALL = "LLM_CALL"
+    LLM_ATTEMPT = "LLM_ATTEMPT"
+    NODE_TIMING = "NODE_TIMING"
     ADDITIONAL_EVIDENCE_REQUESTED = "ADDITIONAL_EVIDENCE_REQUESTED"
     ROUTER_DECISION = "ROUTER_DECISION"
     HYPOTHESIS_EVALUATED = "HYPOTHESIS_EVALUATED"
@@ -112,6 +114,8 @@ class DebugDurations(DebugModel):
     total: int | None = None
     llm: int = 0
     evidence: int = 0
+    persist: int = 0
+    nodes: dict[str, int] = Field(default_factory=dict)
 
 
 class CompactConclusion(DebugModel):
@@ -157,6 +161,10 @@ class InvestigationDebugSink(Protocol):
 
     def add_evidence_duration(self, duration_ms: int) -> None: ...
 
+    def add_persist_duration(self, duration_ms: int) -> None: ...
+
+    def record_node_timing(self, node: str, duration_ms: int, status: str) -> None: ...
+
     def mark_initial_count(self, count: int) -> None: ...
 
     def set_proposed_conclusion(self, conclusion: InvestigationConclusion) -> None: ...
@@ -178,6 +186,12 @@ class NullDebugRecorder:
         return None
 
     def add_evidence_duration(self, duration_ms: int) -> None:
+        return None
+
+    def add_persist_duration(self, duration_ms: int) -> None:
+        return None
+
+    def record_node_timing(self, node: str, duration_ms: int, status: str) -> None:
         return None
 
     def mark_initial_count(self, count: int) -> None:
@@ -300,6 +314,8 @@ class InvestigationDebugRecorder:
         self._events: list[DebugEvent] = []
         self._llm_ms = 0
         self._evidence_ms = 0
+        self._persist_ms = 0
+        self._node_ms: dict[str, int] = {}
         self._usage = DebugUsage(model=model)
         self._proposed: CompactConclusion | None = None
         self._checks: list[ValidationCheck] = []
@@ -344,9 +360,17 @@ class InvestigationDebugRecorder:
         if not metrics:
             return
         try:
-            duration = metrics.get("duration_ms")
-            if isinstance(duration, (int, float)):
-                self._llm_ms += int(duration)
+            attempts = metrics.get("attempts")
+            if isinstance(attempts, list) and attempts:
+                self._llm_ms += sum(
+                    int(item.get("duration_ms") or 0)
+                    for item in attempts
+                    if isinstance(item, dict)
+                )
+            else:
+                duration = metrics.get("duration_ms")
+                if isinstance(duration, (int, float)):
+                    self._llm_ms += int(duration)
             self._usage.request_count += 1
             if self._usage.model is None:
                 self._usage.model = metrics.get("model")
@@ -360,6 +384,20 @@ class InvestigationDebugRecorder:
 
     def add_evidence_duration(self, duration_ms: int) -> None:
         self._evidence_ms += max(0, duration_ms)
+
+    def add_persist_duration(self, duration_ms: int) -> None:
+        self._persist_ms += max(0, duration_ms)
+
+    def record_node_timing(self, node: str, duration_ms: int, status: str) -> None:
+        elapsed = max(0, int(duration_ms))
+        self._node_ms[node] = self._node_ms.get(node, 0) + elapsed
+        self.record(
+            DebugEventType.NODE_TIMING,
+            stage=node,
+            summary=f"{node} {status} {elapsed}ms",
+            duration_ms=elapsed,
+            metadata={"node": node, "status": status},
+        )
 
     def set_proposed_conclusion(self, conclusion: InvestigationConclusion) -> None:
         self._proposed = compact_conclusion(conclusion)
@@ -441,6 +479,8 @@ class InvestigationDebugRecorder:
                     total=total_ms,
                     llm=self._llm_ms,
                     evidence=self._evidence_ms,
+                    persist=self._persist_ms,
+                    nodes=dict(self._node_ms),
                 ),
                 trigger=redact(trigger.model_dump(mode="json") if trigger is not None else {}),
                 recommendation=redact(
@@ -477,6 +517,8 @@ def routing_debug_fields(metrics: dict[str, Any] | None) -> dict[str, Any]:
         ("fallback_occurred", "fallbackOccurred"),
         ("configured_providers", "configuredProviders"),
         ("final_provider", "finalProvider"),
+        ("remaining_budget_ms", "remainingBudgetMs"),
+        ("cooldown_skipped", "cooldownSkipped"),
     )
     fields: dict[str, Any] = {}
     for source, dest in mapping:
@@ -495,3 +537,56 @@ def consume_provider_metrics(provider: Any) -> dict[str, Any] | None:
             pass
         return metrics
     return None
+
+
+def format_investigation_timeline(trace: InvestigationDebugTrace | dict[str, Any]) -> str:
+    """Compact developer timeline. Never includes prompts, keys, or chain-of-thought."""
+    data = trace if isinstance(trace, dict) else trace.model_dump(mode="json")
+    durations = data.get("wall_durations_ms") or {}
+    investigation_id = str(data.get("investigation_id") or "")
+    graph_version = data.get("graph_version") or "?"
+    lines = [
+        f"=== Investigation {investigation_id}  GRAPH {graph_version} ===",
+        (
+            f"total_ms={durations.get('total')} llm_ms={durations.get('llm')} "
+            f"evidence_ms={durations.get('evidence')} persist_ms={durations.get('persist')}"
+        ),
+        "",
+    ]
+    for event in data.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("event_type")
+        meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        duration = event.get("duration_ms")
+        if kind == "NODE_TIMING":
+            node = meta.get("node") or event.get("stage")
+            status = meta.get("status") or "ok"
+            lines.append(f"  {str(node):<28} {duration:>8}ms  {status}")
+            continue
+        if kind == "LLM_ATTEMPT":
+            provider = meta.get("provider") or "?"
+            model = meta.get("model") or ""
+            attempt = meta.get("attempt")
+            status = meta.get("http_status_class") or meta.get("failure_category") or "?"
+            remaining = meta.get("remaining_budget_ms")
+            remaining_bit = f"  remaining={remaining}ms" if remaining is not None else ""
+            lines.append(
+                f"    LLM_ATTEMPT  {event.get('stage')} {provider}/{model} "
+                f"attempt={attempt}  {duration}ms  {status}{remaining_bit}"
+            )
+            continue
+        if kind == "LLM_CALL":
+            lines.append(
+                f"    LLM_CALL     {event.get('stage')}  {duration}ms  "
+                f"provider={meta.get('finalProvider') or meta.get('provider') or data.get('provider')}"
+            )
+    nodes = durations.get("nodes") if isinstance(durations.get("nodes"), dict) else {}
+    if nodes and not any(
+        isinstance(event, dict) and event.get("event_type") == "NODE_TIMING"
+        for event in (data.get("events") or [])
+    ):
+        lines.append("")
+        for name, value in nodes.items():
+            lines.append(f"  {str(name):<28} {value:>8}ms")
+    return "\n".join(lines).rstrip() + "\n"

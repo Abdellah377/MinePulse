@@ -633,7 +633,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
               <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Détails techniques</h2>
               <p className="mt-2 text-[12px] text-muted">{technical.objectif}</p>
               <p className="mt-1 text-[12px] text-muted">{technical.calcul}</p>
-              <p className="mt-1 text-[12px] text-muted">Météo : {weatherOperatorLabel(run.weatherStatus)}</p>
+              <p className="mt-1 text-[12px] text-muted">Météo : {weatherOperatorLabel(run?.weatherStatus)}</p>
             </section>
           )}
 

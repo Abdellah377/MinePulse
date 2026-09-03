@@ -16,7 +16,7 @@ export function investigationKey(scope: InvestigationScope): string {
 }
 
 function errorLabel(error: unknown): string {
-  if (error instanceof ApiTimeoutError) return "Délai de la requête dépassé. Actualisez le résultat sans relancer l’investigation."
+  if (error instanceof ApiTimeoutError) return "Délai de l’analyse IA dépassé. Investigation enregistrée en échec ; actualisez ou relancez."
   if (error instanceof ApiNetworkError) return "Backend injoignable. Vérifiez la connexion au serveur."
   if (error instanceof ApiError) {
     switch (error.code) {
@@ -67,15 +67,20 @@ export const useInvestigationStore = create<InvestigationStore>((set, get) => {
         put(key, { ...previous, phase: previous?.phase === "running" ? "running" : "loading" })
         try {
           const results = await aiApi.find(scope)
+          const latest = get().entries[key]
           if (results[0]) save(key, results[0])
-          else if (previous?.phase === "running") put(key, { phase: "running" })
-          else if (previous?.creationUncertain) put(key, {
+          else if (latest?.result) save(key, latest.result)
+          else if (latest?.phase === "running") put(key, { phase: "running" })
+          else if (latest?.creationUncertain || previous?.creationUncertain) put(key, {
             phase: "error", creationUncertain: true,
             error: "Résultat pas encore enregistré. L’exécution peut continuer côté serveur ; actualisez sans relancer.",
           })
           else put(key, { phase: "absent" })
         } catch (error) {
-          put(key, { ...previous, phase: previous?.phase === "running" ? "running" : "error", error: errorLabel(error), creationUncertain: previous?.creationUncertain })
+          const latest = get().entries[key]
+          if (latest?.result) put(key, { phase: "error", result: latest.result, error: errorLabel(error), creationUncertain: latest.creationUncertain })
+          else if (latest?.phase === "running") put(key, { phase: "running", creationUncertain: latest.creationUncertain })
+          else put(key, { ...latest, phase: "error", error: errorLabel(error), creationUncertain: latest?.creationUncertain ?? previous?.creationUncertain })
         }
       })
     },

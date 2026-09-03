@@ -23,6 +23,7 @@ from app.ai.contracts import (
     TriggerType,
 )
 from app.ai.graph import build_investigation_graph, initial_state
+from app.ai.llm.provider import ProviderTimeoutError
 from app.ai.nodes import InvestigationRuntime
 from app.ai.routers import route_after_analysis
 from app.db.models import Shift, Site
@@ -724,3 +725,62 @@ def test_inconclusive_recommendation_keeps_insufficient_root_cause_wording():
         "Available evidence is insufficient" in result["conclusion"].summary
     )
     assert "did not establish a reliable root cause" in result["recommendation"].rationale
+
+
+def test_extra_diagnose_only_when_can_conclude_false_with_requests():
+    request = EvidenceRequest(
+        request_type=EvidenceRequestType.DOWNTIME,
+        reason="Need downtime context before concluding.",
+    )
+    class Counted(ScriptedProvider):
+        def __init__(self, diagnoses):
+            super().__init__(diagnoses)
+            self.conclusion_calls = 0
+            self.recommendation_calls = 0
+
+        def build_conclusion(self, payload):
+            self.conclusion_calls += 1
+            return super().build_conclusion(payload)
+
+        def build_recommendation(self, payload):
+            self.recommendation_calls += 1
+            return super().build_recommendation(payload)
+
+    provider = Counted(
+        [_diagnosis(requests=[request], can_conclude=False), _diagnosis(can_conclude=True)]
+    )
+    result, _, _ = _run(provider, max_iterations=2)
+    assert provider.diagnose_calls == 2
+    assert provider.conclusion_calls == 1
+    assert provider.recommendation_calls == 1
+    assert result["iteration_count"] == 2
+
+
+def test_happy_path_uses_three_logical_llm_stages():
+    class Counted(ScriptedProvider):
+        def __init__(self, diagnoses):
+            super().__init__(diagnoses)
+            self.conclusion_calls = 0
+            self.recommendation_calls = 0
+
+        def build_conclusion(self, payload):
+            self.conclusion_calls += 1
+            return super().build_conclusion(payload)
+
+        def build_recommendation(self, payload):
+            self.recommendation_calls += 1
+            return super().build_recommendation(payload)
+
+    provider = Counted([_diagnosis(can_conclude=True)])
+    result, _, _ = _run(provider, max_iterations=2)
+    assert provider.diagnose_calls == 1
+    assert provider.conclusion_calls == 1
+    assert provider.recommendation_calls == 1
+    assert result["status"] != InvestigationStatus.FAILED
+
+
+def test_provider_timeout_marks_failed_investigation():
+    result, _, persisted = _run(ScriptedProvider([ProviderTimeoutError("timeout")]))
+    assert result["status"] == InvestigationStatus.FAILED
+    assert result["error"].error_type == "ProviderTimeoutError"
+    assert persisted

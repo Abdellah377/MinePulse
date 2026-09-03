@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import wraps
 from hashlib import sha256
 import json
 import logging
@@ -101,6 +102,29 @@ _PROBABLE_COMPONENT_UNCERTAINTY = (
 )
 
 
+def _timed_node(node_name: str):
+    def decorator(fn: Callable):
+        @wraps(fn)
+        def wrapped(self, state: InvestigationState):
+            started = monotonic()
+            status = "ok"
+            try:
+                result = fn(self, state)
+                if isinstance(result, dict) and result.get("status") == InvestigationStatus.FAILED:
+                    status = "failed"
+                return result
+            except Exception:
+                status = "error"
+                raise
+            finally:
+                duration_ms = int((monotonic() - started) * 1000)
+                self.runtime.debug.record_node_timing(node_name, duration_ms, status)
+
+        return wrapped
+
+    return decorator
+
+
 def _as_aware_timestamp(value) -> datetime | None:
     if isinstance(value, datetime):
         parsed = value
@@ -192,12 +216,32 @@ class InvestigationNodes:
     def _fail(self, stage: str, exc: Exception, investigation_id: str) -> dict:
         return _error(stage, exc, investigation_id, self.runtime.debug)
 
+    def _emit_llm_attempts(self, stage: str, metrics: dict | None) -> None:
+        for attempt in (metrics or {}).get("attempts") or []:
+            if not isinstance(attempt, dict):
+                continue
+            attempt_meta = dict(attempt)
+            attempt_meta["stage"] = stage
+            self.runtime.debug.record(
+                DebugEventType.LLM_ATTEMPT,
+                stage=stage,
+                summary=(
+                    f"{attempt.get('provider') or 'provider'} "
+                    f"{attempt.get('http_status_class') or attempt.get('failure_category') or 'ok'} "
+                    f"{attempt.get('duration_ms') or 0}ms"
+                ),
+                duration_ms=int(attempt["duration_ms"]) if isinstance(attempt.get("duration_ms"), int) else None,
+                metadata=attempt_meta,
+            )
+
     def _llm(self, stage: str, call, compact_meta) -> object:
         started = monotonic()
         try:
             result = call()
         except Exception:
-            self.runtime.debug.add_llm_metrics(consume_provider_metrics(self.runtime.provider))
+            metrics = consume_provider_metrics(self.runtime.provider)
+            self.runtime.debug.add_llm_metrics(metrics)
+            self._emit_llm_attempts(stage, metrics)
             raise
         metrics = consume_provider_metrics(self.runtime.provider)
         duration = int(metrics["duration_ms"]) if metrics and isinstance(metrics.get("duration_ms"), int) else int(
@@ -207,6 +251,7 @@ class InvestigationNodes:
         metadata = compact_meta(result) if callable(compact_meta) else compact_meta
         event_meta = dict(metadata) if isinstance(metadata, dict) else {}
         event_meta.update(routing_debug_fields(metrics))
+        self._emit_llm_attempts(stage, metrics)
         self.runtime.debug.record(
             DebugEventType.LLM_CALL,
             stage=stage,
@@ -216,6 +261,7 @@ class InvestigationNodes:
         )
         return result
 
+    @_timed_node("resolve_context")
     def resolve_context(self, state: InvestigationState) -> dict:
         try:
             ctx = self.runtime.context_resolver(self.runtime.session, state["trigger"])
@@ -248,6 +294,7 @@ class InvestigationNodes:
         except Exception as exc:
             return self._fail("resolve_context", exc, state["investigation_id"])
 
+    @_timed_node("gather_initial_evidence")
     def gather_initial_evidence(self, state: InvestigationState) -> dict:
         try:
             ctx = self._reconstruct_context(state)
@@ -272,6 +319,7 @@ class InvestigationNodes:
             "status": InvestigationStatus.ANALYZING,
         }
 
+    @_timed_node("analyze")
     def analyze(self, state: InvestigationState) -> dict:
         next_iteration = state["iteration_count"] + 1
         payload = {
@@ -361,6 +409,7 @@ class InvestigationNodes:
             "status": InvestigationStatus.ANALYZING,
         }
 
+    @_timed_node("gather_requested_evidence")
     def gather_requested_evidence(self, state: InvestigationState) -> dict:
         try:
             ctx = self._reconstruct_context(state)
@@ -383,6 +432,7 @@ class InvestigationNodes:
             "status": InvestigationStatus.ANALYZING,
         }
 
+    @_timed_node("build_conclusion")
     def build_conclusion(self, state: InvestigationState) -> dict:
         payload = {
             "trigger": _json(state["trigger"]),
@@ -414,6 +464,7 @@ class InvestigationNodes:
             "status": InvestigationStatus.BUILDING_RECOMMENDATION,
         }
 
+    @_timed_node("build_recommendation")
     def build_recommendation(self, state: InvestigationState) -> dict:
         evidence = list(state["evidence"])
         payload = {
@@ -537,14 +588,33 @@ class InvestigationNodes:
     def persist(self, state: InvestigationState) -> dict:
         completed_at = state["completed_at"] or datetime.now(timezone.utc)
         final_state = {**state, "completed_at": completed_at}
+        node_started = monotonic()
+        status = "ok"
         try:
-            row = self.runtime.persister(self.runtime.session, final_state)
-        except Exception as exc:
-            _error("persist", exc, state["investigation_id"], self.runtime.debug)
-            self.runtime.session.rollback()
-            raise InvestigationPersistenceError("Investigation result could not be saved") from exc
-        self._store_debug_trace(row, final_state)
-        return {"completed_at": completed_at}
+            persist_started = monotonic()
+            try:
+                row = self.runtime.persister(self.runtime.session, final_state)
+            except Exception as exc:
+                status = "error"
+                _error("persist", exc, state["investigation_id"], self.runtime.debug)
+                self.runtime.session.rollback()
+                raise InvestigationPersistenceError("Investigation result could not be saved") from exc
+            self.runtime.debug.add_persist_duration(int((monotonic() - persist_started) * 1000))
+            self.runtime.debug.record_node_timing(
+                "persist",
+                int((monotonic() - node_started) * 1000),
+                status,
+            )
+            self._store_debug_trace(row, final_state)
+            return {"completed_at": completed_at}
+        except Exception:
+            if status != "ok":
+                self.runtime.debug.record_node_timing(
+                    "persist",
+                    int((monotonic() - node_started) * 1000),
+                    "error",
+                )
+            raise
 
     def _store_debug_trace(self, row, state: InvestigationState) -> None:
         try:

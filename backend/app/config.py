@@ -41,12 +41,12 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model: str | None = None
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    ai_max_investigation_iterations: int = Field(default=3, ge=1, le=10)
-    ai_provider_timeout_seconds: float = Field(default=45, ge=5, le=60)
-    # Cumulative provider budget per invocation; frontend allows 180s including DB overhead.
-    ai_investigation_llm_budget_seconds: float = Field(default=150, ge=10, le=150)
-    # Transient 429/timeout/5xx attempts per structured call. SDK retries stay disabled.
-    ai_provider_max_attempts: int = Field(default=3, ge=1, le=4)
+    ai_max_investigation_iterations: int = Field(default=2, ge=1, le=10)
+    ai_provider_timeout_seconds: float = Field(default=15, ge=5, le=60)
+    # Cumulative provider budget per invocation; frontend create timeout stays above this plus persist.
+    ai_investigation_llm_budget_seconds: float = Field(default=30, ge=10, le=150)
+    # Transient 429/timeout/5xx attempts per structured call. Multi-provider order failsover instead of leaf retry.
+    ai_provider_max_attempts: int = Field(default=2, ge=1, le=4)
     # Cap simultaneous LangGraph/LLM investigations process-wide.
     ai_investigation_max_concurrent: int = Field(default=2, ge=1, le=8)
     # Developer-only investigation trace. Default off; never required for operators.

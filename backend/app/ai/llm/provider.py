@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import time
-from typing import Protocol
+from time import monotonic
+from typing import Any, Protocol
 
 from app.ai.contracts import (
     DiagnosisResult,
@@ -61,6 +63,89 @@ _TRANSIENT_PROVIDER_ERRORS = (
 
 def _sleep(seconds: float) -> None:
     time.sleep(seconds)
+
+
+def payload_prompt_chars(payload: dict | None) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    try:
+        return len(json.dumps(payload, default=str, ensure_ascii=False))
+    except TypeError:
+        return 0
+
+
+def payload_evidence_count(payload: dict | None) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    evidence = payload.get("evidence")
+    return len(evidence) if isinstance(evidence, list) else 0
+
+
+def http_status_class_for(exc: Exception | None, *, ok: bool = False) -> str:
+    if ok or exc is None:
+        return "ok"
+    if isinstance(exc, ProviderTimeoutError):
+        return "timeout"
+    if isinstance(exc, ProviderRateLimitError):
+        return "429"
+    if isinstance(exc, ProviderUnavailableError):
+        return "5xx"
+    if isinstance(exc, ProviderResponseError):
+        return "parse"
+    if isinstance(exc, ProviderNetworkError):
+        return "network"
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        if status == 429:
+            return "429"
+        if status >= 500:
+            return "5xx"
+        if 400 <= status < 500:
+            return "4xx"
+    return "error"
+
+
+def budget_allows_attempt(remaining_seconds: float, timeout_seconds: float) -> bool:
+    return float(remaining_seconds) > 0 and float(remaining_seconds) + 1e-9 >= float(timeout_seconds)
+
+
+def commit_structured_attempt(
+    attempt_log: list[dict[str, Any]],
+    *,
+    provider_name: str,
+    model_name: str,
+    schema_name: str,
+    attempt: int,
+    started: float,
+    remaining_seconds: float,
+    payload: dict,
+    exc: BaseException | None,
+    ok: bool,
+) -> dict[str, Any]:
+    duration_ms = max(0, int((monotonic() - started) * 1000))
+    failure = None if ok else type(exc).__name__
+    record = {
+        "provider": provider_name,
+        "model": model_name,
+        "attempt": attempt,
+        "duration_ms": duration_ms,
+        "http_status_class": http_status_class_for(exc if isinstance(exc, Exception) else None, ok=ok),
+        "failure_category": failure,
+        "parse_retry": False,
+        "prompt_chars": payload_prompt_chars(payload),
+        "evidence_count": payload_evidence_count(payload),
+        "remaining_budget_ms": max(0, int(remaining_seconds * 1000)),
+    }
+    attempt_log.append(record)
+    return {
+        "provider": provider_name,
+        "model": model_name,
+        "schema": schema_name,
+        "duration_ms": duration_ms,
+        "attempt": attempt,
+        "attempts": list(attempt_log),
+        "remaining_budget_ms": record["remaining_budget_ms"],
+    }
 
 
 def classify_provider_exception(exc: Exception) -> LLMProviderError:
@@ -154,7 +239,9 @@ request can still discriminate between hypotheses; do not request evidence that
 cannot change the diagnosis. Remaining causal uncertainty
 belongs in later diagnosis_status, not in blocking a conclusion. If no useful
 approved request exists, return an empty request list and set can_conclude true
-when a ranked diagnosis can be written. Do not treat hypotheses as evidence.
+when a ranked diagnosis can be written. After one additional evidence round,
+conclude with the best supported diagnosis; do not keep requesting evidence that
+cannot change the ranking. Do not treat hypotheses as evidence.
 First identify the observed condition, then test explanations at least one causal
 step deeper: cause -> operational mechanism -> observed effect. Set each
 hypothesis causal_depth to 0 for a symptom restatement, 1 for an immediate
