@@ -83,6 +83,7 @@ def workflow_fields_from_snapshot(snapshot: dict | None) -> dict:
         "reviewUnavailable": status == "REVIEW_UNAVAILABLE",
         "reoptimizationOccurred": bool(wf.get("reoptimizationOccurred")),
         "optimizationPassCount": wf.get("optimizationPassCount"),
+        "pipelineStages": wf.get("pipelineStages") or (snapshot or {}).get("pipelineStages"),
     }
 
 

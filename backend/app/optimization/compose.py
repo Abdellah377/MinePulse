@@ -282,7 +282,7 @@ def compose_operator_recommended_action(
 ) -> dict[str, str | None]:
     """One operator-facing action. A valid dispatch plan never competes with investigation copy."""
     description = (investigation_description or "").strip() or None
-    if eligibility == "NOT_APPLICABLE":
+    if eligibility == "NOT_APPLICABLE" or outcome in {"NOT_APPLICABLE", "NOT_APPLICABLE_TO_DISPATCH"}:
         if description:
             return {"text": description, "source": "investigation"}
         return {"text": None, "source": None}

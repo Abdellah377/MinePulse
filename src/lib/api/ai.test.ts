@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { ApiError, ApiNetworkError, ApiTimeoutError } from "./client"
-import { INVESTIGATION_CREATE_TIMEOUT_MS, aiApi } from "./ai"
+import { INVESTIGATION_CREATE_TIMEOUT_MS, OPTIMIZATION_RUN_TIMEOUT_MS, OPTIMIZATION_WORKFLOW_TIMEOUT_MS, aiApi } from "./ai"
 import { result, trigger } from "@/test/aiFixtures"
 vi.mock("@/lib/api/client", async (original) => ({ ...await original<typeof import("./client")>(), useApiMode: true }))
 beforeEach(() => vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => result })))
@@ -33,6 +33,37 @@ it("distinguishes unreachable backend from the synchronous investigation timeout
   const assertion = expect(pending).rejects.toBeInstanceOf(ApiTimeoutError)
   expect(INVESTIGATION_CREATE_TIMEOUT_MS).toBe(45_000)
   await vi.advanceTimersByTimeAsync(INVESTIGATION_CREATE_TIMEOUT_MS - 1)
+  expect(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(false)
+  await vi.advanceTimersByTimeAsync(1)
+  await assertion
+})
+
+it("deterministic optimization run timeout stays a local-compute bound, not a workflow wait", async () => {
+  expect(OPTIMIZATION_RUN_TIMEOUT_MS).toBe(15_000)
+  expect(OPTIMIZATION_RUN_TIMEOUT_MS).toBeLessThan(OPTIMIZATION_WORKFLOW_TIMEOUT_MS)
+  vi.useFakeTimers()
+  vi.mocked(fetch).mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")))
+  }))
+  const pending = aiApi.createOptimizationRun("alert-42")
+  const assertion = expect(pending).rejects.toBeInstanceOf(ApiTimeoutError)
+  await vi.advanceTimersByTimeAsync(OPTIMIZATION_RUN_TIMEOUT_MS - 1)
+  expect(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(false)
+  await vi.advanceTimersByTimeAsync(1)
+  await assertion
+  expect(String(vi.mocked(fetch).mock.calls.at(-1)?.[0])).toContain("/optimization/runs")
+})
+
+it("optimization workflow timeout stays just above the 30s backend LLM budget", async () => {
+  expect(OPTIMIZATION_WORKFLOW_TIMEOUT_MS).toBe(45_000)
+  expect(OPTIMIZATION_WORKFLOW_TIMEOUT_MS).toBeGreaterThan(30_000)
+  vi.useFakeTimers()
+  vi.mocked(fetch).mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")))
+  }))
+  const pending = aiApi.createOptimizationWorkflow("alert-42")
+  const assertion = expect(pending).rejects.toBeInstanceOf(ApiTimeoutError)
+  await vi.advanceTimersByTimeAsync(OPTIMIZATION_WORKFLOW_TIMEOUT_MS - 1)
   expect(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(false)
   await vi.advanceTimersByTimeAsync(1)
   await assertion

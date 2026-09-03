@@ -6,6 +6,7 @@ export type OptimizationOutcome =
   | "NO_FEASIBLE_PLAN"
   | "INSUFFICIENT_DATA"
   | "NOT_APPLICABLE"
+  | "NOT_APPLICABLE_TO_DISPATCH"
   | "ERROR"
 
 export type OptimizationCandidate = {
@@ -73,6 +74,7 @@ export type OptimizationRun = {
   reviewUnavailable?: boolean
   reoptimizationOccurred?: boolean
   optimizationPassCount?: number | null
+  pipelineStages?: string[] | null
 }
 
 export type ActionsInboxItem = Alert & {

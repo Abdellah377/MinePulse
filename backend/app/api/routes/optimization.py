@@ -21,6 +21,7 @@ def post_optimization_run(body: OptimizationRunRequest, session: DbSession, ctx:
 
 @router.post("/workflows")
 def post_optimization_workflow(body: OptimizationRunRequest, session: DbSession, ctx: Ctx):
+    """Advanced / experimental LLM planner + reviewer. Default Actions IA uses POST /runs."""
     return create_optimization_workflow(session, ctx, body.alert_id)
 
 

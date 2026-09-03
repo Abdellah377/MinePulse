@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.ai.persistence import find_investigations
 from app.db.models import Alert, Equipment, Zone
 from app.mappers.dto import alert_to_dto
-from app.optimization.eligibility import OPTIMIZABLE, eligibility_for_alert
+from app.optimization.dispatch_scope import inbox_optimization_eligible
+from app.optimization.eligibility import eligibility_for_alert
 from app.optimization.persistence import latest_run_for_alert, run_to_dict
 from app.services.operational.alerts import ALERT_PAGE_DEFAULT, get_site_alert_or_404, page_site_alerts
 from app.services.operational.context import OperationalContext
@@ -34,7 +35,7 @@ def _inbox_flags(session: Session, alert: Alert, ctx: OperationalContext) -> dic
         "hasInvestigation": latest is not None,
         "investigationId": str(latest.investigation_id) if latest is not None else None,
         "hasRecommendation": bool(latest is not None and latest.recommendation),
-        "optimizationEligible": eligibility == OPTIMIZABLE,
+        "optimizationEligible": inbox_optimization_eligible(alert),
         "eligibility": eligibility,
         "latestRunOutcome": run.outcome if run is not None else None,
         "latestRunId": str(run.run_id) if run is not None else None,

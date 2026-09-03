@@ -206,9 +206,15 @@ export function optimizerOperatorStatus(run: {
   deterministicOnly?: boolean
   explanation?: { why?: string | null; missingReason?: string | null } | null
 }): string {
+  if (run.outcome === "NOT_APPLICABLE" || run.outcome === "NOT_APPLICABLE_TO_DISPATCH") {
+    return "Optimisation de dispatch non applicable"
+  }
   if (run.workflowStatus === "NO_CHANGE_RECOMMENDED") return NO_CHANGE_OPERATOR_COPY
   const missing = run.explanation?.missingReason?.trim()
-  const why = run.explanation?.why?.trim()
+  if (missing === "Camion sujet inconnu") return "Optimisation de dispatch non applicable"
+  let why = run.explanation?.why?.trim() || ""
+  if (why.includes("Camion sujet inconnu")) why = ""
+  if (why && isScoreEquationText(why)) why = ""
   const generic = !why || why.includes("métrique absente")
   if (missing && generic) {
     if (run.outcome === "NO_FEASIBLE_PLAN") return missing
@@ -218,7 +224,6 @@ export function optimizerOperatorStatus(run: {
   if (run.outcome === "FEASIBLE") return "Plan évalué"
   if (run.outcome === "NO_FEASIBLE_PLAN") return "Aucun itinéraire faisable"
   if (run.outcome === "INSUFFICIENT_DATA") return "Données insuffisantes pour évaluer un plan de dispatch"
-  if (run.outcome === "NOT_APPLICABLE") return "Optimisation de dispatch non applicable"
   if (run.outcome === "ERROR") return "Optimiseur en échec"
   return run.outcome ? String(run.outcome) : "Optimisation indisponible"
 }
@@ -326,7 +331,7 @@ export function composeOperatorRecommendedAction(input: {
   const eligibility = run?.eligibility
   const outcome = run?.outcome
   const investigation = input.investigationDescription?.trim()
-  if (eligibility === "NOT_APPLICABLE") {
+  if (eligibility === "NOT_APPLICABLE" || outcome === "NOT_APPLICABLE" || outcome === "NOT_APPLICABLE_TO_DISPATCH") {
     if (investigation) return { text: investigation, source: "investigation" }
     const backend = run?.operatorRecommendedAction
     if (backend?.text && backend.source === "investigation") return { text: backend.text, source: "investigation" }

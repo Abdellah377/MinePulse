@@ -219,6 +219,32 @@ describe("optimizerOperatorStatus", () => {
   it("states no change when the current plan remains best", () => {
     expect(optimizerOperatorStatus({ outcome: "FEASIBLE", workflowStatus: "NO_CHANGE_RECOMMENDED" })).toContain("Aucune modification recommandée")
   })
+
+  it("does not put the score equation in the operator status line", () => {
+    expect(
+      optimizerOperatorStatus({
+        outcome: "FEASIBLE",
+        explanation: {
+          why: "Score = 1 × travel (8 min) + 1 × attente (4 min). Météo affichée, non notée. Acceptation ≠ application FMS.",
+        },
+      }),
+    ).toBe("Plan évalué")
+  })
+
+  it("does not surface Camion sujet inconnu as a dispatch failure", () => {
+    expect(
+      optimizerOperatorStatus({
+        outcome: "NOT_APPLICABLE_TO_DISPATCH",
+        explanation: { missingReason: "Camion sujet inconnu", why: "Camion sujet inconnu" },
+      }),
+    ).toBe("Optimisation de dispatch non applicable")
+    expect(
+      optimizerOperatorStatus({
+        outcome: "INSUFFICIENT_DATA",
+        explanation: { missingReason: "Camion sujet inconnu", why: "Camion sujet inconnu" },
+      }),
+    ).not.toContain("Camion sujet inconnu")
+  })
 })
 
 describe("composeOperatorRecommendedAction", () => {
@@ -242,6 +268,15 @@ describe("composeOperatorRecommendedAction", () => {
       investigationDescription: "Isoler EXC-002.",
     })
     expect(action).toEqual({ text: "Isoler EXC-002.", source: "investigation" })
+  })
+
+  it("uses the investigation recommendation for NOT_APPLICABLE_TO_DISPATCH", () => {
+    const action = composeOperatorRecommendedAction({
+      run: { eligibility: "OPTIMIZABLE", outcome: "NOT_APPLICABLE_TO_DISPATCH" },
+      investigationDescription: "Vérifier le concasseur.",
+    })
+    expect(action).toEqual({ text: "Vérifier le concasseur.", source: "investigation" })
+    expect(action?.text).not.toContain("Camion sujet inconnu")
   })
 
   it("builds a feasible action from truck, loader, and destination — never the score equation", () => {

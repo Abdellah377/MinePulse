@@ -112,7 +112,17 @@ class FakeOptProvider:
     provider_name = "fake"
     model_name = "test-model"
 
-    def __init__(self, decision=None, reviews=None, plan_error=None, review_error=None):
+    def __init__(
+        self,
+        decision=None,
+        reviews=None,
+        plan_error=None,
+        review_error=None,
+        remaining_seconds=None,
+        timeout_seconds=15,
+        plan_cost=0,
+        review_cost=0,
+    ):
         self.decision = decision or OptimizationPlannerDecision(
             selected_optimizers=[OptimizerId.DISPATCH_LOADER],
             problem_type=ProblemType.CONGESTION_RISK,
@@ -122,9 +132,16 @@ class FakeOptProvider:
         self.review_error = review_error
         self.plan_calls = []
         self.review_calls = []
+        self.plan_cost = plan_cost
+        self.review_cost = review_cost
+        if remaining_seconds is not None:
+            self._remaining_seconds = remaining_seconds
+            self._timeout_seconds = timeout_seconds
 
     def plan_optimization(self, payload):
         self.plan_calls.append(payload)
+        if getattr(self, "_remaining_seconds", None) is not None:
+            self._remaining_seconds -= self.plan_cost
         if self.plan_error:
             raise self.plan_error
         assert payload_contains_forbidden_numeric_facts(payload) is False
@@ -132,6 +149,8 @@ class FakeOptProvider:
 
     def review_optimization(self, payload):
         self.review_calls.append(payload)
+        if getattr(self, "_remaining_seconds", None) is not None:
+            self._remaining_seconds -= self.review_cost
         if self.review_error:
             raise self.review_error
         if not self.reviews:
@@ -264,3 +283,60 @@ def test_confirmed_loader_rca_from_investigation_still_hard_excludes(monkeypatch
     payload = create_optimization_workflow(MagicMock(), _ctx(), "alert-42", provider=FakeOptProvider())
     assert captured["snapshot"]["workflow"]["rcaGate"]["hardExcludeLoaderIds"] == [10]
     assert all(item["loaderId"] != 10 for item in payload["candidates"])
+
+
+def test_workflow_records_stage_timings(monkeypatch):
+    _engine_calls, captured = _patch_common(monkeypatch)
+    create_optimization_workflow(MagicMock(), _ctx(), "alert-42", provider=FakeOptProvider())
+    timings = captured["snapshot"]["workflow"]["timings"]
+    assert "weather_ms" in timings
+    assert "trusted_input_ms" in timings
+    assert "planner_ms" in timings
+    assert "engine_pass_1_ms" in timings
+    assert "reviewer_pass_1_ms" in timings
+    assert "sk-" not in str(captured["snapshot"])
+
+
+def test_reviewer_skipped_when_remaining_budget_below_timeout(monkeypatch):
+    _patch_common(monkeypatch)
+    provider = FakeOptProvider(remaining_seconds=30, timeout_seconds=15, plan_cost=20)
+    payload = create_optimization_workflow(MagicMock(), _ctx(), "alert-42", provider=provider)
+    assert payload["workflowStatus"] == WorkflowStatus.REVIEW_UNAVAILABLE.value
+    assert provider.review_calls == []
+    assert [row["candidateId"] for row in payload["candidates"]] == ["c-1", "c-2"]
+
+
+def test_second_pass_skipped_when_shared_budget_exhausted(monkeypatch):
+    engine_calls, _captured = _patch_common(monkeypatch)
+    provider = FakeOptProvider(
+        reviews=[OptimizationReview(status=ReviewStatus.REOPTIMIZE, reoptimization_reason="retry")],
+        remaining_seconds=15,
+        timeout_seconds=15,
+        review_cost=15,
+    )
+    payload = create_optimization_workflow(MagicMock(), _ctx(), "alert-42", provider=provider)
+    assert len(engine_calls) == 1
+    assert len(provider.review_calls) == 1
+    assert payload["workflowStatus"] == WorkflowStatus.REVIEW_UNAVAILABLE.value
+
+
+def test_format_optimization_timeline_has_no_secrets():
+    from app.ai.optimization.workflow import format_optimization_timeline
+
+    text = format_optimization_timeline({
+        "workflow": {
+            "workflowStatus": "ORCHESTRATED",
+            "optimizationPassCount": 1,
+            "planner": {"provider": "groq", "fallbackOccurred": False},
+            "reviewer": {"provider": "groq", "failed": False},
+            "timings": {
+                "optimization_total_ms": 9100,
+                "planner_ms": 4200,
+                "reviewer_pass_1_ms": 3800,
+                "engine_pass_1_ms": 20,
+            },
+        }
+    })
+    assert "planner_ms=4200" in text
+    assert "sk-" not in text
+    assert "gsk_" not in text

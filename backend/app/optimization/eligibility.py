@@ -23,7 +23,7 @@ OPTIMIZABLE_DETECTORS = frozenset(
 )
 
 
-def _monitoring(alert: Any) -> dict:
+def monitoring_of(alert: Any) -> dict:
     meta = getattr(alert, "metadata_", None) or getattr(alert, "metadata", None) or {}
     if not isinstance(meta, dict):
         return {}
@@ -33,7 +33,7 @@ def _monitoring(alert: Any) -> dict:
 
 def eligibility_for_alert(alert: Any) -> str:
     alert_type = str(getattr(alert, "alert_type", "") or "")
-    monitoring = _monitoring(alert)
+    monitoring = monitoring_of(alert)
     detector = str(monitoring.get("detectorId") or monitoring.get("detector_id") or "")
     if alert_type in OPTIMIZABLE_ALERT_TYPES or detector in OPTIMIZABLE_DETECTORS:
         return OPTIMIZABLE

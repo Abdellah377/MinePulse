@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from time import monotonic
 from typing import Any
 
 from fastapi import HTTPException
@@ -10,7 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.ai.lifecycle import investigation_gate
 from app.ai.persistence import find_investigations
-from app.ai.llm.provider import LLMProvider, LLMProviderError, create_llm_provider
+from app.ai.llm.provider import (
+    LLMProvider,
+    LLMProviderError,
+    budget_allows_attempt,
+    create_llm_provider,
+)
 from app.ai.optimization.planner import planner_payload_from_facts, sanitize_planner_decision
 from app.ai.optimization.reviewer import sanitize_review
 from app.config import get_settings
@@ -54,6 +60,18 @@ def _dump(model: Any) -> dict:
     return dict(model)
 
 
+def _ms(started: float) -> int:
+    return max(0, int((monotonic() - started) * 1000))
+
+
+def _can_spend_llm(provider: Any) -> bool:
+    remaining = getattr(provider, "_remaining_seconds", None)
+    timeout = getattr(provider, "_timeout_seconds", None)
+    if remaining is None or timeout is None:
+        return True
+    return budget_allows_attempt(float(remaining), float(timeout))
+
+
 def _provider_meta(provider: LLMProvider | None) -> dict[str, Any]:
     if provider is None:
         return {"provider": None, "model": None}
@@ -68,6 +86,25 @@ def _provider_meta(provider: LLMProvider | None) -> dict[str, Any]:
         meta["configuredProviders"] = metrics.get("configured_providers")
     if metrics.get("final_provider") is not None:
         meta["finalProvider"] = metrics.get("final_provider")
+    if metrics.get("remaining_budget_ms") is not None:
+        meta["remainingBudgetMs"] = metrics.get("remaining_budget_ms")
+    if metrics.get("cooldown_skipped") is not None:
+        meta["cooldownSkipped"] = metrics.get("cooldown_skipped")
+    attempts = metrics.get("attempts")
+    if isinstance(attempts, list):
+        meta["attemptCount"] = len(attempts)
+        meta["attempts"] = [
+            {
+                "provider": item.get("provider"),
+                "model": item.get("model"),
+                "attempt": item.get("attempt"),
+                "duration_ms": item.get("duration_ms"),
+                "http_status_class": item.get("http_status_class"),
+                "failure_category": item.get("failure_category"),
+            }
+            for item in attempts
+            if isinstance(item, dict)
+        ]
     return meta
 
 
@@ -166,6 +203,7 @@ def create_optimization_workflow(
     *,
     provider: LLMProvider | None = None,
 ) -> dict:
+    """Advanced / experimental LLM planner + reviewer. Default Actions IA uses create_optimization_run."""
     alert = get_site_alert_or_404(session, ctx.site_id, alert_id)
     eligibility = eligibility_for_alert(alert)
     if eligibility == ELIG_NOT_APPLICABLE:
@@ -197,6 +235,8 @@ def _run_orchestrated(
     *,
     provider: LLMProvider | None,
 ) -> dict:
+    total_started = monotonic()
+    timings: dict[str, int] = {}
     eligibility = eligibility_for_alert(alert)
     weather_status = None
     snapshot: dict[str, Any] = {
@@ -207,7 +247,9 @@ def _run_orchestrated(
         "eligibility": eligibility,
     }
     try:
+        weather_started = monotonic()
         weather = get_weather_context(session, ctx.site_id)
+        timings["weather_ms"] = _ms(weather_started)
         weather_status = weather.status.value
         snapshot["weather"] = {
             "status": weather_status,
@@ -215,11 +257,14 @@ def _run_orchestrated(
             "condition": weather.current.condition if weather.current else None,
         }
     except Exception:
+        timings.setdefault("weather_ms", 0)
         logger.exception("workflow weather lookup failed")
 
+    trusted_started = monotonic()
     trusted = build_trusted_optimization_input(session, ctx, alert)
-    snapshot.update(trusted.snapshot_fields)
     rca = _rca_from_investigation(session, ctx, alert, trusted)
+    timings["trusted_input_ms"] = _ms(trusted_started)
+    snapshot.update(trusted.snapshot_fields)
     if rca.hard_exclude_loader_ids:
         trusted.mechanical_risk_loader_ids = set(trusted.mechanical_risk_loader_ids) | set(rca.hard_exclude_loader_ids)
     if rca.evidence_ids:
@@ -233,13 +278,16 @@ def _run_orchestrated(
     planner_rejected: list[str] = []
     planner_meta = _provider_meta(llm)
     try:
+        planner_started = monotonic()
         if llm is None:
             llm = create_llm_provider()
         payload = planner_payload_from_facts(facts)
         raw_decision = llm.plan_optimization(payload)
         planner_decision, planner_rejected = sanitize_planner_decision(raw_decision, facts=facts)
         planner_meta = _provider_meta(llm)
+        timings["planner_ms"] = _ms(planner_started)
     except (LLMProviderError, Exception) as exc:
+        timings["planner_ms"] = _ms(planner_started) if "planner_started" in locals() else 0
         if isinstance(exc, HTTPException):
             raise
         logger.exception("optimization planner failed alert_id=%s", alert_id)
@@ -247,6 +295,12 @@ def _run_orchestrated(
         planner_meta = _provider_meta(llm)
 
     if planner_failed or planner_decision is None:
+        timings["optimization_total_ms"] = _ms(total_started)
+        logger.info(
+            "optimization workflow timings alert_id=%s outcome=DETERMINISTIC_ONLY timings=%s",
+            alert_id,
+            timings,
+        )
         return create_optimization_run(
             session,
             ctx,
@@ -259,7 +313,9 @@ def _run_orchestrated(
                     "orchestratorVersion": ORCHESTRATOR_VERSION,
                     "planner": {**planner_meta, "failed": True},
                     "operatorSummary": DETERMINISTIC_ONLY_COPY,
-                }
+                    "timings": timings,
+                },
+                "timings": timings,
             },
         )
 
@@ -283,6 +339,7 @@ def _run_orchestrated(
         if trusted.truck is None or trusted.dest_code is None:
             candidates = []
             break
+        engine_started = monotonic()
         candidates = execute_selected_engines(
             trusted=engine_dict,
             optimizer_ids=optimizer_ids,
@@ -290,9 +347,17 @@ def _run_orchestrated(
             constraints=constraints,
         )
         candidates = apply_rca_excludes(candidates, rca.hard_exclude_loader_ids)
+        timings[f"engine_pass_{pass_count}_ms"] = _ms(engine_started)
+        if not _can_spend_llm(llm):
+            review_failed = True
+            review = None
+            review_status = None
+            review_meta = {**_provider_meta(llm), "skipped": "budget_too_small"}
+            break
         try:
             if llm is None:
                 raise LLMProviderError("reviewer provider missing")
+            review_started = monotonic()
             raw_review = llm.review_optimization(
                 {
                     "optimization_pass": optimization_pass,
@@ -316,7 +381,9 @@ def _run_orchestrated(
             rejected_codes.extend(extra_rejected)
             review_status = review.status
             review_meta = _provider_meta(llm)
+            timings[f"reviewer_pass_{pass_count}_ms"] = _ms(review_started)
         except (LLMProviderError, Exception) as exc:
+            timings[f"reviewer_pass_{pass_count}_ms"] = _ms(review_started) if "review_started" in locals() else 0
             if isinstance(exc, HTTPException):
                 raise
             logger.exception("optimization reviewer failed alert_id=%s pass=%s", alert_id, optimization_pass)
@@ -329,6 +396,10 @@ def _run_orchestrated(
         if review_status == ReviewStatus.INSUFFICIENT_EVIDENCE:
             break
         if review_status == ReviewStatus.REOPTIMIZE and optimization_pass == 0:
+            if not _can_spend_llm(llm):
+                review_failed = True
+                review_meta = {**review_meta, "skipped": "budget_too_small"}
+                break
             reoptimization_occurred = True
             extra_constraints = list(review.requested_constraint_checks) if review else []
             extra_engines = list(review.requested_optimizer_ids) if review else []
@@ -453,8 +524,10 @@ def _run_orchestrated(
             workflow_status=workflow_status.value,
         ),
         "weights": dict(DEFAULT_WEIGHTS),
+        "timings": timings,
     }
-    return persist_evaluated_run(
+    persist_started = monotonic()
+    persisted = persist_evaluated_run(
         session,
         ctx,
         alert_id=alert.alert_id,
@@ -467,3 +540,52 @@ def _run_orchestrated(
         weights=dict(DEFAULT_WEIGHTS),
         explanation=explanation,
     )
+    timings["persist_ms"] = _ms(persist_started)
+    timings["optimization_total_ms"] = _ms(total_started)
+    snapshot["workflow"]["timings"] = timings
+    snapshot["timings"] = timings
+    logger.info(
+        "optimization workflow timings alert_id=%s outcome=%s workflow=%s timings=%s",
+        alert_id,
+        outcome,
+        workflow_status.value,
+        timings,
+    )
+    if isinstance(persisted, dict):
+        persisted = {**persisted, "snapshot": snapshot}
+    return persisted
+
+
+def format_optimization_timeline(snapshot: dict[str, Any] | None) -> str:
+    """Compact developer timeline. Never includes prompts, keys, or chain-of-thought."""
+    data = snapshot or {}
+    workflow = data.get("workflow") if isinstance(data.get("workflow"), dict) else {}
+    timings = workflow.get("timings") if isinstance(workflow.get("timings"), dict) else data.get("timings") or {}
+    planner = workflow.get("planner") if isinstance(workflow.get("planner"), dict) else {}
+    reviewer = workflow.get("reviewer") if isinstance(workflow.get("reviewer"), dict) else {}
+    lines = [
+        "=== Optimization workflow ===",
+        (
+            f"total_ms={timings.get('optimization_total_ms')} "
+            f"planner_ms={timings.get('planner_ms')} "
+            f"reviewer_ms={timings.get('reviewer_pass_1_ms')} "
+            f"engine_ms={timings.get('engine_pass_1_ms')} "
+            f"persist_ms={timings.get('persist_ms')}"
+        ),
+        f"planner provider={planner.get('provider') or planner.get('finalProvider')} fallback={planner.get('fallbackOccurred')}",
+        f"reviewer provider={reviewer.get('provider') or reviewer.get('finalProvider')} failed={reviewer.get('failed')} skipped={reviewer.get('skipped')}",
+        f"workflowStatus={workflow.get('workflowStatus')} passes={workflow.get('optimizationPassCount')}",
+    ]
+    for key in (
+        "weather_ms",
+        "trusted_input_ms",
+        "planner_ms",
+        "engine_pass_1_ms",
+        "reviewer_pass_1_ms",
+        "engine_pass_2_ms",
+        "reviewer_pass_2_ms",
+        "persist_ms",
+    ):
+        if key in timings:
+            lines.append(f"  {key:<22} {timings[key]:>8}ms")
+    return "\n".join(lines).rstrip() + "\n"

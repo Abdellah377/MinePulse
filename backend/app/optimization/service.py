@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.optimization.compose import compose_operator_recommended_action
+from app.optimization.dispatch_scope import APPLICABLE, NOT_APPLICABLE_TO_DISPATCH, assess_dispatch_scope
 from app.optimization.eligibility import NOT_APPLICABLE as ELIG_NOT_APPLICABLE
 from app.optimization.eligibility import eligibility_for_alert
 from app.optimization.inputs import build_trusted_optimization_input
@@ -31,6 +32,37 @@ from app.services.operational.context import OperationalContext
 logger = logging.getLogger(__name__)
 
 
+def _investigation_bundle(session: Session, ctx: OperationalContext, alert) -> dict | None:
+    try:
+        from app.ai.persistence import find_investigations
+
+        rows = find_investigations(
+            session,
+            site_id=ctx.site_id,
+            source_record_id=f"alert-{alert.alert_id}",
+            shift_id=ctx.shift_id,
+        )
+    except Exception:
+        logger.exception("optimization investigation lookup failed")
+        return None
+    if not isinstance(rows, (list, tuple)) or not rows:
+        return None
+    row = rows[0]
+    recommendation = row.recommendation if isinstance(getattr(row, "recommendation", None), dict) else {}
+    conclusion = row.conclusion if isinstance(getattr(row, "conclusion", None), dict) else {}
+    return {"recommendation": recommendation, "conclusion": conclusion}
+
+
+def _investigation_description(bundle: dict | None) -> str | None:
+    if not bundle:
+        return None
+    recommendation = bundle.get("recommendation") if isinstance(bundle, dict) else None
+    if not isinstance(recommendation, dict):
+        return None
+    text = recommendation.get("description")
+    return str(text).strip() if text else None
+
+
 def create_optimization_run(
     session: Session,
     ctx: OperationalContext,
@@ -43,6 +75,9 @@ def create_optimization_run(
     eligibility = eligibility_for_alert(alert)
     weights = dict(DEFAULT_WEIGHTS)
     weather_status = None
+    investigation = _investigation_bundle(session, ctx, alert)
+    description = _investigation_description(investigation)
+    pipeline_stages: list[str] = []
     snapshot: dict = {
         "siteId": ctx.site_id,
         "shiftId": ctx.shift_id,
@@ -58,19 +93,22 @@ def create_optimization_run(
             "unavailableReason": weather.unavailableReason,
             "condition": weather.current.condition if weather.current else None,
         }
+        missing_reason = None
+        candidates: list[dict] = []
         if eligibility == ELIG_NOT_APPLICABLE:
+            pipeline_stages.append("context")
             outcome = NOT_APPLICABLE
-            candidates: list[dict] = []
-            missing_reason = None
         else:
             trusted = build_trusted_optimization_input(session, ctx, alert)
             snapshot.update(trusted.snapshot_fields)
-            candidates = []
-            if trusted.truck is None or trusted.dest_code is None:
-                outcome, missing_reason = dispatch_outcome(
-                    truck=trusted.truck, dest=trusted.dest_code, candidates=[]
-                )
+            pipeline_stages.append("context")
+            scope = assess_dispatch_scope(alert=alert, trusted=trusted, investigation=investigation)
+            pipeline_stages.append("constraints")
+            if scope != APPLICABLE:
+                outcome = NOT_APPLICABLE_TO_DISPATCH if scope == NOT_APPLICABLE_TO_DISPATCH else NOT_APPLICABLE
+                snapshot["dispatchScope"] = scope
             else:
+                snapshot["dispatchScope"] = APPLICABLE
                 candidates = generate_candidates(
                     truck=trusted.truck,
                     assignment=trusted.assignment,
@@ -83,6 +121,7 @@ def create_optimization_run(
                     weights=weights,
                     loader_zones=trusted.loader_zones,
                 )
+                pipeline_stages.append("candidates")
                 candidates = attach_pending_projection(
                     candidates,
                     trusted.pending_commitments,
@@ -92,8 +131,11 @@ def create_optimization_run(
                 outcome, missing_reason = dispatch_outcome(
                     truck=trusted.truck, dest=trusted.dest_code, candidates=candidates
                 )
+                pipeline_stages.append("ranking")
+                pipeline_stages.append("impact")
         if extra_snapshot:
             snapshot.update(extra_snapshot)
+        snapshot["pipelineStages"] = pipeline_stages
         explanation = explain_run(
             outcome=outcome,
             eligibility=eligibility,
@@ -113,8 +155,9 @@ def create_optimization_run(
                 outcome=outcome,
                 operator_summary=None,
                 recommended=recommended,
-                investigation_description=None,
+                investigation_description=description,
             )
+            snapshot["workflow"]["pipelineStages"] = pipeline_stages
         digest = snapshot_digest(snapshot)
         row = persist_run(
             session,

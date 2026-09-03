@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { MessageSquare } from "lucide-react"
+import { Loader2, MessageSquare } from "lucide-react"
 import { investigationKey, useInvestigationStore } from "@/lib/store/useInvestigationStore"
 import { useWorkspaceStore } from "@/lib/store/useWorkspaceStore"
 import { useOpsStore } from "@/lib/store/useOpsStore"
@@ -12,10 +12,20 @@ import { buildUserInvestigateTrigger } from "@/lib/ai/investigationTrigger"
 import {
   FMS_DECISION_NOTE,
   INVESTIGATION_REQUIRED_COPY,
+  OPTIMIZATION_IN_PROGRESS_COPY,
+  OPTIMIZATION_STAGE_CONTEXT,
+  OPTIMIZATION_UNAVAILABLE_COPY,
+  OPTIMIZATION_UNAVAILABLE_DETAIL,
   actionsIaVisibility,
+  hasLikelyDispatchScope,
   resolveActionsIaView,
-  shouldStartOptimizationWorkflow,
+  shouldStartOptimizationRun,
 } from "@/lib/ai/actionsIaView"
+import {
+  startSharedWorkflowRequest,
+  shouldApplyWorkflowResult,
+  workflowIdentity,
+} from "@/lib/ai/optimizationWorkflowStart"
 import {
   classifyOptimizationImpact,
   composeOperatorRecommendedAction,
@@ -102,6 +112,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const [run, setRun] = useState<OptimizationRun | null>(null)
   const [detailReady, setDetailReady] = useState(false)
   const [optimizingWorkflow, setOptimizingWorkflow] = useState(false)
+  const [optimizationFailed, setOptimizationFailed] = useState(false)
   const [decisionView, setDecisionView] = useState<RecommendationDecisionView | null>(null)
   const [thread, setThread] = useState<DiscussionThread | null>(null)
   const [discussOpen, setDiscussOpen] = useState(false)
@@ -114,7 +125,7 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
-  const workflowFor = useRef<string | null>(null)
+  const workflowIdentityRef = useRef<string | null>(null)
   const selectedIdRef = useRef<string | null>(selectedId)
   selectedIdRef.current = selectedId
   const overlayRef = useRef<ActionsInboxItem | null>(resolvedOverlay)
@@ -191,12 +202,15 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
     if (!alertId) {
       setDetailReady(false)
       setRun(null)
+      setOptimizingWorkflow(false)
+      setOptimizationFailed(false)
       return
     }
     let cancelled = false
     setDetailReady(false)
     setRun(null)
-    workflowFor.current = null
+    setOptimizingWorkflow(false)
+    setOptimizationFailed(false)
     void aiApi.getInboxDetail(alertId, opsCtx()).then((detail) => {
       if (cancelled) return
       setActionError(null)
@@ -250,19 +264,28 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const status = decisionView?.decision_type ?? "PENDING"
   const record = decisionView?.decision ?? null
   const followUp = record?.follow_up_status ?? decisionView?.follow_up_status ?? null
-  const eligible = selected?.optimizationEligible ?? false
+  const eligible = (selected?.optimizationEligible ?? false) && hasLikelyDispatchScope({
+    equipmentId: selected?.equipmentId,
+    alertType: selected?.category,
+  })
   const handled = selected?.status === "resolved"
   const viewInput = useMemo(() => ({
     hasInvestigation: Boolean(selected?.hasInvestigation || result),
     entryPhase: entry?.phase,
     resultStatus: result?.status ?? null,
     optimizationEligible: eligible,
+    hasDispatchSubject: hasLikelyDispatchScope({
+      equipmentId: selected?.equipmentId,
+      alertType: selected?.category,
+    }),
     runOutcome: run?.outcome ?? null,
     workflowStatus: run?.workflowStatus ?? null,
     optimizing: optimizingWorkflow,
-  }), [selected?.hasInvestigation, result, entry?.phase, eligible, run?.outcome, run?.workflowStatus, optimizingWorkflow])
+    optimizationFailed,
+  }), [selected?.hasInvestigation, selected?.equipmentId, selected?.category, result, entry?.phase, eligible, run?.outcome, run?.workflowStatus, optimizingWorkflow, optimizationFailed])
   const viewState = resolveActionsIaView(viewInput)
   const vis = actionsIaVisibility(viewState)
+  workflowIdentityRef.current = workflowIdentity(alertId, result?.investigation_id)
   const impact = useMemo(
     () => classifyOptimizationImpact(run?.candidates, selectedPlanId),
     [run?.candidates, selectedPlanId],
@@ -301,14 +324,24 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
 
   useEffect(() => {
     if (!alertId || !detailReady) return
-    if (!shouldStartOptimizationWorkflow(viewInput)) return
-    const key = `${alertId}:${result?.investigation_id ?? "inv"}`
-    if (workflowFor.current === key) return
-    workflowFor.current = key
-    let cancelled = false
+    if (!shouldStartOptimizationRun({
+      optimizationEligible: eligible,
+      hasDispatchSubject: hasLikelyDispatchScope({
+        equipmentId: selected?.equipmentId,
+        alertType: selected?.category,
+      }),
+      entryPhase: entry?.phase,
+      resultStatus: result?.status ?? null,
+      runOutcome: run?.outcome ?? null,
+      optimizationFailed,
+    })) return
+    const startedIdentity = workflowIdentity(alertId, result?.investigation_id)
+    if (!startedIdentity) return
     setOptimizingWorkflow(true)
-    void aiApi.createOptimizationWorkflow(alertId, opsCtx()).then((next) => {
-      if (cancelled) return
+    setActionError(null)
+    void startSharedWorkflowRequest(startedIdentity, () => aiApi.createOptimizationRun(alertId, opsCtx())).then((next) => {
+      if (!shouldApplyWorkflowResult(startedIdentity, workflowIdentityRef.current)) return
+      setOptimizationFailed(false)
       setRun(next)
       const displayedId = next.displayedCandidateIds?.[0]
       const fallbackRec = next.candidates.find((plan) => !plan.isCurrent)?.candidateId
@@ -316,12 +349,13 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
       setSelectedPlanId(displayedId ?? fallbackRec ?? baselineId ?? next.recommendedCandidateId ?? null)
       setInbox((rows) => rows.map((row) => row.id === alertId ? { ...row, latestRunOutcome: next.outcome, optimizationEligible: next.eligibility === "OPTIMIZABLE" } : row))
     }).catch(() => {
-      if (!cancelled) setActionError("Optimisation de dispatch indisponible.")
+      if (!shouldApplyWorkflowResult(startedIdentity, workflowIdentityRef.current)) return
+      setOptimizationFailed(true)
+      setActionError(OPTIMIZATION_UNAVAILABLE_DETAIL)
     }).finally(() => {
-      if (!cancelled) setOptimizingWorkflow(false)
+      if (shouldApplyWorkflowResult(startedIdentity, workflowIdentityRef.current)) setOptimizingWorkflow(false)
     })
-    return () => { cancelled = true }
-  }, [alertId, detailReady, viewInput, result?.investigation_id])
+  }, [alertId, detailReady, result?.investigation_id, eligible, entry?.phase, result?.status, run?.outcome, optimizationFailed, selected?.equipmentId, selected?.category])
 
   function investigate() {
     if (!siteId || !alertId) return
@@ -430,20 +464,29 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
 
   async function runOptimize() {
     if (!alertId) return
+    const startedIdentity = workflowIdentity(alertId, result?.investigation_id)
     setBusy(true)
+    setOptimizingWorkflow(true)
+    setOptimizationFailed(false)
     setActionError(null)
     try {
-      const next = await aiApi.createOptimizationWorkflow(alertId, opsCtx())
+      const next = await startSharedWorkflowRequest(startedIdentity ?? `manual:${alertId}`, () => aiApi.createOptimizationRun(alertId, opsCtx()))
+      if (startedIdentity && !shouldApplyWorkflowResult(startedIdentity, workflowIdentityRef.current)) return
       setRun(next)
+      setOptimizationFailed(false)
       const displayedId = next.displayedCandidateIds?.[0]
       const fallbackRec = next.candidates.find((plan) => !plan.isCurrent)?.candidateId
       const baselineId = next.baselineCandidateId ?? next.candidates.find((plan) => plan.isCurrent)?.candidateId
       setSelectedPlanId(displayedId ?? fallbackRec ?? baselineId ?? next.recommendedCandidateId ?? null)
       setInbox((rows) => rows.map((row) => row.id === alertId ? { ...row, latestRunOutcome: next.outcome, optimizationEligible: next.eligibility === "OPTIMIZABLE" } : row))
     } catch {
-      setActionError("Optimisation de dispatch indisponible.")
+      if (!startedIdentity || shouldApplyWorkflowResult(startedIdentity, workflowIdentityRef.current)) {
+        setOptimizationFailed(true)
+        setActionError(OPTIMIZATION_UNAVAILABLE_DETAIL)
+      }
     } finally {
       setBusy(false)
+      setOptimizingWorkflow(false)
     }
   }
 
@@ -598,18 +641,27 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
             <section className="rounded-md border border-accent/30 bg-surface px-3.5 py-3">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">Options de dispatch</h2>
-                {run && (
+                {vis.showRetry && (
                   <Button size="sm" variant="outline" disabled={!alertId || busy || optimizingWorkflow} onClick={() => void runOptimize()}>Recalculer</Button>
                 )}
               </div>
-              {run && viewState !== "optimizing" ? (
+              {viewState === "optimization_failed" ? (
+                <div className="mt-2 space-y-1">
+                  <p className="text-[12px] font-medium text-foreground">{OPTIMIZATION_UNAVAILABLE_COPY}</p>
+                  <p className="text-[12px] text-muted">{OPTIMIZATION_UNAVAILABLE_DETAIL}</p>
+                </div>
+              ) : run && viewState !== "optimizing" ? (
                 <OptimizationPlans
                   run={run}
                   selectedPlanId={selectedPlanId}
                   onSelectPlan={setSelectedPlanId}
                 />
               ) : (
-                <p className="mt-2 text-[12px] text-muted">Calcul des options de dispatch…</p>
+                <div className="mt-3 flex flex-col items-center py-3 text-center">
+                  <Loader2 className="size-6 animate-spin text-accent" aria-hidden />
+                  <p className="mt-2 text-[12px] font-semibold uppercase tracking-wide text-foreground">{OPTIMIZATION_IN_PROGRESS_COPY}</p>
+                  <p className="mt-1 text-[12px] text-muted">{OPTIMIZATION_STAGE_CONTEXT}</p>
+                </div>
               )}
             </section>
           )}

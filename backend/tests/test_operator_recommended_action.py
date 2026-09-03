@@ -33,6 +33,18 @@ def test_not_applicable_uses_investigation_recommendation():
     assert "EXC-002" in action["text"]
 
 
+def test_not_applicable_to_dispatch_uses_investigation_not_unknown_truck():
+    action = compose_operator_recommended_action(
+        eligibility="OPTIMIZABLE",
+        outcome="NOT_APPLICABLE_TO_DISPATCH",
+        operator_summary=None,
+        recommended=None,
+        investigation_description="Vérifier le concasseur.",
+    )
+    assert action == {"text": "Vérifier le concasseur.", "source": "investigation"}
+    assert "Camion sujet" not in action["text"]
+
+
 def test_insufficient_data_is_truthful_status_not_an_invented_action():
     action = compose_operator_recommended_action(
         eligibility="OPTIMIZABLE",

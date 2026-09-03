@@ -31,6 +31,7 @@ FEASIBLE = "FEASIBLE"
 NO_FEASIBLE_PLAN = "NO_FEASIBLE_PLAN"
 INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
 NOT_APPLICABLE = "NOT_APPLICABLE"
+NOT_APPLICABLE_TO_DISPATCH = "NOT_APPLICABLE_TO_DISPATCH"
 ERROR = "ERROR"
 
 
@@ -271,6 +272,8 @@ def _why_text(
     missing_reason: str | None = None,
 ) -> str:
     if eligibility == NOT_APPLICABLE:
+        return "Optimisation de dispatch non applicable."
+    if outcome == NOT_APPLICABLE_TO_DISPATCH:
         return "Optimisation de dispatch non applicable."
     if outcome == INSUFFICIENT_DATA:
         detail = missing_reason or "métrique absente ≠ 0"

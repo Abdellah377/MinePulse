@@ -18,6 +18,8 @@ function requireApi() {
 }
 
 export const INVESTIGATION_CREATE_TIMEOUT_MS = 45_000
+export const OPTIMIZATION_WORKFLOW_TIMEOUT_MS = 45_000
+export const OPTIMIZATION_RUN_TIMEOUT_MS = 15_000
 
 export const aiApi = {
   create(trigger: InvestigationTriggerInput): Promise<InvestigationResult> {
@@ -95,6 +97,7 @@ export const aiApi = {
     return fetchJson(`/optimization/runs${opsQueryString(ctx)}`, {
       method: "POST",
       body: JSON.stringify({ alert_id: alertId }),
+      timeoutMs: OPTIMIZATION_RUN_TIMEOUT_MS,
     })
   },
   createOptimizationWorkflow(alertId: string, ctx?: { siteCode?: string; shiftId?: string }): Promise<import("./types/optimization").OptimizationRun> {
@@ -102,7 +105,7 @@ export const aiApi = {
     return fetchJson(`/optimization/workflows${opsQueryString(ctx)}`, {
       method: "POST",
       body: JSON.stringify({ alert_id: alertId }),
-      timeoutMs: 180_000,
+      timeoutMs: OPTIMIZATION_WORKFLOW_TIMEOUT_MS,
     })
   },
   listOptimizationRuns(alertId: string, ctx?: { siteCode?: string; shiftId?: string }): Promise<import("./types/optimization").OptimizationRun[]> {
