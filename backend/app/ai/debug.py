@@ -467,6 +467,25 @@ def create_debug_recorder(
     return InvestigationDebugRecorder(investigation_id, model=model)
 
 
+def routing_debug_fields(metrics: dict[str, Any] | None) -> dict[str, Any]:
+    """Safe routing fields for debug traces. Never includes keys or prompt bodies."""
+    if not isinstance(metrics, dict):
+        return {}
+    mapping = (
+        ("provider", "provider"),
+        ("model", "model"),
+        ("fallback_occurred", "fallbackOccurred"),
+        ("configured_providers", "configuredProviders"),
+        ("final_provider", "finalProvider"),
+    )
+    fields: dict[str, Any] = {}
+    for source, dest in mapping:
+        value = metrics.get(source)
+        if value is not None:
+            fields[dest] = value
+    return fields
+
+
 def consume_provider_metrics(provider: Any) -> dict[str, Any] | None:
     metrics = getattr(provider, "last_call_metrics", None)
     if isinstance(metrics, dict):

@@ -86,7 +86,7 @@ describe("investigation lifecycle", () => {
 
   it.each([
     [new ApiError(503, "private", "AI_STORAGE_NOT_READY"), "migrations"],
-    [new ApiError(503, "private", "AI_PROVIDER_NOT_CONFIGURED"), "AI_MODEL"],
+    [new ApiError(503, "private", "AI_PROVIDER_NOT_CONFIGURED"), "AI_PROVIDER"],
     [new ApiError(500, "private", "AI_PERSISTENCE_FAILED"), "enregistrement"],
     [new ApiNetworkError(), "injoignable"],
     [new ApiTimeoutError(), "Délai"],

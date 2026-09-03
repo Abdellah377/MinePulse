@@ -7,7 +7,7 @@ import { useAlertFeedStore } from "@/lib/store/useAlertFeedStore"
 import type { WorkspacePanelProps } from "@/components/workspace/WorkspaceHost"
 import { CONFIDENCE_LABEL, DIAGNOSIS_STATUS_LABEL, investigationFailure } from "@/lib/ai/investigationPresentation"
 import { compactOperatorText, operatorText } from "@/lib/ai/investigationReport"
-import { mergeInboxItems, pickInboxSelection, removeInboxItem } from "@/lib/ai/actionsInbox"
+import { mergeInboxItems, nextInboxSelection, removeInboxItem } from "@/lib/ai/actionsInbox"
 import {
   classifyOptimizationImpact,
   optimizationWorkflowBanner,
@@ -95,35 +95,52 @@ export function InvestigationActions({ tab }: Partial<WorkspacePanelProps>) {
   const [actionError, setActionError] = useState<string | null>(null)
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
   const autoOptFor = useRef<string | null>(null)
+  const selectedIdRef = useRef<string | null>(selectedId)
+  selectedIdRef.current = selectedId
+  const overlayRef = useRef<ActionsInboxItem | null>(resolvedOverlay)
+  overlayRef.current = resolvedOverlay
+  const navKeyRef = useRef(`${contextAlertId ?? ""}|${selectedSiteId}|${selectedShiftId}`)
 
   const selected = inbox.find((row) => row.id === selectedId)
     ?? (resolvedOverlay?.id === selectedId ? resolvedOverlay : null)
-    ?? inbox[0]
+    ?? (selectedId ? null : inbox[0])
   const alertId = selected?.id ?? contextAlertId ?? null
   const id = selected?.investigationId ?? investigationId
 
   useEffect(() => {
     let cancelled = false
     setLoadError(null)
-    setResolvedOverlay(null)
+    const navKey = `${contextAlertId ?? ""}|${selectedSiteId}|${selectedShiftId}`
+    const explicitContext = navKeyRef.current !== navKey
+    navKeyRef.current = navKey
+    if (explicitContext) setResolvedOverlay(null)
     void aiApi.listInbox({ limit: 20 }, opsCtx()).then(async (page) => {
       if (cancelled) return
       let items = page.items
+      let overlay: ActionsInboxItem | null = explicitContext ? null : overlayRef.current
       setHasMore(page.hasMore)
       setNextCursor(page.nextCursor)
-      if (contextAlertId && !items.some((row) => row.id === contextAlertId)) {
+      const missingIds = new Set<string>()
+      if (contextAlertId && !items.some((row) => row.id === contextAlertId)) missingIds.add(contextAlertId)
+      const currentId = selectedIdRef.current
+      if (currentId && !items.some((row) => row.id === currentId) && overlay?.id !== currentId) {
+        missingIds.add(currentId)
+      }
+      for (const missingId of missingIds) {
         try {
-          const detail = await aiApi.getInboxDetail(contextAlertId, opsCtx())
+          const detail = await aiApi.getInboxDetail(missingId, opsCtx())
           if (cancelled) return
-          if (detail.alert.status === "resolved") setResolvedOverlay(detail.alert)
+          if (detail.alert.status === "resolved") overlay = detail.alert
           else items = mergeInboxItems(items, [detail.alert], { prepend: true })
         } catch {
-          if (!cancelled) setLoadError("Dossier introuvable.")
+          if (!cancelled && missingId === contextAlertId) setLoadError("Dossier introuvable.")
         }
       }
       if (cancelled) return
+      if (overlay) setResolvedOverlay(overlay)
       setInbox(items)
-      setSelectedId(pickInboxSelection(items, contextAlertId) ?? (items[0]?.id ?? null))
+      const selectable = overlay ? [...items, overlay] : items
+      setSelectedId((current) => nextInboxSelection(selectable, current, contextAlertId, { explicitContext }))
     }).catch(() => {
       if (!cancelled) {
         setInbox([])

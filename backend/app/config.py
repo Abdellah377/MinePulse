@@ -29,10 +29,18 @@ class Settings(BaseSettings):
     oem_disconnected_sec: float = 120.0
     operational_clock: str = "simulation"
     # AI investigations are disabled until a provider, model and key are set.
-    # V1 implements only the OpenAI provider behind the LLMProvider interface.
+    # AI_PROVIDER_ORDER wins when set (technical failover). Otherwise AI_PROVIDER.
     ai_provider: str | None = None
+    ai_provider_order: str | None = None
     ai_model: str | None = None
     openai_api_key: str | None = None
+    openai_model: str | None = None
+    groq_api_key: str | None = None
+    groq_model: str | None = None
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    gemini_api_key: str | None = None
+    gemini_model: str | None = None
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     ai_max_investigation_iterations: int = Field(default=3, ge=1, le=10)
     ai_provider_timeout_seconds: float = Field(default=45, ge=5, le=60)
     # Cumulative provider budget per invocation; frontend allows 180s including DB overhead.

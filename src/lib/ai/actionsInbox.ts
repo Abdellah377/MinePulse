@@ -36,3 +36,21 @@ export function pickInboxSelection(items: ActionsInboxItem[], preferredId?: stri
   if (preferredId && items.some((item) => item.id === preferredId)) return preferredId
   return items[0]?.id ?? null
 }
+
+export function nextInboxSelection(
+  items: ActionsInboxItem[],
+  currentId: string | null | undefined,
+  contextAlertId?: string | null,
+  options?: { explicitContext?: boolean },
+): string | null {
+  const explicit = options?.explicitContext === true
+  if (explicit && contextAlertId && items.some((item) => item.id === contextAlertId)) {
+    return contextAlertId
+  }
+  if (currentId == null || currentId === "") {
+    return pickInboxSelection(items, contextAlertId)
+  }
+  if (items.some((item) => item.id === currentId)) return currentId
+  if (contextAlertId && items.some((item) => item.id === contextAlertId)) return contextAlertId
+  return items[0]?.id ?? null
+}

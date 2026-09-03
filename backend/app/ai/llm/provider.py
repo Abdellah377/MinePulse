@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import json
-import logging
-import random
 import time
-from time import monotonic
-from typing import Protocol, TypeVar
-
-from pydantic import BaseModel
+from typing import Protocol
 
 from app.ai.contracts import (
     DiagnosisResult,
@@ -56,8 +50,6 @@ class ProviderUnavailableError(LLMProviderError):
 class ProviderNetworkError(LLMProviderError):
     """The provider could not be reached."""
 
-
-logger = logging.getLogger(__name__)
 
 _TRANSIENT_PROVIDER_ERRORS = (
     ProviderTimeoutError,
@@ -118,8 +110,6 @@ class LLMProvider(Protocol):
 
     def review_optimization(self, payload: dict) -> OptimizationReview: ...
 
-
-_T = TypeVar("_T", bound=BaseModel)
 
 _COMMON_POLICY = """
 You are MinePulse's mining-operations investigation reasoning layer. Use only
@@ -239,140 +229,15 @@ Cite only supplied evidence IDs. Never return chain-of-thought.
 """
 
 
-class OpenAILLMProvider:
-    """OpenAI Responses API implementation with native Pydantic parsing."""
-
-    provider_name = "openai"
-
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        model: str,
-        timeout_seconds: float = 45,
-        budget_seconds: float = 150,
-        max_attempts: int = 3,
-    ):
-        if not api_key:
-            raise ProviderConfigurationError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
-        if not model:
-            raise ProviderConfigurationError("AI_MODEL is required when AI_PROVIDER=openai")
-        try:
-            from openai import OpenAI
-        except ImportError as exc:  # pragma: no cover - exercised only in incomplete deployments
-            raise ProviderConfigurationError("The openai package is not installed") from exc
-        self.model_name = model
-        self._timeout_seconds = timeout_seconds
-        self._remaining_seconds = budget_seconds
-        self._max_attempts = max(1, int(max_attempts))
-        self._client = OpenAI(api_key=api_key, timeout=timeout_seconds, max_retries=0)
-        self.last_call_metrics: dict | None = None
-        self.last_attempt_count = 0
-
-    def _structured(self, schema: type[_T], system_prompt: str, payload: dict) -> _T:
-        last_error: LLMProviderError | None = None
-        attempts = max(1, int(getattr(self, "_max_attempts", 1)))
-        for attempt in range(1, attempts + 1):
-            self.last_attempt_count = attempt
-            if self._remaining_seconds <= 0:
-                raise ProviderTimeoutError("Investigation provider budget exceeded")
-            started = monotonic()
-            response = None
-            try:
-                response = self._client.responses.parse(
-                    model=self.model_name,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                    ],
-                    text_format=schema,
-                    store=False,
-                    timeout=min(self._timeout_seconds, self._remaining_seconds),
-                )
-                parsed = response.output_parsed
-            except Exception as exc:
-                mapped = classify_provider_exception(exc)
-                logger.error(
-                    "AI provider failure model=%s schema=%s type=%s category=%s status=%s request_id=%s attempt=%s/%s",
-                    self.model_name,
-                    schema.__name__,
-                    type(exc).__name__,
-                    type(mapped).__name__,
-                    getattr(exc, "status_code", None),
-                    getattr(exc, "request_id", None),
-                    attempt,
-                    attempts,
-                )
-                last_error = mapped
-                retryable = isinstance(mapped, _TRANSIENT_PROVIDER_ERRORS) and attempt < attempts
-                if not retryable:
-                    raise mapped from exc
-                delay = min(2 ** (attempt - 1), 4) * (0.5 + random.random())
-                logger.info(
-                    "Retrying transient AI provider failure category=%s attempt=%s delay_s=%.2f",
-                    type(mapped).__name__,
-                    attempt,
-                    delay,
-                )
-                _sleep(delay)
-                continue
-            finally:
-                elapsed = monotonic() - started
-                self._remaining_seconds -= elapsed
-                usage = getattr(response, "usage", None) if response is not None else None
-                self.last_call_metrics = {
-                    "model": self.model_name,
-                    "schema": schema.__name__,
-                    "duration_ms": int(elapsed * 1000),
-                    "input_tokens": getattr(usage, "input_tokens", None),
-                    "output_tokens": getattr(usage, "output_tokens", None),
-                    "total_tokens": getattr(usage, "total_tokens", None),
-                    "attempt": attempt,
-                }
-            if parsed is None:
-                raise ProviderResponseError("OpenAI returned no structured output")
-            try:
-                return schema.model_validate(parsed)
-            except Exception as exc:
-                raise ProviderResponseError(f"OpenAI output failed {schema.__name__} validation") from exc
-        raise last_error or LLMProviderError("AI provider structured response failed")
-
-    def diagnose(self, payload: dict) -> DiagnosisResult:
-        return self._structured(DiagnosisResult, _DIAGNOSIS_PROMPT, payload)
-
-    def build_conclusion(self, payload: dict) -> InvestigationConclusion:
-        return self._structured(InvestigationConclusion, _CONCLUSION_PROMPT, payload)
-
-    def build_recommendation(self, payload: dict) -> InvestigationRecommendation:
-        return self._structured(InvestigationRecommendation, _RECOMMENDATION_PROMPT, payload)
-
-    def discuss_recommendation(self, payload: dict) -> RecommendationDiscussionReply:
-        return self._structured(RecommendationDiscussionReply, _DISCUSSION_PROMPT, payload)
-
-    def plan_optimization(self, payload: dict) -> OptimizationPlannerDecision:
-        from app.ai.optimization.prompts import PLANNER_BODY
-
-        return self._structured(OptimizationPlannerDecision, _COMMON_POLICY + "\n\n" + PLANNER_BODY, payload)
-
-    def review_optimization(self, payload: dict) -> OptimizationReview:
-        from app.ai.optimization.prompts import REVIEWER_BODY
-
-        return self._structured(OptimizationReview, _COMMON_POLICY + "\n\n" + REVIEWER_BODY, payload)
-
-
 def create_llm_provider(settings: Settings | None = None) -> LLMProvider:
-    configured = settings or get_settings()
-    provider = (configured.ai_provider or "").strip().lower()
-    if not provider:
-        raise ProviderConfigurationError(
-            "No AI provider configured. Set AI_PROVIDER=openai, AI_MODEL, and OPENAI_API_KEY."
-        )
-    if provider != "openai":
-        raise ProviderConfigurationError(f"Unsupported AI_PROVIDER: {provider}")
-    return OpenAILLMProvider(
-        api_key=configured.openai_api_key or "",
-        model=configured.ai_model or "",
-        timeout_seconds=configured.ai_provider_timeout_seconds,
-        budget_seconds=configured.ai_investigation_llm_budget_seconds,
-        max_attempts=getattr(configured, "ai_provider_max_attempts", 3),
-    )
+    from app.ai.llm.router import build_provider_router
+
+    return build_provider_router(settings or get_settings())
+
+
+def __getattr__(name: str):
+    if name == "OpenAILLMProvider":
+        from app.ai.llm.openai_responses import OpenAILLMProvider
+
+        return OpenAILLMProvider
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

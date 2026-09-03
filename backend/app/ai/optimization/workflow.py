@@ -54,10 +54,18 @@ def _dump(model: Any) -> dict:
 def _provider_meta(provider: LLMProvider | None) -> dict[str, Any]:
     if provider is None:
         return {"provider": None, "model": None}
-    return {
-        "provider": getattr(provider, "provider_name", None),
-        "model": getattr(provider, "model_name", None),
+    metrics = getattr(provider, "last_call_metrics", None) or {}
+    meta = {
+        "provider": metrics.get("provider") or getattr(provider, "provider_name", None),
+        "model": metrics.get("model") or getattr(provider, "model_name", None),
     }
+    if metrics.get("fallback_occurred") is not None:
+        meta["fallbackOccurred"] = metrics.get("fallback_occurred")
+    if metrics.get("configured_providers") is not None:
+        meta["configuredProviders"] = metrics.get("configured_providers")
+    if metrics.get("final_provider") is not None:
+        meta["finalProvider"] = metrics.get("final_provider")
+    return meta
 
 
 def _candidate_review_payload(candidates: list[dict]) -> list[dict]:
@@ -146,17 +154,20 @@ def _run_orchestrated(
     planner_failed = False
     planner_decision: OptimizationPlannerDecision | None = None
     planner_rejected: list[str] = []
+    planner_meta = _provider_meta(llm)
     try:
         if llm is None:
             llm = create_llm_provider()
         payload = planner_payload_from_facts(facts)
         raw_decision = llm.plan_optimization(payload)
         planner_decision, planner_rejected = sanitize_planner_decision(raw_decision, facts=facts)
+        planner_meta = _provider_meta(llm)
     except (LLMProviderError, Exception) as exc:
         if isinstance(exc, HTTPException):
             raise
         logger.exception("optimization planner failed alert_id=%s", alert_id)
         planner_failed = True
+        planner_meta = _provider_meta(llm)
 
     if planner_failed or planner_decision is None:
         return create_optimization_run(
@@ -169,7 +180,7 @@ def _run_orchestrated(
                     "optimizationPassCount": 0,
                     "reoptimizationOccurred": False,
                     "orchestratorVersion": ORCHESTRATOR_VERSION,
-                    "planner": {**_provider_meta(llm), "failed": True},
+                    "planner": {**planner_meta, "failed": True},
                     "operatorSummary": DETERMINISTIC_ONLY_COPY,
                 }
             },
@@ -184,6 +195,7 @@ def _run_orchestrated(
     review: OptimizationReview | None = None
     review_status: ReviewStatus | None = None
     review_failed = False
+    review_meta: dict[str, Any] = {}
     reoptimization_occurred = False
     pass_count = 0
 
@@ -223,6 +235,7 @@ def _run_orchestrated(
             )
             rejected_codes.extend(extra_rejected)
             review_status = review.status
+            review_meta = _provider_meta(llm)
         except (LLMProviderError, Exception) as exc:
             if isinstance(exc, HTTPException):
                 raise
@@ -230,6 +243,7 @@ def _run_orchestrated(
             review_failed = True
             review = None
             review_status = None
+            review_meta = _provider_meta(llm)
             break
 
         if review_status == ReviewStatus.INSUFFICIENT_EVIDENCE:
@@ -325,7 +339,7 @@ def _run_orchestrated(
         "reoptimizationOccurred": reoptimization_occurred,
         "orchestratorVersion": ORCHESTRATOR_VERSION,
         "planner": {
-            **_provider_meta(llm),
+            **planner_meta,
             "failed": False,
             "decision": _dump(planner_decision),
             "rejected": planner_rejected,
@@ -338,6 +352,7 @@ def _run_orchestrated(
         "baselineCandidateId": finalized["baselineCandidateId"],
         "displayedCandidateIds": displayed_ids,
         "review": _dump(review) if review else None,
+        "reviewer": {**review_meta, "failed": review_failed} if review_meta or review_failed else None,
         "operatorSummary": operator_summary,
         "cautionSummary": caution,
         "weights": dict(DEFAULT_WEIGHTS),

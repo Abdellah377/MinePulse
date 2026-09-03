@@ -46,6 +46,7 @@ from app.ai.debug import (
     compact_evidence,
     compact_preview,
     consume_provider_metrics,
+    routing_debug_fields,
 )
 from app.ai.llm.provider import LLMProvider
 from app.ai.persistence import InvestigationPersistenceError, persist_investigation
@@ -204,12 +205,14 @@ class InvestigationNodes:
         )
         self.runtime.debug.add_llm_metrics(metrics or {"duration_ms": duration, "model": self.runtime.provider.model_name})
         metadata = compact_meta(result) if callable(compact_meta) else compact_meta
+        event_meta = dict(metadata) if isinstance(metadata, dict) else {}
+        event_meta.update(routing_debug_fields(metrics))
         self.runtime.debug.record(
             DebugEventType.LLM_CALL,
             stage=stage,
             summary=f"Structured LLM call ({stage})",
             duration_ms=duration,
-            metadata=metadata if isinstance(metadata, dict) else {},
+            metadata=event_meta,
         )
         return result
 

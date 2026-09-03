@@ -22,7 +22,7 @@ function errorLabel(error: unknown): string {
     switch (error.code) {
       case "AI_STORAGE_NOT_READY": return "Stockage IA non initialisé. Appliquez les migrations du backend."
       case "AI_STORAGE_UNAVAILABLE": return "Base de données des investigations indisponible."
-      case "AI_PROVIDER_NOT_CONFIGURED": return "Fournisseur IA non configuré. Renseignez AI_PROVIDER, AI_MODEL et OPENAI_API_KEY côté serveur."
+      case "AI_PROVIDER_NOT_CONFIGURED": return "Fournisseur IA non configuré. Renseignez AI_PROVIDER_ORDER ou AI_PROVIDER, plus la clé et le modèle du fournisseur, côté serveur."
       case "AI_PERSISTENCE_FAILED": return "Échec de l’enregistrement de l’investigation. Consultez les journaux serveur."
       case "AI_INVESTIGATION_FAILED": return "Investigation échouée côté serveur. Consultez les journaux serveur."
     }

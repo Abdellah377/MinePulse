@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { ActionsInboxItem } from "@/lib/api/types/optimization"
-import { mergeInboxItems, pickInboxSelection, removeInboxItem } from "./actionsInbox"
+import { mergeInboxItems, nextInboxSelection, pickInboxSelection, removeInboxItem } from "./actionsInbox"
 
 const item = (id: string, status: ActionsInboxItem["status"] = "new"): ActionsInboxItem => ({
   id,
@@ -38,6 +38,30 @@ describe("actions inbox helpers", () => {
 
   it("falls back to first item when the deep-link is missing from the loaded page", () => {
     expect(pickInboxSelection([item("alert-1")], "alert-99")).toBe("alert-1")
+  })
+
+  it("refresh keeps the operator selection even when a newer item is first", () => {
+    const items = [item("alert-new"), item("alert-a")]
+    expect(nextInboxSelection(items, "alert-a", null)).toBe("alert-a")
+    expect(nextInboxSelection(items, "alert-a", "alert-new")).toBe("alert-a")
+  })
+
+  it("first load uses pickInboxSelection when nothing is currently selected", () => {
+    const items = [item("alert-1"), item("alert-2")]
+    expect(nextInboxSelection(items, null, "alert-2")).toBe("alert-2")
+    expect(nextInboxSelection(items, null, null)).toBe("alert-1")
+  })
+
+  it("explicit context navigation prefers the new context id", () => {
+    const items = [item("alert-new"), item("alert-a")]
+    expect(nextInboxSelection(items, "alert-a", "alert-new", { explicitContext: true })).toBe("alert-new")
+  })
+
+  it("falls back to context then first item only after the current id is gone", () => {
+    const items = [item("alert-1"), item("alert-2")]
+    expect(nextInboxSelection(items, "alert-gone", "alert-2")).toBe("alert-2")
+    expect(nextInboxSelection(items, "alert-gone", "alert-missing")).toBe("alert-1")
+    expect(nextInboxSelection([], "alert-gone", null)).toBeNull()
   })
 
   it("merges load-more pages without duplicate ids", () => {
